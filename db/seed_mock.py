@@ -10,7 +10,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from db.models import Company, Voucher, TraceLog
+from db.models import Company, Voucher, TraceLog, Classification
 
 load_dotenv()
 
