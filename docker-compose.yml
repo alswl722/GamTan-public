@@ -1,0 +1,39 @@
+# iM-Bridge — 앱만 (DB 컨테이너 없음, 외부 Supabase 사용)
+# 실행: docker compose up --build
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    env_file: .env # DATABASE_URL, ANTHROPIC_API_KEY 등 런타임 주입
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./api:/app/api # 핫리로드용 소스 마운트
+      - ./db:/app/db
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./web:/app # 핫리로드용 소스 마운트
+      - /app/node_modules # 컨테이너 node_modules 보존 (호스트로 덮이지 않게)
+    depends_on:
+      api:
+        condition: service_healthy
