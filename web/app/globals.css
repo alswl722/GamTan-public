@@ -1,0 +1,51 @@
+@import "tailwindcss";
+
+/* ==========================================================================
+   iM-Bridge 디자인 토큰 (v0.1)
+   Tailwind v4 @theme — 여기 정의한 color 토큰은 bg / text / border 유틸로 생성됨.
+   예) --color-plan → bg-plan, text-plan, border-plan
+   ========================================================================== */
+@theme {
+  /* 브랜드 / 중립 */
+  --color-brand: #0b5cff;
+  --color-brand-ink: #063a9e;
+  --color-bg: #f6f8fb;
+  --color-surface: #ffffff;
+  --color-ink: #10151f;
+  --color-muted: #5b6675;
+  --color-line: #e3e8ef;
+
+  /* Scope — 배출 구분 */
+  --color-scope1: #e8590c; /* 직접배출 (연소) — 주황 */
+  --color-scope2: #1c7ed6; /* 간접배출 (전기) — 파랑 */
+
+  /* 트레이스 타입 — 킬러씬 A (계획/관찰/행동) */
+  --color-plan: #4263eb; /* 계획 — 블루 */
+  --color-observe: #f08c00; /* 관찰 — 앰버 */
+  --color-act: #0ca678; /* 행동 — 그린 */
+
+  /* PCAF 데이터 품질 등급 (1 좋음 → 5 나쁨) */
+  --color-pcaf-1: #087f5b;
+  --color-pcaf-2: #2f9e44;
+  --color-pcaf-3: #f59f00;
+  --color-pcaf-4: #e8590c;
+  --color-pcaf-5: #868e96;
+
+  /* 상태 */
+  --color-hitl: #d6336c; /* 검토필요 (HITL) */
+  --color-estimated: #7048e8; /* 추정치 */
+  --color-ok: #2f9e44;
+
+  --font-sans: var(--font-geist-sans), system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), monospace;
+}
+
+html {
+  color-scheme: light;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+}
