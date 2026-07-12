@@ -34,6 +34,7 @@ services:
     volumes:
       - ./web:/app # 핫리로드용 소스 마운트
       - /app/node_modules # 컨테이너 node_modules 보존 (호스트로 덮이지 않게)
+      - /app/.next # 빌드 산출물 격리 (호스트 .next 와 충돌·오염 방지)
     depends_on:
       api:
         condition: service_healthy
