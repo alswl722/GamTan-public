@@ -39,7 +39,7 @@ export function SceneConsent() {
   return (
     <section className="rounded-xl border border-line bg-surface p-6">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold">① 마이데이터 연동 동의</h2>
+        <h2 className="text-base font-semibold">① 마이데이터 연동 동의</h2>
         {status === "done" && (
           <span className="rounded-full bg-brand-soft px-2.5 py-1 text-[11px] font-semibold text-brand-ink">
             연동 완료

@@ -18,23 +18,27 @@ export default function OwnerPage() {
 
   return (
     <div>
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold tracking-tight">사장님 화면</h1>
+      <div className="pt-4">
+        <span className="inline-flex items-center gap-2 rounded-full bg-brand-soft px-2.5 py-1 text-[11.5px] font-semibold tracking-wide text-brand-ink">
+          <span className="h-1.5 w-1.5 rounded-full bg-brand" />
+          iM:POSSIBLE Challenger · v0.1 데모
+        </span>
+        <h1 className="mt-3 text-[23px] font-bold tracking-tight">사장님 화면</h1>
         <p className="mt-1 text-sm text-muted">
-          구미 소재 반도체 장비 2차 벤더 &lsquo;○○정밀&rsquo;의 탄소 측정 여정
-          (데모 4장면)
+          구미 소재 반도체 장비 2차 벤더 ‘○○정밀’(금속가공 · 직원 12명)의 탄소
+          측정 여정
         </p>
       </div>
 
-      <div className="flex flex-wrap gap-2 border-b border-line">
+      <div className="mt-5 flex gap-0.5 border-b border-line">
         {SCENES.map((s, i) => (
           <button
             key={s.key}
             type="button"
             onClick={() => setActive(i)}
-            className={`-mb-px rounded-t-lg border-b-2 px-4 py-2 text-sm font-medium transition-colors ${
+            className={`-mb-px border-b-2 px-[15px] py-[11px] text-sm font-semibold transition-colors ${
               active === i
-                ? "border-brand text-brand"
+                ? "border-brand text-brand-ink"
                 : "border-transparent text-muted hover:text-ink"
             }`}
           >
@@ -43,7 +47,7 @@ export default function OwnerPage() {
         ))}
       </div>
 
-      <div className="mt-6">{SCENES[active].el}</div>
+      <div className="mt-[22px]">{SCENES[active].el}</div>
     </div>
   );
 }

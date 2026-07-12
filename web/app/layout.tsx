@@ -16,33 +16,33 @@ export default function RootLayout({
   return (
     <html lang="ko" className="h-full antialiased">
       <body className="min-h-full flex flex-col">
-        <header className="border-b border-line bg-surface">
-          <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-3">
-            <Link href="/" className="flex items-center gap-2">
-              <span className="grid h-7 w-7 place-items-center rounded-md bg-brand text-sm font-bold text-white">
+        <header className="sticky top-0 z-10 border-b border-line bg-surface">
+          <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-5">
+            <Link href="/" className="flex items-center gap-2.5">
+              <span className="grid h-[30px] w-[30px] place-items-center rounded-lg bg-brand text-[13px] font-extrabold tracking-tight text-white">
                 iM
               </span>
-              <span className="text-base font-semibold tracking-tight">
+              <span className="text-[15px] font-semibold tracking-tight">
                 iM-Bridge
               </span>
             </Link>
-            <nav className="flex items-center gap-1 text-sm">
+            <nav className="flex items-center gap-1 text-[13.5px]">
               <Link
                 href="/owner"
-                className="rounded-md px-3 py-1.5 font-medium text-muted hover:bg-bg hover:text-ink"
+                className="rounded-lg px-3 py-1.5 font-medium text-muted hover:bg-brand-soft hover:text-brand-ink"
               >
                 사장님
               </Link>
               <Link
                 href="/admin"
-                className="rounded-md px-3 py-1.5 font-medium text-muted hover:bg-bg hover:text-ink"
+                className="rounded-lg px-3 py-1.5 font-medium text-muted hover:bg-brand-soft hover:text-brand-ink"
               >
                 관리자
               </Link>
             </nav>
           </div>
         </header>
-        <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8">
+        <main className="mx-auto w-full max-w-5xl flex-1 px-5 py-6">
           {children}
         </main>
       </body>

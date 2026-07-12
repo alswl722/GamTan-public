@@ -61,9 +61,9 @@ export function SceneTrace() {
   return (
     <section className="rounded-xl border border-line bg-surface p-6">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold">
+        <h2 className="text-base font-semibold">
           ② 에이전트 트레이스 뷰
-          <span className="ml-2 rounded bg-scope1/10 px-2 py-0.5 text-xs font-semibold text-scope1">
+          <span className="ml-2 rounded bg-scope1/10 px-2 py-0.5 text-[11px] font-bold text-scope1">
             킬러씬 A
           </span>
         </h2>
