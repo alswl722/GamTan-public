@@ -6,14 +6,16 @@
    예) --color-plan → bg-plan, text-plan, border-plan
    ========================================================================== */
 @theme {
-  /* 브랜드 / 중립 */
-  --color-brand: #0b5cff;
-  --color-brand-ink: #063a9e;
-  --color-bg: #f6f8fb;
+  /* 브랜드 (iM뱅크 민트 + 라임) / 중립 */
+  --color-brand: #04c1a8; /* iM 민트 — 메인 */
+  --color-brand-ink: #037a6b; /* 진한 민트 — hover/텍스트 */
+  --color-brand-soft: #e6faf6; /* 연한 민트 — 배경 틴트 */
+  --color-lime: #9fe30f; /* iM 라임 — 강조/포인트 */
+  --color-bg: #f5f8f7;
   --color-surface: #ffffff;
-  --color-ink: #10151f;
-  --color-muted: #5b6675;
-  --color-line: #e3e8ef;
+  --color-ink: #0f1a17;
+  --color-muted: #5c6a66;
+  --color-line: #e2e9e6;
 
   /* Scope — 배출 구분 */
   --color-scope1: #e8590c; /* 직접배출 (연소) — 주황 */
@@ -36,8 +38,9 @@
   --color-estimated: #7048e8; /* 추정치 */
   --color-ok: #2f9e44;
 
-  --font-sans: var(--font-geist-sans), system-ui, sans-serif;
-  --font-mono: var(--font-geist-mono), monospace;
+  --font-sans: system-ui, -apple-system, "Apple SD Gothic Neo", "Malgun Gothic",
+    "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, monospace;
 }
 
 html {
