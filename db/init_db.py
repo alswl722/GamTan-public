@@ -1,4 +1,4 @@
-"""테이블 생성 + 기초 마스터 데이터 적재 (배출계수, 환산단가)"""
+"""테이블 생성 + 기초 마스터 데이터 적재 (배출계수, 환산단가, 업종분포)"""
 import os
 import sys
 from dotenv import load_dotenv
@@ -6,15 +6,14 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from db.models import Base, EmissionFactor, UnitPrice
+from db.models import Base, EmissionFactor, UnitPrice, IndustryDistribution
 
 load_dotenv()
 
-# 이전에 만든 잉여 테이블 (7개 확정 스키마 외)
+# 이전에 만든 잉여 테이블 (확정 스키마 외)
 LEGACY_TABLES = [
     "hitl_queue",
     "portfolio_summaries",
-    "industry_distributions",
     "monthly_unit_prices",
     "classification_results",
 ]
@@ -30,7 +29,7 @@ def drop_legacy_tables(engine):
 
 def create_tables(engine):
     Base.metadata.create_all(engine)
-    print("[OK] 테이블 7개 생성 완료")
+    print("[OK] 테이블 8개 생성 완료")
 
 
 def seed_emission_factors(session: Session):
@@ -99,6 +98,36 @@ def seed_unit_prices(session: Session):
     print(f"[OK] 월별 환산단가 {len(rows)}건 적재 (2024)")
 
 
+def seed_industry_distributions(session: Session):
+    """업종별 배출량 분포 — 환경정보공개시스템 기반 (금속가공, 목업). 벤치마킹·이상치 검증용."""
+    rows = [
+        IndustryDistribution(
+            industry_code="C251", industry_name="구조용 금속제품 제조", scope=1,
+            emission_min_co2e=5.2, emission_median_co2e=18.7,
+            emission_median_per_employee=1.56, emission_max_co2e=124.0,
+            year=2023, source="환경정보공개시스템 (목업)"),
+        IndustryDistribution(
+            industry_code="C251", industry_name="구조용 금속제품 제조", scope=2,
+            emission_min_co2e=8.1, emission_median_co2e=31.4,
+            emission_median_per_employee=2.62, emission_max_co2e=198.0,
+            year=2023, source="환경정보공개시스템 (목업)"),
+        IndustryDistribution(
+            industry_code="C259", industry_name="기타 금속가공제품 제조", scope=1,
+            emission_min_co2e=3.8, emission_median_co2e=14.2,
+            emission_median_per_employee=1.18, emission_max_co2e=89.0,
+            year=2023, source="환경정보공개시스템 (목업)"),
+        IndustryDistribution(
+            industry_code="C259", industry_name="기타 금속가공제품 제조", scope=2,
+            emission_min_co2e=6.5, emission_median_co2e=24.8,
+            emission_median_per_employee=2.07, emission_max_co2e=156.0,
+            year=2023, source="환경정보공개시스템 (목업)"),
+    ]
+    for row in rows:
+        session.add(row)
+    session.commit()
+    print(f"[OK] 업종분포 {len(rows)}건 적재")
+
+
 def main():
     engine = create_engine(os.getenv("DATABASE_URL"))
     drop_legacy_tables(engine)
@@ -114,6 +143,11 @@ def main():
             seed_unit_prices(session)
         else:
             print("[SKIP] 환산단가 이미 존재")
+
+        if session.query(IndustryDistribution).count() == 0:
+            seed_industry_distributions(session)
+        else:
+            print("[SKIP] 업종분포 이미 존재")
 
     print("\n[완료] DB 초기화 성공")
 

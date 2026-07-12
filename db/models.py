@@ -142,3 +142,24 @@ class LlmCache(Base):
     hit_count = Column(Integer, default=0)
     created_at = Column(DateTime(timezone=True), default=now)
     last_used_at = Column(DateTime(timezone=True), default=now)
+
+
+class IndustryDistribution(Base):
+    """업종별 배출량 분포 — 환경정보공개시스템, 벤치마킹 + 이상치 검증용 (도구④)"""
+    __tablename__ = "industry_distributions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    industry_code = Column(String(20), nullable=False)   # 예: C251
+    industry_name = Column(String(100))
+    scope = Column(SmallInteger, nullable=False)         # 1 | 2
+    emission_min_co2e = Column(Float)                    # 최소
+    emission_median_co2e = Column(Float)                 # 중앙값
+    emission_median_per_employee = Column(Float)         # 인당 중앙값
+    emission_max_co2e = Column(Float)                    # 최대
+    revenue_basis_krw = Column(Numeric(20, 0))           # 정규화 기준 매출
+    year = Column(SmallInteger, nullable=False)
+    source = Column(String(100))
+
+    __table_args__ = (
+        Index("ix_industry_dist_code_year", "industry_code", "year"),
+    )
