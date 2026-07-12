@@ -19,9 +19,8 @@ export default function RootLayout({
         <header className="sticky top-0 z-10 border-b border-line bg-surface">
           <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-5">
             <Link href="/" className="flex items-center gap-2.5">
-              <span className="grid h-[30px] w-[30px] place-items-center rounded-lg bg-brand text-[13px] font-extrabold tracking-tight text-white">
-                감
-              </span>
+              <img src="/im-symbol.png" alt="iM Bank" className="h-7 w-auto" />
+
               <span className="text-[15px] font-semibold tracking-tight">
                 감탄
               </span>
