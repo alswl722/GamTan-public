@@ -33,7 +33,19 @@ def create_tables(engine):
 
 
 def seed_emission_factors(session: Session):
-    """배출계수 — 환경부 국가 온실가스 인벤토리 2023년 기준"""
+    """배출계수 — 회계 Excel 우선, 없으면 하드코딩 폴백 (환경부 인벤토리 2023)."""
+    try:
+        from db.excel_loader import load_emission_factors
+        rows = load_emission_factors()
+        if rows:
+            for r in rows:
+                session.add(EmissionFactor(**r))
+            session.commit()
+            print(f"[OK] 배출계수 {len(rows)}건 적재 (Excel)")
+            return
+    except (FileNotFoundError, LookupError) as e:
+        print(f"[i] Excel 배출계수 미사용({e}) → 하드코딩")
+
     factors = [
         # Scope 1 — 고정연소
         dict(fuel_type="도시가스(LNG)", scope=1, category="고정연소",
@@ -70,11 +82,23 @@ def seed_emission_factors(session: Session):
     for f in factors:
         session.add(EmissionFactor(**f))
     session.commit()
-    print(f"[OK] 배출계수 {len(factors)}건 적재")
+    print(f"[OK] 배출계수 {len(factors)}건 적재 (하드코딩)")
 
 
 def seed_unit_prices(session: Session):
-    """환산단가 — 2024년 월별 (경유/도시가스/전기), 공급가액 기준"""
+    """환산단가(월별) — 회계 Excel `월별단가` 시트 우선, 없으면 하드코딩 폴백."""
+    try:
+        from db.excel_loader import load_unit_prices
+        rows = load_unit_prices()
+        if rows:
+            for r in rows:
+                session.add(UnitPrice(**r))
+            session.commit()
+            print(f"[OK] 월별 환산단가 {len(rows)}건 적재 (Excel)")
+            return
+    except (FileNotFoundError, LookupError) as e:
+        print(f"[i] Excel 단가 미사용({e}) → 하드코딩")
+
     diesel_prices = [1720, 1690, 1680, 1700, 1710, 1740,
                      1760, 1750, 1730, 1720, 1700, 1690]
     lng_prices    = [820,  815,  800,  780,  760,  750,
@@ -95,7 +119,7 @@ def seed_unit_prices(session: Session):
     for row in rows:
         session.add(row)
     session.commit()
-    print(f"[OK] 월별 환산단가 {len(rows)}건 적재 (2024)")
+    print(f"[OK] 월별 환산단가 {len(rows)}건 적재 (하드코딩, 2024)")
 
 
 def seed_industry_distributions(session: Session):

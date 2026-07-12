@@ -50,7 +50,9 @@ class GenConfig:
     seed: int = 42
 
 
-def generate(cfg: GenConfig) -> list[dict]:
+def generate(cfg: GenConfig, expressions: dict | None = None) -> list[dict]:
+    # 표현 사전: Excel 제공분이 있으면 내장 위에 덮어쓰기 (없는 연료는 내장으로 폴백)
+    expr_map = FUEL_EXPRESSIONS if not expressions else {**FUEL_EXPRESSIONS, **expressions}
     rnd = random.Random(cfg.seed)
     records: list[dict] = []
     for month in range(1, 13):
@@ -66,7 +68,7 @@ def generate(cfg: GenConfig) -> list[dict]:
             if cfg.anomaly and cfg.anomaly["month"] == month and cfg.anomaly["fuel"] == fuel:
                 amount = int(amount * cfg.anomaly["multiplier"])
 
-            info = FUEL_EXPRESSIONS[fuel]
+            info = expr_map[fuel]
             expr = rnd.choice(info["exprs"])
             label = dict(info["label"])
             label["expected_hitl"] = expr in info["ambiguous"]
@@ -97,6 +99,8 @@ def main():
     p.add_argument("--anomaly", default="7:경유:3.2", help="이상치 '월:연료:배수'")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--out", default=None, help="JSON 저장 경로 (없으면 stdout)")
+    p.add_argument("--from-excel", nargs="?", const="DEFAULT", default=None,
+                   help="회계 Excel의 전표_샘플 표현 사용 (경로 생략 시 data/ 기본 파일)")
     a = p.parse_args()
 
     cfg = GenConfig(
@@ -106,7 +110,18 @@ def main():
         anomaly=_parse_anomaly(a.anomaly),
         seed=a.seed,
     )
-    recs = generate(cfg)
+
+    expressions = None
+    if getattr(a, "from_excel", None) is not None:
+        from db.excel_loader import DEFAULT_XLSX, load_expressions
+        path = DEFAULT_XLSX if a.from_excel == "DEFAULT" else a.from_excel
+        try:
+            expressions = load_expressions(path)
+            print(f"[i] Excel 표현 사용: {path} (연료 {list(expressions)})")
+        except (FileNotFoundError, LookupError) as e:
+            print(f"[i] Excel 표현 미사용({e}) → 내장 사전")
+
+    recs = generate(cfg, expressions)
     out = json.dumps(recs, ensure_ascii=False, indent=2)
     if a.out:
         import os
