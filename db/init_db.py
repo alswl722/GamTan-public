@@ -1,4 +1,4 @@
-"""테이블 생성 + 기초 마스터 데이터 적재 (배출계수, 환산단가)"""
+"""테이블 생성 + 기초 마스터 데이터 적재 (배출계수, 환산단가, 업종분포)"""
 import os
 import sys
 from dotenv import load_dotenv
@@ -6,15 +6,14 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from db.models import Base, EmissionFactor, UnitPrice
+from db.models import Base, EmissionFactor, UnitPrice, IndustryDistribution
 
 load_dotenv()
 
-# 이전에 만든 잉여 테이블 (7개 확정 스키마 외)
+# 이전에 만든 잉여 테이블 (확정 스키마 외)
 LEGACY_TABLES = [
     "hitl_queue",
     "portfolio_summaries",
-    "industry_distributions",
     "monthly_unit_prices",
     "classification_results",
 ]
@@ -30,11 +29,23 @@ def drop_legacy_tables(engine):
 
 def create_tables(engine):
     Base.metadata.create_all(engine)
-    print("[OK] 테이블 7개 생성 완료")
+    print("[OK] 테이블 8개 생성 완료")
 
 
 def seed_emission_factors(session: Session):
-    """배출계수 — 환경부 국가 온실가스 인벤토리 2023년 기준"""
+    """배출계수 — 회계 Excel 우선, 없으면 하드코딩 폴백 (환경부 인벤토리 2023)."""
+    try:
+        from db.excel_loader import load_emission_factors
+        rows = load_emission_factors()
+        if rows:
+            for r in rows:
+                session.add(EmissionFactor(**r))
+            session.commit()
+            print(f"[OK] 배출계수 {len(rows)}건 적재 (Excel)")
+            return
+    except (FileNotFoundError, LookupError) as e:
+        print(f"[i] Excel 배출계수 미사용({e}) → 하드코딩")
+
     factors = [
         # Scope 1 — 고정연소
         dict(fuel_type="도시가스(LNG)", scope=1, category="고정연소",
@@ -71,11 +82,23 @@ def seed_emission_factors(session: Session):
     for f in factors:
         session.add(EmissionFactor(**f))
     session.commit()
-    print(f"[OK] 배출계수 {len(factors)}건 적재")
+    print(f"[OK] 배출계수 {len(factors)}건 적재 (하드코딩)")
 
 
 def seed_unit_prices(session: Session):
-    """환산단가 — 2024년 월별 (경유/도시가스/전기), 공급가액 기준"""
+    """환산단가(월별) — 회계 Excel `월별단가` 시트 우선, 없으면 하드코딩 폴백."""
+    try:
+        from db.excel_loader import load_unit_prices
+        rows = load_unit_prices()
+        if rows:
+            for r in rows:
+                session.add(UnitPrice(**r))
+            session.commit()
+            print(f"[OK] 월별 환산단가 {len(rows)}건 적재 (Excel)")
+            return
+    except (FileNotFoundError, LookupError) as e:
+        print(f"[i] Excel 단가 미사용({e}) → 하드코딩")
+
     diesel_prices = [1720, 1690, 1680, 1700, 1710, 1740,
                      1760, 1750, 1730, 1720, 1700, 1690]
     lng_prices    = [820,  815,  800,  780,  760,  750,
@@ -96,7 +119,37 @@ def seed_unit_prices(session: Session):
     for row in rows:
         session.add(row)
     session.commit()
-    print(f"[OK] 월별 환산단가 {len(rows)}건 적재 (2024)")
+    print(f"[OK] 월별 환산단가 {len(rows)}건 적재 (하드코딩, 2024)")
+
+
+def seed_industry_distributions(session: Session):
+    """업종별 배출량 분포 — 환경정보공개시스템 기반 (금속가공, 목업). 벤치마킹·이상치 검증용."""
+    rows = [
+        IndustryDistribution(
+            industry_code="C251", industry_name="구조용 금속제품 제조", scope=1,
+            emission_min_co2e=5.2, emission_median_co2e=18.7,
+            emission_median_per_employee=1.56, emission_max_co2e=124.0,
+            year=2023, source="환경정보공개시스템 (목업)"),
+        IndustryDistribution(
+            industry_code="C251", industry_name="구조용 금속제품 제조", scope=2,
+            emission_min_co2e=8.1, emission_median_co2e=31.4,
+            emission_median_per_employee=2.62, emission_max_co2e=198.0,
+            year=2023, source="환경정보공개시스템 (목업)"),
+        IndustryDistribution(
+            industry_code="C259", industry_name="기타 금속가공제품 제조", scope=1,
+            emission_min_co2e=3.8, emission_median_co2e=14.2,
+            emission_median_per_employee=1.18, emission_max_co2e=89.0,
+            year=2023, source="환경정보공개시스템 (목업)"),
+        IndustryDistribution(
+            industry_code="C259", industry_name="기타 금속가공제품 제조", scope=2,
+            emission_min_co2e=6.5, emission_median_co2e=24.8,
+            emission_median_per_employee=2.07, emission_max_co2e=156.0,
+            year=2023, source="환경정보공개시스템 (목업)"),
+    ]
+    for row in rows:
+        session.add(row)
+    session.commit()
+    print(f"[OK] 업종분포 {len(rows)}건 적재")
 
 
 def main():
@@ -114,6 +167,11 @@ def main():
             seed_unit_prices(session)
         else:
             print("[SKIP] 환산단가 이미 존재")
+
+        if session.query(IndustryDistribution).count() == 0:
+            seed_industry_distributions(session)
+        else:
+            print("[SKIP] 업종분포 이미 존재")
 
     print("\n[완료] DB 초기화 성공")
 

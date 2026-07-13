@@ -1,0 +1,262 @@
+[
+  {
+    "source": "kepco",
+    "year": 2024,
+    "month": 1,
+    "item_description": "전기요금 (산업용 을)",
+    "supply_amount_krw": 3597598,
+    "label": {
+      "scope": 2,
+      "category": "간접배출",
+      "fuel": "전기",
+      "expected_hitl": false
+    }
+  },
+  {
+    "source": "hometax",
+    "year": 2024,
+    "month": 1,
+    "item_description": "도시가스",
+    "supply_amount_krw": 1415218,
+    "label": {
+      "scope": 1,
+      "category": "고정연소",
+      "fuel": "도시가스",
+      "expected_hitl": false
+    }
+  },
+  {
+    "source": "hometax",
+    "year": 2024,
+    "month": 1,
+    "item_description": "경유",
+    "supply_amount_krw": 614017,
+    "label": {
+      "scope": 1,
+      "category": "이동연소",
+      "fuel": "경유",
+      "expected_hitl": false
+    }
+  },
+  {
+    "source": "kepco",
+    "year": 2024,
+    "month": 2,
+    "item_description": "공장 전력 사용료",
+    "supply_amount_krw": 3623689,
+    "label": {
+      "scope": 2,
+      "category": "간접배출",
+      "fuel": "전기",
+      "expected_hitl": false
+    }
+  },
+  {
+    "source": "hometax",
+    "year": 2024,
+    "month": 2,
+    "item_description": "도시가스 요금",
+    "supply_amount_krw": 1155908,
+    "label": {
+      "scope": 1,
+      "category": "고정연소",
+      "fuel": "도시가스",
+      "expected_hitl": false
+    }
+  },
+  {
+    "source": "hometax",
+    "year": 2024,
+    "month": 2,
+    "item_description": "경유",
+    "supply_amount_krw": 589131,
+    "label": {
+      "scope": 1,
+      "category": "이동연소",
+      "fuel": "경유",
+      "expected_hitl": false
+    }
+  },
+  {
+    "source": "kepco",
+    "year": 2024,
+    "month": 3,
+    "item_description": "공장 전력 사용료",
+    "supply_amount_krw": 3303046,
+    "label": {
+      "scope": 2,
+      "category": "간접배출",
+      "fuel": "전기",
+      "expected_hitl": false
+    }
+  },
+  {
+    "source": "hometax",
+    "year": 2024,
+    "month": 3,
+    "item_description": "동절기 난방유",
+    "supply_amount_krw": 663262,
+    "label": {
+      "scope": 1,
+      "category": "이동연소",
+      "fuel": "경유",
+      "expected_hitl": false
+    }
+  },
+  {
+    "source": "kepco",
+    "year": 2024,
+    "month": 4,
+    "item_description": "공장 전력 사용료",
+    "supply_amount_krw": 3289186,
+    "label": {
+      "scope": 2,
+      "category": "간접배출",
+      "fuel": "전기",
+      "expected_hitl": false
+    }
+  },
+  {
+    "source": "hometax",
+    "year": 2024,
+    "month": 4,
+    "item_description": "지게차 경유 외 1종",
+    "supply_amount_krw": 676172,
+    "label": {
+      "scope": 1,
+      "category": "이동연소",
+      "fuel": "경유",
+      "expected_hitl": false
+    }
+  },
+  {
+    "source": "kepco",
+    "year": 2024,
+    "month": 5,
+    "item_description": "공장 전력 사용료",
+    "supply_amount_krw": 3304308,
+    "label": {
+      "scope": 2,
+      "category": "간접배출",
+      "fuel": "전기",
+      "expected_hitl": false
+    }
+  },
+  {
+    "source": "hometax",
+    "year": 2024,
+    "month": 5,
+    "item_description": "경유",
+    "supply_amount_krw": 621164,
+    "label": {
+      "scope": 1,
+      "category": "이동연소",
+      "fuel": "경유",
+      "expected_hitl": false
+    }
+  },
+  {
+    "source": "kepco",
+    "year": 2024,
+    "month": 6,
+    "item_description": "전기요금 (산업용 을)",
+    "supply_amount_krw": 3681165,
+    "label": {
+      "scope": 2,
+      "category": "간접배출",
+      "fuel": "전기",
+      "expected_hitl": false
+    }
+  },
+  {
+    "source": "hometax",
+    "year": 2024,
+    "month": 6,
+    "item_description": "도시가스 요금",
+    "supply_amount_krw": 374266,
+    "label": {
+      "scope": 1,
+      "category": "고정연소",
+      "fuel": "도시가스",
+      "expected_hitl": false
+    }
+  },
+  {
+    "source": "hometax",
+    "year": 2024,
+    "month": 6,
+    "item_description": "경유 외 1종",
+    "supply_amount_krw": 621123,
+    "label": {
+      "scope": 1,
+      "category": "이동연소",
+      "fuel": "경유",
+      "expected_hitl": false
+    }
+  },
+  {
+    "source": "kepco",
+    "year": 2024,
+    "month": 7,
+    "item_description": "전기료",
+    "supply_amount_krw": 3820049,
+    "label": {
+      "scope": 2,
+      "category": "간접배출",
+      "fuel": "전기",
+      "expected_hitl": false
+    }
+  },
+  {
+    "source": "hometax",
+    "year": 2024,
+    "month": 7,
+    "item_description": "도시가스 요금",
+    "supply_amount_krw": 331359,
+    "label": {
+      "scope": 1,
+      "category": "고정연소",
+      "fuel": "도시가스",
+      "expected_hitl": false
+    }
+  },
+  {
+    "source": "hometax",
+    "year": 2024,
+    "month": 7,
+    "item_description": "유류대금",
+    "supply_amount_krw": 1912233,
+    "label": {
+      "scope": 1,
+      "category": "이동연소",
+      "fuel": "경유",
+      "expected_hitl": true
+    }
+  },
+  {
+    "source": "kepco",
+    "year": 2024,
+    "month": 8,
+    "item_description": "전기요금 (산업용 을)",
+    "supply_amount_krw": 3572608,
+    "label": {
+      "scope": 2,
+      "category": "간접배출",
+      "fuel": "전기",
+      "expected_hitl": false
+    }
+  },
+  {
+    "source": "hometax",
+    "year": 2024,
+    "month": 8,
+    "item_description": "도시가스 (동절기 난방)",
+    "supply_amount_krw": 376540,
+    "label": {
+      "scope": 1,
+      "category": "고정연소",
+      "fuel": "도시가스",
+      "expected_hitl": false
+    }
+  }
+]

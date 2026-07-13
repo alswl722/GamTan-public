@@ -10,6 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 앱 코드 (db 패키지는 api 가 import)
 COPY db ./db
 COPY api ./api
+COPY data ./data # 회계 Excel (init_db·생성기가 읽음; 없으면 하드코딩 폴백)
 
 EXPOSE 8000
 
