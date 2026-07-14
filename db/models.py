@@ -65,7 +65,7 @@ class Classification(Base):
     amount_krw = Column(Numeric(15, 0))
     activity_amount = Column(Float)                   # 물량 (L, kWh, m³)
     activity_unit = Column(String(20))
-    emission_co2e = Column(Float)                     # tCO2e (결정론적 계산 결과)
+    emission_co2e = Column(Float)                     # kgCO2e (결정론적 계산 결과, 표시 시 ÷1000)
     confidence = Column(Float)                        # 0.0 ~ 1.0
     evidence = Column(Text)                           # LLM 판단 근거
     method = Column(String(10))                       # rule | llm
