@@ -111,7 +111,17 @@ def _call_gemini(prompt: str) -> dict:
 
 
 def _fallback_result(item_description: str, reason: str) -> dict:
-    """JSON 파싱/호출 실패 시 — 낮은 confidence로 HITL 이관되도록 함."""
+    """JSON 파싱/호출 실패 시 — 낮은 confidence로 HITL 이관되도록 함.
+
+    원문 API 오류(429 JSON 등)를 evidence에 그대로 노출하지 않고 간결히 분류한다.
+    """
+    r = (reason or "").lower()
+    if "resource_exhausted" in r or "429" in r or "quota" in r:
+        why = "LLM 호출 한도 초과(무료 티어 일일 20회) 일시 보류"
+    elif "json" in r:
+        why = "LLM 응답 형식 오류"
+    else:
+        why = "LLM 일시 오류"
     return {
         "raw_text": item_description,
         "scope": None,
@@ -120,7 +130,7 @@ def _fallback_result(item_description: str, reason: str) -> dict:
         "amount_krw": None,
         "mixed_item": False,
         "confidence": 0.0,
-        "evidence": f"LLM 분류 실패({reason}) — 사람 검토 필요",
+        "evidence": f"{why} → 사람 검토 필요",
     }
 
 
