@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from api.db import get_engine
-from api.routers import mock, trace
+from api.routers import mock, trace, pcaf
 
 app = FastAPI(title="iM-Bridge API", version="0.1.0")
 
@@ -27,6 +27,7 @@ app.add_middleware(
 # 라우터 등록 (기존 health 는 아래 그대로 유지)
 app.include_router(mock.router)
 app.include_router(trace.router)
+app.include_router(pcaf.router)
 
 
 @app.get("/health")

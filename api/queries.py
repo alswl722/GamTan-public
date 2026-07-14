@@ -5,7 +5,7 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from db.models import Voucher, IndustryDistribution
+from db.models import Voucher, IndustryDistribution, EmissionFactor, UnitPrice
 
 
 # 커버리지 매트릭스용 — 품목 텍스트를 연료 대분류로 러프하게 묶는다.
@@ -62,6 +62,16 @@ def get_coverage(session: Session, company_id: int) -> dict:
         if missing:
             gaps.append({"fuel": f, "missing_months": missing})
     return {"matrix": matrix, "gaps": gaps}
+
+
+def get_emission_factors(session: Session) -> list[EmissionFactor]:
+    """배출계수 전량 — 계산 엔진 index_emission_factors 입력 (테이블 작음)."""
+    return session.execute(select(EmissionFactor)).scalars().all()
+
+
+def get_unit_prices(session: Session) -> list[UnitPrice]:
+    """환산단가 전량(연료×12개월) — 계산 엔진 index_unit_prices 입력."""
+    return session.execute(select(UnitPrice)).scalars().all()
 
 
 def get_distribution(session: Session, industry_code: str, scope: int) -> dict | None:

@@ -149,6 +149,42 @@ def load_unit_prices(path: str = DEFAULT_XLSX, year: int = 2024) -> list[dict]:
     return out
 
 
+def load_expected_results(path: str = DEFAULT_XLSX) -> list[dict]:
+    """`기대_결과` 시트 → 계산 엔진 단위테스트 골든셋 (40건, I001~I040).
+
+    각 행은 정답 라벨(scope/fuel) + 사람이 손으로 매긴 활동량·배출량이다.
+    엔진 검증의 독립 오라클로 쓴다 — 단, 활동량은 반올림돼 있고 일부 연료
+    (전기·LPG·휘발유)는 배출계수 시트 단가와 암시 단가가 어긋나므로
+    (회계 확인 필요) 대조 시 연료별 허용오차를 다르게 둔다.
+    """
+    rows = _rows_as_dicts(_sheet(_load(path), "기대_결과"))
+    out = []
+    for r in rows:
+        vid = r.get("전표ID")
+        if not vid:
+            continue
+
+        def _num(v):
+            return round(float(v), 4) if v is not None else None
+
+        out.append(
+            dict(
+                voucher_id=str(vid).strip(),
+                item=(str(r.get("품목명")).strip() if r.get("품목명") else ""),
+                scope=_scope_int(r.get("결과Scope")),
+                fuel=_norm_fuel(r.get("결과연료")),
+                amount_krw=_num(r.get("공급가액")),
+                activity_amount=_num(r.get("활동량")),
+                unit=(str(r.get("단위")).strip() if r.get("단위") else None),
+                factor=_num(r.get("배출계수")),
+                expected_kgco2e=_num(r.get("예상배출량_kgCO2e")),
+                needs_review=_truthy(r.get("사람검토필요")),
+                reason=r.get("결과근거"),
+            )
+        )
+    return out
+
+
 def load_expressions(path: str = DEFAULT_XLSX) -> dict:
     """`전표_샘플` 시트 → 생성기 표현 사전.
 
