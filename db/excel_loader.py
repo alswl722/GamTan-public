@@ -149,6 +149,45 @@ def load_unit_prices(path: str = DEFAULT_XLSX, year: int = 2024) -> list[dict]:
     return out
 
 
+def _split_keywords(s) -> list[str]:
+    if s is None:
+        return []
+    return [kw.strip() for kw in str(s).split(",") if kw.strip()]
+
+
+def load_classification_rules(path: str = DEFAULT_XLSX) -> list[dict]:
+    """`분류_기준표_확장` 시트 → 룰 엔진 입력 (50개 키워드 매칭 규칙).
+
+    반환은 priority 오름차순 → rule_id 오름차순으로 정렬되어, 룰 엔진이
+    그대로 순회하며 첫 매치를 쓰면 되는 순서로 나온다.
+    """
+    rows = _rows_as_dicts(_sheet(_load(path), "분류_기준표_확장"))
+    out = []
+    for r in rows:
+        rule_id = r.get("rule_id")
+        if not rule_id:
+            continue
+        out.append(
+            dict(
+                rule_id=str(rule_id).strip(),
+                priority=int(r.get("우선순위")) if r.get("우선순위") is not None else 9,
+                include_keywords=_split_keywords(r.get("포함 키워드")),
+                exclude_keywords=_split_keywords(r.get("제외/주의 키워드")),
+                scope=_scope_int(r.get("정답Scope")),
+                category=r.get("세부분류"),
+                fuel_type=_norm_fuel(r.get("연료/항목")),
+                auto_action=r.get("자동처리"),
+                needs_review=_truthy(r.get("사람검토필요")),
+                mixed_item=_truthy(r.get("혼합품목 플래그")),
+                quality_grade=r.get("기본 데이터품질"),
+                reasoning=r.get("판단기준/근거"),
+                example=r.get("예시 전표 문구"),
+            )
+        )
+    out.sort(key=lambda r: (r["priority"], r["rule_id"]))
+    return out
+
+
 def load_expected_results(path: str = DEFAULT_XLSX) -> list[dict]:
     """`기대_결과` 시트 → 계산 엔진 단위테스트 골든셋 (40건, I001~I040).
 

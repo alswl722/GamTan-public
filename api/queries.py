@@ -5,7 +5,7 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from db.models import Voucher, IndustryDistribution, EmissionFactor, UnitPrice
+from db.models import Classification, Voucher, IndustryDistribution, EmissionFactor, UnitPrice
 
 
 # 커버리지 매트릭스용 — 품목 텍스트를 연료 대분류로 러프하게 묶는다.
@@ -72,6 +72,36 @@ def get_emission_factors(session: Session) -> list[EmissionFactor]:
 def get_unit_prices(session: Session) -> list[UnitPrice]:
     """환산단가 전량(연료×12개월) — 계산 엔진 index_unit_prices 입력."""
     return session.execute(select(UnitPrice)).scalars().all()
+
+
+def get_classifications(session: Session, company_id: int) -> list[dict]:
+    """장면③(AI 분류+근거)용 — Scope 1/2 확정 건 + HITL 대기 건만 반환.
+
+    (제외/참고분류는 감사·집계 목적으로 DB엔 남아있지만 이 화면에는 안 보여줌)
+    """
+    stmt = (
+        select(Classification, Voucher)
+        .join(Voucher, Classification.voucher_id == Voucher.id)
+        .where(Voucher.company_id == company_id)
+        .where((Classification.scope.in_((1, 2))) | (Classification.status == "review_required"))
+        .order_by(Voucher.month, Voucher.issue_date)
+    )
+    rows = session.execute(stmt).all()
+    return [
+        {
+            "voucher_id": v.id,
+            "raw": v.item_description,
+            "scope": c.scope,
+            "category": c.category,
+            "fuel": c.fuel_type,
+            "amount_krw": int(c.amount_krw) if c.amount_krw is not None else None,
+            "confidence": c.confidence,
+            "evidence": c.evidence,
+            "method": c.method,
+            "hitl": c.status == "review_required",
+        }
+        for c, v in rows
+    ]
 
 
 def get_distribution(session: Session, industry_code: str, scope: int) -> dict | None:
