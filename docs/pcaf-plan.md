@@ -100,6 +100,33 @@ PCAF 집계 (읽기 전용, 저장된 Classification 사용)
 
 ### 15. `CLAUDE.md` (변경) — §3 LLM 행: "전표 분류(도구②)는 Gemini API(google-genai, gemini-2.5-flash)로 변경. 에이전트 오케스트레이터(8월 예정)는 별도 결정 전까지 기존 Claude API tool use 문구 유지"로 갱신.
 
+## 담당 분담 (2인)
+
+도구②(분류)와 도구③(계산+PCAF)은 "Classification row에 무엇을 채우는가"만 합의하면 서로 다른 파일이라 병렬 작업 가능. 유일한 실제 의존점은 `classify_vouchers()`가 계산 결과(activity_amount/emission_co2e)를 채우는 한 지점뿐.
+
+### 개발자 A — 도구② 분류 파이프라인 (룰 + Gemini + 캐시)
+- `db/excel_loader.py`: `load_classification_rules()` 함수만 추가
+- `api/agent/rules.py` (신규) — 룰 매칭 엔진
+- `api/agent/llm_classify.py` (신규) — Gemini 호출 + `llm_cache` 래핑
+- `api/agent/tools.py` — `classify_vouchers()` (B의 `compute_emission()`이 아직 없으면 스텁으로 두고 먼저 통합, 나중에 실제 함수로 교체)
+- `api/routers/classify.py` (신규) — `POST`/`GET /classify/{company_id}`
+- `requirements.txt`(`google-genai`), `.env`(`GEMINI_API_KEY`)
+- `web/components/SceneClassify.tsx` 연동
+- `CLAUDE.md` §3 LLM 스택 문구(Gemini 관련 부분만)
+
+### 개발자 B — 도구③ 계산 엔진 + PCAF
+- `db/excel_loader.py`: `load_expected_results()` 함수만 추가 (A와 같은 파일이지만 다른 함수라 충돌 거의 없음)
+- `db/calc_engine.py` (신규) — 순수 계산 함수 + Pydantic 검증. **시그니처를 가장 먼저 확정해서 A에게 공유** (`compute_emission(item, price_index, factor_index) -> dict`)
+- `db/pcaf.py` (신규) — PCAF 등급 산정(임시안)
+- `api/agent/tools.py` — `calculate_pcaf()`
+- `api/routers/pcaf.py` (신규) — `GET /pcaf/{company_id}`
+- `requirements.txt`(`pytest`), `tests/test_calc_engine.py`
+- `web/components/ScenePcaf.tsx` 연동
+
+### 공동
+- `api/main.py` 라우터 등록 — 둘 다 건드리는 파일이라 마지막에 같이 머지하거나, 먼저 끝낸 쪽이 먼저 등록 후 다른 사람은 자기 라우터만 추가
+- 통합 테스트(검증 방법 2~4번)는 두 파이프라인이 다 붙은 뒤 같이 확인
+
 ## 제외 범위 (이번엔 안 함)
 - 에이전트 오케스트레이터(Claude tool use 루프) 자체 — D8~9 별도 작업.
 - PCAF 등급 회계 최종 확인 — 이번엔 임시안으로 진행, 코드 주석에 명시.
