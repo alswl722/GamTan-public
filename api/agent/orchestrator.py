@@ -9,6 +9,7 @@ LLM 루프가 실패하거나 GEMINI_API_KEY가 없으면 **동일 트레이스 
 순차 러너**로 자동 폴백한다(CLAUDE.md D9 — 오프라인·무키 데모 방탄).
 """
 import os
+import time
 
 from sqlalchemy.orm import Session
 
@@ -173,11 +174,22 @@ def _run_llm(session: Session, company: Company, sid: str) -> None:
     )
     client = genai.Client(api_key=api_key)
 
+    def _generate(contents):
+        # Gemini 무료 티어는 간헐적 5xx/과부하가 있어 짧게 재시도 (마지막 실패는 폴백으로).
+        last = None
+        for attempt in range(3):
+            try:
+                return client.models.generate_content(model=MODEL, contents=contents, config=config)
+            except Exception as e:  # noqa: BLE001
+                last = e
+                time.sleep(1.5 * (attempt + 1))
+        raise last
+
     log_step(session, company.id, sid, "계획", _OPENER)
     contents = [types.Content(role="user", parts=[types.Part(text=f"기업 '{company.name}'의 탄소 리포트를 만들어라.")])]
 
     for _ in range(MAX_ITERS):
-        resp = client.models.generate_content(model=MODEL, contents=contents, config=config)
+        resp = _generate(contents)
         parts = resp.candidates[0].content.parts or []
         calls = [p.function_call for p in parts if getattr(p, "function_call", None)]
         texts = [p.text for p in parts if getattr(p, "text", None)]
@@ -221,17 +233,21 @@ def run_agent(session: Session, company_id: int) -> dict:
     if company is None:
         raise ValueError(f"company_id={company_id} 없음")
 
+    from db.models import TraceLog  # 지역 import — 순환 회피
+
     sid = new_session_id()
     mode = "llm"
     try:
         _run_llm(session, company, sid)
     except Exception as exc:  # noqa: BLE001 — 무키·API오류·SDK드리프트 모두 폴백
         session.rollback()
+        # LLM이 중간까지 기록한 부분 트레이스를 지우고, 폴백을 깨끗한 단일 세션으로 재기록
+        session.query(TraceLog).filter_by(session_id=sid).delete()
+        session.commit()
         mode = "fallback"
         log_step(session, company_id, sid, "계획",
                  f"라이브 에이전트 사용 불가({type(exc).__name__}) — 동작 설계 시각화(폴백)로 진행")
         _run_sequential(session, company, sid)
 
-    from db.models import TraceLog  # 지역 import — 순환 회피
     count = session.query(TraceLog).filter_by(session_id=sid).count()
     return {"session_id": sid, "mode": mode, "step_count": count}
