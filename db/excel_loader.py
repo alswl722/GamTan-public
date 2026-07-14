@@ -91,24 +91,61 @@ def load_emission_factors(path: str = DEFAULT_XLSX) -> list[dict]:
     return out
 
 
-def load_unit_prices(path: str = DEFAULT_XLSX) -> list[dict]:
-    """`월별단가` 시트 → UnitPrice 입력 (연료×12개월). 시트 없으면 LookupError."""
-    rows = _rows_as_dicts(_sheet(_load(path), "월별단가"))
+def _price_unit(price_unit_label) -> str:
+    """'원/L' -> 'L' (UnitPrice.unit은 물량 단위만 저장)."""
+    s = str(price_unit_label) if price_unit_label is not None else ""
+    return s.split("/", 1)[-1].strip() if "/" in s else s.strip()
+
+
+def load_unit_prices(path: str = DEFAULT_XLSX, year: int = 2024) -> list[dict]:
+    """환산단가 → UnitPrice 입력 (연료×12개월).
+
+    `월별단가` 시트가 있으면 그걸 우선 사용 (회계가 월별 실제값을 넣으면 자동 반영).
+    없으면 `배출계수` 시트의 단일 단가(월별_환산단가_공급가액)를 12개월에 동일
+    적용한다 — 유가 월별 변동을 반영하지 못하는 데모 임시값이며, 회계 담당이
+    `월별단가` 시트를 추가하는 즉시 대체된다.
+    """
+    wb = _load(path)
+    if "월별단가" in wb.sheetnames:
+        rows = _rows_as_dicts(_sheet(wb, "월별단가"))
+        out = []
+        for r in rows:
+            price = r.get("단가")
+            if price is None:
+                continue
+            out.append(
+                dict(
+                    fuel_type=_norm_fuel(r.get("연료")),
+                    year=int(r.get("연")),
+                    month=int(r.get("월")),
+                    unit_price_krw=float(price),
+                    unit=r.get("단위"),
+                    source=r.get("출처"),
+                )
+            )
+        return out
+
+    rows = _rows_as_dicts(_sheet(wb, "배출계수"))
     out = []
     for r in rows:
-        price = r.get("단가")
+        price = r.get("월별_환산단가_공급가액")
         if price is None:
             continue
-        out.append(
-            dict(
-                fuel_type=_norm_fuel(r.get("연료")),
-                year=int(r.get("연")),
-                month=int(r.get("월")),
-                unit_price_krw=float(price),
-                unit=r.get("단위"),
-                source=r.get("출처"),
+        fuel = _norm_fuel(r.get("연료/에너지"))
+        unit = _price_unit(r.get("단가단위"))
+        source = r.get("출처URL")
+        note = f"{source} (배출계수 시트 단일값, 12개월 동일 적용 — 데모 임시값)" if source else "데모 임시값 (월별 미분리)"
+        for month in range(1, 13):
+            out.append(
+                dict(
+                    fuel_type=fuel,
+                    year=year,
+                    month=month,
+                    unit_price_krw=float(price),
+                    unit=unit,
+                    source=note,
+                )
             )
-        )
     return out
 
 
