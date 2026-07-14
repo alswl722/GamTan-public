@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { apiGet, COMPANY_ID } from "@/lib/api";
+import { apiGet, apiPost, COMPANY_ID } from "@/lib/api";
 import { WireframeBadge } from "./WireframeBadge";
 
 /** 장면 ② — 에이전트 트레이스 뷰 (킬러씬 A). /trace/latest 실데이터 + 목업 폴백. */
@@ -32,22 +32,25 @@ type TraceResponse = {
   steps: { step_type: StepType; tool_name: string | null; message: string }[];
 };
 
+function mapSteps(res: TraceResponse): Step[] {
+  return res.steps.map((s) => ({
+    type: s.step_type,
+    tool: s.tool_name,
+    message: s.message,
+  }));
+}
+
 export function SceneTrace() {
   const [steps, setSteps] = useState<Step[]>(MOCK_TRACE);
   const [live, setLive] = useState(false);
+  const [running, setRunning] = useState(false);
 
   useEffect(() => {
     let alive = true;
     apiGet<TraceResponse>(`/trace/latest?company_id=${COMPANY_ID}`)
       .then((res) => {
         if (!alive || !res.steps?.length) return;
-        setSteps(
-          res.steps.map((s) => ({
-            type: s.step_type,
-            tool: s.tool_name,
-            message: s.message,
-          })),
-        );
+        setSteps(mapSteps(res));
         setLive(true);
       })
       .catch(() => {
@@ -58,6 +61,25 @@ export function SceneTrace() {
     };
   }, []);
 
+  // 에이전트 실행 → 도구 자율 호출 + 트레이스 기록 → 재조회로 타임라인 갱신
+  async function runAgent() {
+    setRunning(true);
+    try {
+      await apiPost(`/agent/run/${COMPANY_ID}`);
+      const res = await apiGet<TraceResponse>(
+        `/trace/latest?company_id=${COMPANY_ID}`,
+      );
+      if (res.steps?.length) {
+        setSteps(mapSteps(res));
+        setLive(true);
+      }
+    } catch {
+      /* 서버 미기동 등 — 목업 유지 */
+    } finally {
+      setRunning(false);
+    }
+  }
+
   return (
     <section className="rounded-xl border border-line bg-surface p-6">
       <div className="flex items-center justify-between">
@@ -67,13 +89,23 @@ export function SceneTrace() {
             킬러씬 A
           </span>
         </h2>
-        {live ? (
-          <span className="rounded-full bg-brand-soft px-2.5 py-1 text-[11px] font-semibold text-brand-ink">
-            실행 트레이스
-          </span>
-        ) : (
-          <WireframeBadge />
-        )}
+        <div className="flex items-center gap-2">
+          {live ? (
+            <span className="rounded-full bg-brand-soft px-2.5 py-1 text-[11px] font-semibold text-brand-ink">
+              실행 트레이스
+            </span>
+          ) : (
+            <WireframeBadge />
+          )}
+          <button
+            type="button"
+            onClick={runAgent}
+            disabled={running}
+            className="rounded-lg bg-brand px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-brand-ink disabled:opacity-60"
+          >
+            {running ? "실행 중…" : "에이전트 실행"}
+          </button>
+        </div>
       </div>
       <p className="mt-1 text-sm text-muted">
         에이전트가 스스로 결손을 발견하고 자기 답을 의심하는 판단 일지. 모든

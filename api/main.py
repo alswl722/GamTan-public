@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from api.db import get_engine
-from api.routers import classify, mock, pcaf, trace
+from api.routers import agent, classify, mock, pcaf, trace
 
 app = FastAPI(title="iM-Bridge API", version="0.1.0")
 
@@ -29,6 +29,7 @@ app.include_router(mock.router)
 app.include_router(trace.router)
 app.include_router(classify.router)
 app.include_router(pcaf.router)
+app.include_router(agent.router)
 
 
 @app.get("/health")
