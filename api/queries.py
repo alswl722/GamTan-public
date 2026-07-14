@@ -12,11 +12,11 @@ from db.models import Classification, Voucher, IndustryDistribution, EmissionFac
 # (정밀 분류는 도구②(LLM)가 하고, 여기선 결손 감지용 대분류만.)
 def _fuel_class(item: str) -> str:
     t = item or ""
-    if "전기" in t:
+    if any(k in t for k in ("전기", "전력", "한전", "한국전력", "kWh")):
         return "전기"
     if "가스" in t or "LNG" in t:
         return "가스"
-    if any(k in t for k in ("경유", "유류", "난방유", "휘발유", "지게차")):
+    if any(k in t for k in ("경유", "유류", "난방유", "휘발유", "지게차", "디젤", "주유")):
         return "경유/유류"
     return "기타"
 

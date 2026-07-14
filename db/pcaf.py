@@ -5,9 +5,9 @@
 
   등급 | 조건
   ---- | ----
-   2   | (미도달) 전표에 실측 물량(L/kWh) 필드가 없어 MVP 범위 밖. 향후 확장 자리.
-   3   | 실제 전표 + 금액→물량 환산(spend-based). 정상 분류된 대부분.
-   4   | status='review_required' (HITL 미확정) — 값은 있으나 불확실.
+   2   | 전표에 실측 수량(kWh/L/m³)이 있어 그대로 사용(measured). 회계 '수량 우선' 규칙.
+   3   | 수량 없이 금액→물량 환산(spend-based) 추정.
+   4   | status='review_required' (HITL 미확정) — emission 0이라 등급 가중 제외.
    5   | 결손월(voucher 자체가 없음) → industry_distributions 업종 평균으로 온더플라이 보정.
 
 Before(기준선)은 항상 5등급 — 전표 없이 매출/업종 통계만 대입하는 기존 방식.
@@ -67,31 +67,26 @@ def _after_measured(session, company_id, dist1, dist2) -> dict | None:
     """
     rows = (
         session.execute(
-            select(Classification)
+            select(Classification, Voucher)
             .join(Voucher, Classification.voucher_id == Voucher.id)
             .where(Voucher.company_id == company_id)
         )
-        .scalars()
         .all()
     )
-    scored = [
-        r for r in rows
-        if r.scope in (1, 2) and r.emission_co2e
-    ]
+    scored = [(c, v) for c, v in rows if c.scope in (1, 2) and c.emission_co2e]
+    hitl_count = sum(1 for c, v in rows if c.status == "review_required")
     if not scored:
         return None
 
-    # 실측분 — Scope 별 합산(kg→t)과 등급 가중용 누적
+    # 실측분 — Scope 별 합산(kg→t)과 등급 가중용 누적.
+    # 등급: 전표 실측 수량 기반=2 / 금액 추정(spend-based)=3 (HITL은 emission 0이라 가중 제외).
     measured_kg = {1: 0.0, 2: 0.0}
     grade_weight = 0.0   # Σ(등급 × 배출량)
     total_weight = 0.0   # Σ(배출량)
-    hitl_count = 0
-    for r in scored:
-        kg = float(r.emission_co2e)
-        measured_kg[r.scope] += kg
-        item_grade = 4 if r.status == "review_required" else 3
-        if r.status == "review_required":
-            hitl_count += 1
+    for c, v in scored:
+        kg = float(c.emission_co2e)
+        measured_kg[c.scope] += kg
+        item_grade = 2 if (v.raw_json or {}).get("quantity") else 3
         grade_weight += item_grade * kg
         total_weight += kg
 

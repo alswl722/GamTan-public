@@ -52,6 +52,10 @@ FUEL_EXPRESSIONS = {
 }
 SOURCE = {"경유": "hometax", "도시가스": "hometax", "전기": "kepco"}
 BASE_AMOUNT = {"경유": 650_000, "도시가스": 900_000, "전기": 3_500_000}  # 월 기준 공급가액 (규모=1.0 기준)
+# 실측 수량(고지서 사용량) 합성용 대표단가 — 금액에서 그럴듯한 물량을 역산해 전표에 함께 싣는다.
+# (마이데이터 실연동 시 실제 kWh/L/m³가 들어오는 자리. 수량이 있으면 계산 엔진이 실측=상위등급으로 처리)
+_REPR_PRICE = {"경유": 1400, "도시가스": 800, "전기": 150}
+_QTY_UNIT = {"경유": "L", "도시가스": "m3", "전기": "kWh"}
 # 도시가스 계절 가중 (동절기↑, 하절기↓)
 GAS_SEASON = {1: 1.5, 2: 1.4, 3: 1.1, 4: 0.8, 5: 0.6, 6: 0.4,
               7: 0.4, 8: 0.4, 9: 0.5, 10: 0.8, 11: 1.2, 12: 1.5}
@@ -108,6 +112,8 @@ def generate(cfg: GenConfig, expressions: dict | None = None) -> list[dict]:
                 label = dict(info["label"])
                 label["expected_hitl"] = expr in info["ambiguous"]
 
+                # 실측 수량 — 애매 표현(HITL 기대)은 사용량 미기재로 두어 사람검토 흐름을 살린다
+                qty = None if expr in info["ambiguous"] else round(amount / _REPR_PRICE[fuel])
                 records.append({
                     "company": name,
                     "source": SOURCE[fuel],
@@ -115,6 +121,8 @@ def generate(cfg: GenConfig, expressions: dict | None = None) -> list[dict]:
                     "month": month,
                     "item_description": expr,
                     "supply_amount_krw": amount,
+                    "quantity": qty,
+                    "quantity_unit": _QTY_UNIT[fuel] if qty is not None else None,
                     "label": label,  # 정답지 (엔진과 무관하게 생성 시점에 확정)
                 })
     return records[: cfg.count] if 0 < cfg.count < len(records) else records

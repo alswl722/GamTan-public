@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from db.models import Classification, TraceLog, Voucher
 from db.synth_generator import GenConfig, generate
 
-YEAR = 2024  # unit_prices 시딩 연도와 일치 (연도 정렬은 Excel 확정 후 Phase 3)
+YEAR = 2025  # 회계 엑셀(월별단가·전표) 연도와 일치
 
 # 연료 → 거래처(공급자) 이름 합성용
 _SUPPLIER = {"경유": "구미석유", "도시가스": "대성에너지", "전기": "한국전력공사"}

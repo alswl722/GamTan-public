@@ -109,6 +109,8 @@ def _classify_one(
     )
 
     # 도구③ 계산 엔진 — 물량·탄소량은 결정론적 코드로만 산출 (db/calc_engine.py)
+    # 활동량 산정 우선순위: 전표 실측 수량(raw_json) > 금액÷단가 추정 > 사람검토
+    raw = voucher.raw_json or {}
     try:
         calc_input = ClassifiedItemInput(
             fuel_type=fuel_type or "",
@@ -116,11 +118,17 @@ def _classify_one(
             amount_krw=float(amount or 0),
             year=voucher.year,
             month=voucher.month,
+            quantity=raw.get("quantity"),
+            quantity_unit=raw.get("quantity_unit"),
         )
         result = compute_emission(calc_input, price_index, factor_index)
         classification.activity_amount = result["activity_amount"]
         classification.activity_unit = result["activity_unit"]
         classification.emission_co2e = result["emission_co2e"]
+        # 회계 규칙상 사람검토 대상(LPG·전기/가스 사용량 미기재) → HITL
+        if result.get("needs_review"):
+            classification.status = "review_required"
+            classification.evidence = f"{evidence} | {result['reason']}"
     except CalcDataGap as gap:
         # 계수는 있는데 해당 월 단가가 없는 진짜 데이터 갭 — 사람 검토로 이관
         classification.status = "review_required"

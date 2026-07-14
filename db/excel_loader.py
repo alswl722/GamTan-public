@@ -111,7 +111,7 @@ def load_unit_prices(path: str = DEFAULT_XLSX, year: int = 2024) -> list[dict]:
         out = []
         for r in rows:
             price = r.get("단가")
-            if price is None:
+            if price is None:   # 전기·도시가스 등 수량우선 연료는 단가 없음(사용량 우선) → 스킵
                 continue
             out.append(
                 dict(
@@ -119,8 +119,8 @@ def load_unit_prices(path: str = DEFAULT_XLSX, year: int = 2024) -> list[dict]:
                     year=int(r.get("연")),
                     month=int(r.get("월")),
                     unit_price_krw=float(price),
-                    unit=r.get("단위"),
-                    source=r.get("출처"),
+                    unit=r.get("활동량단위") or r.get("단위"),   # 새 시트는 '활동량단위'
+                    source=r.get("출처/비고") or r.get("출처"),
                 )
             )
         return out
