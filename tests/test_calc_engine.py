@@ -1,13 +1,11 @@
-"""계산 엔진 골든셋 검증 — 기대_결과 40건(I001~I040)이 오라클.
+"""계산 엔진 골든셋 검증 — 기대_결과(I001~)가 오라클.
 
-엔진은 (scope, fuel, 금액)만 받아 물량·배출량을 결정론적으로 계산한다.
-이 테스트가 "환각이 숫자에 개입할 경로가 없다"를 증명한다.
+회계 노트의 활동량 산정 우선순위를 검증한다:
+  1순위 실측 수량(전표에 kWh/L/m³) → 그대로 (배출량 = 수량 × 배출계수, 골든과 정확 일치)
+  2순위 금액 ÷ 월별단가 추정
+  3순위 사람검토 — 전기·도시가스 수량 미기재, LPG(프로판/부탄 단위 구분)
 
-⚠️ 알려진 데이터 불일치 (회계 확인 필요):
-  - 전기: 배출계수 시트 단가 160원/kWh vs 기대_결과 암시 단가 ~343원/kWh (약 2.1배).
-          → 골든 대조는 xfail 처리하고, 엔진 자체 정합성만 검증한다.
-  - LPG(~11~14%)·휘발유(~8%): 시트 단가와 암시 단가가 어긋나 허용오차를 넉넉히 둔다.
-  - 경유·도시가스: 골든 활동량이 반올림돼 ~1~3% 오차 (정상).
+"환각이 숫자에 개입할 경로가 없다" — 활동량은 실측 or 결정론적 환산, 배출량은 순수 곱셈.
 """
 import pytest
 
@@ -24,17 +22,7 @@ from db.excel_loader import (
     load_unit_prices,
 )
 
-YEAR = 2024
-
-# 연료별 허용 상대오차 — 시트 단가와 골든 암시 단가의 어긋남을 반영.
-FUEL_TOLERANCE = {
-    "경유": 0.02,
-    "도시가스": 0.04,
-    "휘발유": 0.12,
-    "LPG": 0.16,
-}
-# 전기는 단가가 2.1배 어긋나 골든 대조 불가 → 별도 xfail 검증.
-GOLDEN_CROSSCHECK_EXCLUDE = {"전기"}
+YEAR = 2025  # 회계 엑셀(월별단가·전표) 연도
 
 
 @pytest.fixture(scope="module")
@@ -52,114 +40,103 @@ def golden():
     return load_expected_results()
 
 
-def _item(row, month=1):
+def _measured(row):
+    """전표 실측 수량(=골든 활동량)을 실은 입력."""
     return ClassifiedItemInput(
-        fuel_type=row["fuel"],
-        scope=row["scope"],
-        amount_krw=row["amount_krw"],
-        year=YEAR,
-        month=month,
+        fuel_type=row["fuel"], scope=row["scope"], amount_krw=row["amount_krw"],
+        year=YEAR, month=1, quantity=row["activity_amount"], quantity_unit=row["unit"],
     )
 
 
-def _is_computable(row, factor_index):
+def _computable(row, factor_index):
     return row["scope"] is not None and (row["fuel"], row["scope"]) in factor_index
 
 
-# ── 골든셋이 40건 온전히 로드되는가 ──────────────────────────────
-def test_golden_has_40_rows(golden):
-    assert len(golden) == 40
+# ── 골든셋 로드 ──────────────────────────────────────────────────
+def test_golden_loads(golden):
+    assert len(golden) == 41
     assert golden[0]["voucher_id"] == "I001"
 
 
-# ── 킬러 데모 행: 정확히 일치해야 한다 ───────────────────────────
-def test_i001_exact(golden, price_index, factor_index):
-    """'지게차 경유 외 1종' 654,000원 ÷ 1,308 = 500L, × 2.615 = 1307.5 kgCO2e."""
+# ── 킬러 데모 행: 실측 수량 → 정확히 일치 ────────────────────────
+def test_i001_measured_exact(golden, price_index, factor_index):
+    """'지게차 경유 외 1종' 실측 500L × 2.616 = 1308.0 kgCO2e (정확)."""
     row = next(r for r in golden if r["voucher_id"] == "I001")
-    res = compute_emission(_item(row), price_index, factor_index)
-    assert res["skipped"] is False
+    res = compute_emission(_measured(row), price_index, factor_index)
+    assert res["method"] == "measured"
     assert res["activity_amount"] == 500.0
-    assert res["activity_unit"] == "L"
-    assert res["emission_co2e"] == 1307.5
+    assert res["emission_co2e"] == 1308.0
 
 
-# ── 제외/연료 불명 행: skip + 배출량 0 ──────────────────────────
-def test_skip_rows_emit_zero(golden, price_index, factor_index):
-    """제외(사무용품·식대)와 연료 불명(가스종류 불명 등)은 배출량 0."""
-    skip_rows = [r for r in golden if not _is_computable(r, factor_index)]
-    assert len(skip_rows) == 14  # 제외 9건 + 연료 불명/HITL 5건
-    for row in skip_rows:
-        res = compute_emission(_item(row), price_index, factor_index)
-        assert res["skipped"] is True, f"{row['voucher_id']} 는 skip 이어야"
-        assert res["emission_co2e"] == 0.0
-        # 골든의 기대 배출량도 0(또는 None)
-        assert not row["expected_kgco2e"]
-
-
-# ── 계산 가능 행(전기 제외): 골든과 허용오차 내 일치 ────────────
-def test_computable_matches_golden(golden, price_index, factor_index):
+# ── 1순위 실측 경로: 골든과 정확 일치 (LPG·제외·HITL 제외) ───────
+def test_measured_matches_golden_exact(golden, price_index, factor_index):
     rows = [
-        r
-        for r in golden
-        if _is_computable(r, factor_index)
-        and r["fuel"] not in GOLDEN_CROSSCHECK_EXCLUDE
+        r for r in golden
+        if _computable(r, factor_index) and r["fuel"] != "LPG"
+        and r["activity_amount"] and r["expected_kgco2e"] and not r["needs_review"]
     ]
-    assert rows, "대조할 계산 가능 행이 있어야"
+    assert len(rows) >= 20, "전기·경유·도시가스·휘발유 실측 행이 있어야"
     for row in rows:
-        res = compute_emission(_item(row), price_index, factor_index)
-        assert res["skipped"] is False
-        expected = row["expected_kgco2e"]
-        tol = FUEL_TOLERANCE.get(row["fuel"], 0.05)
-        rel = abs(res["emission_co2e"] - expected) / expected
-        assert rel <= tol, (
-            f"{row['voucher_id']}({row['fuel']}): "
-            f"엔진 {res['emission_co2e']} vs 골든 {expected} = {rel:.1%} > 허용 {tol:.0%}"
+        res = compute_emission(_measured(row), price_index, factor_index)
+        assert res["method"] == "measured"
+        # 실측 수량 × 배출계수 = 골든 예상배출량 (반올림 오차 허용)
+        assert abs(res["emission_co2e"] - row["expected_kgco2e"]) < 0.5, (
+            f"{row['voucher_id']}({row['fuel']}): 엔진 {res['emission_co2e']} vs 골든 {row['expected_kgco2e']}"
         )
 
 
-# ── 전기: 엔진 자체 정합성은 정확해야 한다 (골든과는 단가 불일치) ──
-def test_electricity_self_consistent(golden, price_index, factor_index):
-    """골든과 어긋나도, 엔진은 (금액÷시트단가)×계수를 정확히 계산해야."""
-    elec = [r for r in golden if r["fuel"] == "전기" and _is_computable(r, factor_index)]
-    assert elec, "전기 행이 있어야"
-    price = price_index[("전기", YEAR, 1)]["price"]
-    factor = factor_index[("전기", 2)]["gwp_co2e"]
-    for row in elec:
-        res = compute_emission(_item(row), price_index, factor_index)
-        expected = round(round(row["amount_krw"] / price, 4) * factor, 4)
-        assert res["emission_co2e"] == expected
+# ── 제외/연료 불명 → skip + 배출량 0 ────────────────────────────
+def test_skip_rows_emit_zero(golden, price_index, factor_index):
+    for row in golden:
+        if _computable(row, factor_index) or row["fuel"] == "LPG":
+            continue  # 계산 가능 or LPG(별도) 는 여기서 제외
+        res = compute_emission(_measured(row), price_index, factor_index)
+        assert res["skipped"] is True
+        assert res["emission_co2e"] == 0.0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="전기 시트단가(160원) vs 기대_결과 암시단가(~343원) 2.1배 불일치 — 회계 확인 필요",
-)
-def test_electricity_diverges_from_golden(golden, price_index, factor_index):
-    """이 테스트가 xpass 로 바뀌면 = 전기 단가가 정정된 것. 그때 마커를 제거하라."""
-    elec = [r for r in golden if r["fuel"] == "전기" and _is_computable(r, factor_index)]
-    for row in elec:
-        res = compute_emission(_item(row), price_index, factor_index)
-        rel = abs(res["emission_co2e"] - row["expected_kgco2e"]) / row["expected_kgco2e"]
-        assert rel <= 0.05  # 실패해야 정상(xfail)
+# ── LPG → 사람검토 (자동계산 제외, 회계 규칙) ───────────────────
+def test_lpg_review(golden, price_index, factor_index):
+    lpg = [r for r in golden if r["fuel"] == "LPG"]
+    assert lpg, "LPG 행이 있어야"
+    for row in lpg:
+        res = compute_emission(_measured(row), price_index, factor_index)
+        assert res["needs_review"] is True   # 골든도 HITL=True
+        assert res["emission_co2e"] == 0.0
 
 
-# ── 결정론: 같은 입력 → 항상 같은 출력 ──────────────────────────
+# ── 전기·도시가스 수량 미기재 → 사람검토 (금액 역산 안 함) ──────
+def test_quantity_only_without_qty_reviews(price_index, factor_index):
+    for fuel, scope in (("전기", 2), ("도시가스", 1)):
+        item = ClassifiedItemInput(fuel_type=fuel, scope=scope, amount_krw=1_000_000, year=YEAR, month=3)
+        res = compute_emission(item, price_index, factor_index)
+        assert res["needs_review"] is True
+        assert res["emission_co2e"] == 0.0
+
+
+# ── 2순위 추정 경로: 경유·휘발유는 수량 없으면 금액÷월별단가 ────
+def test_spend_fallback_diesel(price_index, factor_index):
+    item = ClassifiedItemInput(fuel_type="경유", scope=1, amount_krw=700_000, year=YEAR, month=7)
+    res = compute_emission(item, price_index, factor_index)
+    assert res["method"] == "spend"
+    assert res["emission_co2e"] > 0
+
+
+# ── 결정론 ──────────────────────────────────────────────────────
 def test_deterministic(golden, price_index, factor_index):
-    row = next(r for r in golden if r["voucher_id"] == "I029")
-    a = compute_emission(_item(row), price_index, factor_index)
-    b = compute_emission(_item(row), price_index, factor_index)
-    assert a == b
+    row = next(r for r in golden if r["voucher_id"] == "I001")
+    assert compute_emission(_measured(row), price_index, factor_index) == \
+        compute_emission(_measured(row), price_index, factor_index)
 
 
-# ── 진짜 데이터 갭: 계수 있는데 단가 없음 → CalcDataGap ─────────
+# ── 진짜 데이터 갭: 경유 수량 없고 단가 인덱스 비면 CalcDataGap ──
 def test_data_gap_raises(factor_index):
-    """경유(유효 연료)인데 해당 월 단가 인덱스가 비면 HITL 예외."""
-    item = ClassifiedItemInput(fuel_type="경유", scope=1, amount_krw=500000, year=YEAR, month=6)
+    item = ClassifiedItemInput(fuel_type="경유", scope=1, amount_krw=500_000, year=YEAR, month=6)
     with pytest.raises(CalcDataGap):
         compute_emission(item, price_index={}, factor_index=factor_index)
 
 
-# ── 입력 검증: Pydantic 이 잘못된 월을 막는다 ───────────────────
+# ── 입력 검증 ───────────────────────────────────────────────────
 def test_input_validation():
     with pytest.raises(Exception):
         ClassifiedItemInput(fuel_type="경유", scope=1, amount_krw=100, year=YEAR, month=13)

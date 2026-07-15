@@ -40,10 +40,14 @@ function mapSteps(res: TraceResponse): Step[] {
   }));
 }
 
+type Scenario = { name: string; label: string };
+
 export function SceneTrace() {
   const [steps, setSteps] = useState<Step[]>(MOCK_TRACE);
   const [live, setLive] = useState(false);
   const [running, setRunning] = useState(false);
+  const [scenarios, setScenarios] = useState<Scenario[]>([]);
+  const [selected, setSelected] = useState("");
 
   useEffect(() => {
     let alive = true;
@@ -56,15 +60,23 @@ export function SceneTrace() {
       .catch(() => {
         /* 폴백: 목업 유지 */
       });
+    apiGet<{ scenarios: Scenario[] }>(`/scenario`)
+      .then((res) => {
+        if (!alive || !res.scenarios?.length) return;
+        setScenarios(res.scenarios);
+        setSelected(res.scenarios[0].name);
+      })
+      .catch(() => {});
     return () => {
       alive = false;
     };
   }, []);
 
-  // 에이전트 실행 → 도구 자율 호출 + 트레이스 기록 → 재조회로 타임라인 갱신
+  // 선택 시나리오를 로드(전표 리셋) → 에이전트 실행 → 트레이스 재조회
   async function runAgent() {
     setRunning(true);
     try {
+      if (selected) await apiPost(`/scenario/${selected}/${COMPANY_ID}`);
       await apiPost(`/agent/run/${COMPANY_ID}`);
       const res = await apiGet<TraceResponse>(
         `/trace/latest?company_id=${COMPANY_ID}`,
@@ -96,6 +108,20 @@ export function SceneTrace() {
             </span>
           ) : (
             <WireframeBadge />
+          )}
+          {scenarios.length > 0 && (
+            <select
+              value={selected}
+              onChange={(e) => setSelected(e.target.value)}
+              disabled={running}
+              className="rounded-lg border border-line bg-surface px-2 py-1.5 text-[12px] disabled:opacity-60"
+            >
+              {scenarios.map((s) => (
+                <option key={s.name} value={s.name}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
           )}
           <button
             type="button"
