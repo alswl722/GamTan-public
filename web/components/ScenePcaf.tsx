@@ -2,37 +2,30 @@
 
 import { useEffect, useState } from "react";
 import { apiGet, COMPANY_ID } from "@/lib/api";
-import { WireframeBadge } from "./WireframeBadge";
 
 /** 장면 ④ — PCAF Before/After + 벤치마킹. /pcaf/{id} 실데이터 + 목업 폴백. */
 
-// Tailwind 는 동적 조합 클래스(bg-pcaf-${n})를 못 잡으므로 완전한 문자열로 매핑.
-const GRADE_BG: Record<number, string> = {
-  1: "bg-pcaf-1",
-  2: "bg-pcaf-2",
-  3: "bg-pcaf-3",
-  4: "bg-pcaf-4",
-  5: "bg-pcaf-5",
-};
-const GRADE_BORDER: Record<number, string> = {
-  1: "border-pcaf-1",
-  2: "border-pcaf-2",
-  3: "border-pcaf-3",
-  4: "border-pcaf-4",
-  5: "border-pcaf-5",
-};
-const GRADE_TEXT: Record<number, string> = {
-  1: "text-pcaf-1",
-  2: "text-pcaf-2",
-  3: "text-pcaf-3",
-  4: "text-pcaf-4",
-  5: "text-pcaf-5",
+// PCAF 등급을 사장님이 바로 이해할 수 있는 한 줄 설명으로 매핑 (1=가장 정확 → 5=가장 부정확)
+const GRADE_DESC: Record<number, string> = {
+  1: "실측 데이터 기반, 가장 정확해요",
+  2: "실측 데이터 기반, 매우 정확해요",
+  3: "전표 기반 실측, 상당히 정확해요",
+  4: "일부 추정이 섞여 있어요",
+  5: "매출액만으로 추정한 값이에요",
 };
 
-function GradeBadge({ grade }: { grade: number }) {
+function GradeChip({
+  grade,
+  accent = false,
+}: {
+  grade: number;
+  accent?: boolean;
+}) {
   return (
     <span
-      className={`grid h-11 w-11 place-items-center rounded-[10px] text-xl font-extrabold text-white ${GRADE_BG[grade]}`}
+      className={`grid h-5 w-5 shrink-0 place-items-center rounded-md text-[11px] font-extrabold ${
+        accent ? "bg-brand text-white" : "bg-line text-muted"
+      }`}
     >
       {grade}
     </span>
@@ -60,6 +53,11 @@ type Benchmark = {
   industry_name: string | null;
   percentile_text: string | null;
   hint: string | null;
+  value: number | null;
+  min: number | null;
+  median: number | null;
+  max: number | null;
+  percentile_pct: number | null;
 };
 type PcafResponse = { before: Before; after: After | null; benchmark: Benchmark };
 
@@ -81,10 +79,98 @@ const MOCK: PcafResponse = {
     industry_name: "금속가공업",
     percentile_text: "동종 금속가공업 대비 상위 34%",
     hint: "가스 고지서 2장을 추가 연동하면 결손월 보정분이 실측으로 바뀌어 등급이 오릅니다.",
+    value: 38.4,
+    min: 12.0,
+    median: 45.0,
+    max: 90.0,
+    percentile_pct: 34,
   },
 };
 
 const fmt = (n: number) => n.toFixed(1);
+
+function EmissionBar({
+  label,
+  grade,
+  value,
+  maxValue,
+  accent,
+  improvedBy,
+}: {
+  label: string;
+  grade: number;
+  value: number;
+  maxValue: number;
+  accent: boolean;
+  improvedBy?: number;
+}) {
+  const pct = Math.max(4, Math.round((value / maxValue) * 100));
+  return (
+    <div>
+      <div className="flex items-baseline justify-between text-[12px]">
+        <span className="flex items-center gap-1.5 font-semibold text-muted">
+          <GradeChip grade={grade} accent={accent} />
+          {label}
+          {improvedBy && improvedBy > 0 && (
+            <span className="rounded-full bg-brand-soft px-1.5 py-0.5 text-[10.5px] font-bold text-brand-ink">
+              {improvedBy}단계 개선
+            </span>
+          )}
+        </span>
+        <span className="font-bold tabular-nums text-ink">
+          {fmt(value)} <span className="font-normal text-faint">tCO₂e</span>
+        </span>
+      </div>
+      <div className="mt-1.5 h-3.5 overflow-hidden rounded-full bg-bg">
+        <div
+          className={`h-full rounded-full transition-all duration-700 ease-out ${
+            accent ? "bg-brand" : "bg-faint"
+          }`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function DistributionTrack({
+  min,
+  max,
+  value,
+}: {
+  min: number;
+  max: number;
+  value: number;
+}) {
+  const span = Math.max(max - min, 0.001);
+  // 배출량이 적을수록 "상위" → 트랙은 진한(상위) → 연한(하위) 순으로 좌에서 우로 흐름
+  const valuePct = Math.min(100, Math.max(0, ((value - min) / span) * 100));
+
+  return (
+    <div className="mt-3">
+      <div
+        className="relative h-2 rounded-full"
+        style={{
+          background:
+            "linear-gradient(90deg, var(--color-brand) 0%, var(--color-brand-soft) 100%)",
+        }}
+      >
+        <div
+          className="absolute -top-[7px] -translate-x-1/2"
+          style={{ left: `${valuePct}%` }}
+        >
+          <svg width="12" height="8" viewBox="0 0 12 8" fill="none">
+            <path d="M6 8L0.5 0H11.5L6 8Z" fill="var(--color-ink)" />
+          </svg>
+        </div>
+      </div>
+      <div className="mt-1.5 flex items-center justify-between text-[11px] font-semibold text-faint">
+        <span>상위</span>
+        <span>하위</span>
+      </div>
+    </div>
+  );
+}
 
 export function ScenePcaf() {
   const [data, setData] = useState<PcafResponse>(MOCK);
@@ -107,92 +193,112 @@ export function ScenePcaf() {
   }, []);
 
   const { before, after, benchmark } = data;
+  const maxValue = Math.max(before.emission_tco2e, after?.total ?? 0) * 1.05;
+  const gradeUp = after ? before.grade - after.grade : 0;
+  const hasDistribution =
+    benchmark.value !== null &&
+    benchmark.min !== null &&
+    benchmark.median !== null &&
+    benchmark.max !== null;
 
   return (
-    <section className="rounded-xl border border-line bg-surface p-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-base font-semibold">④ PCAF Before / After</h2>
-        {live ? (
+    <section>
+      <div className="flex items-center gap-2">
+        {live && (
           <span className="rounded-full bg-brand-soft px-2.5 py-1 text-[11px] font-semibold text-brand-ink">
             실측 산정
           </span>
-        ) : (
-          <WireframeBadge />
         )}
       </div>
-      <p className="mt-1 text-[13.5px] text-muted">
-        기존 매출 추정({before.grade}등급 · 깜깜이)과 전표 기반 실측
-        {after ? `(${after.grade}등급)` : ""}의 데이터 품질 비교입니다.
+      <h2 className="mt-3 text-[17px] font-bold leading-snug text-ink">
+        측정이 끝났어요
+      </h2>
+      <p className="mt-1 text-[13px] leading-relaxed text-muted">
+        기존 매출 추정 대비 데이터 품질이 얼마나 좋아졌는지 보여드려요.
       </p>
 
-      <div className="mt-[18px] grid gap-4 sm:grid-cols-2">
-        <div className="rounded-lg border border-line p-[18px]">
-          <div className="text-[11px] font-bold uppercase tracking-wide text-muted">
-            Before · 기존 방식
-          </div>
-          <div className="mt-3 flex items-center gap-3">
-            <GradeBadge grade={before.grade} />
-            <div>
-              <div className="text-[15px] font-bold">PCAF {before.grade}등급</div>
-              <div className="text-[12.5px] text-muted">매출액 통계 대입 추정</div>
-            </div>
-          </div>
-          <div className="mt-3.5 text-[13.5px] text-muted">
-            추정 배출량{" "}
-            <span className="font-bold text-ink tabular-nums">
-              ~{fmt(before.emission_tco2e)} tCO₂e
-            </span>{" "}
-            · 오차 미인지
-          </div>
-        </div>
-
+      {/* 배출량 막대 비교 — 등급·개선폭·수치를 한 그래프 안에서 함께 전달 */}
+      <div className="mt-5 space-y-3.5 rounded-2xl bg-surface p-5">
+        <EmissionBar
+          label="Before · 매출액 통계 추정"
+          grade={before.grade}
+          value={before.emission_tco2e}
+          maxValue={maxValue}
+          accent={false}
+        />
         {after ? (
-          <div className={`rounded-lg border-2 p-[18px] ${GRADE_BORDER[after.grade]}`}>
-            <div
-              className={`text-[11px] font-bold uppercase tracking-wide ${GRADE_TEXT[after.grade]}`}
-            >
-              After · 본 엔진
-            </div>
-            <div className="mt-3 flex items-center gap-3">
-              <GradeBadge grade={after.grade} />
-              <div>
-                <div className="text-[15px] font-bold">PCAF {after.grade}등급</div>
-                <div className="text-[12.5px] text-muted">전표 기반 실측 산정</div>
-              </div>
-            </div>
-            <div className="mt-3.5 text-[13.5px] text-muted">
-              산정 배출량{" "}
-              <span className="font-bold text-ink tabular-nums">
-                {fmt(after.total)} tCO₂e
-              </span>{" "}
-              · Scope 1 {fmt(after.scope1)} · Scope 2 {fmt(after.scope2)}
-              {after.hitl_count > 0 && (
-                <span className="ml-1 text-scope1">· HITL {after.hitl_count}건</span>
-              )}
-            </div>
-          </div>
+          <EmissionBar
+            label="After · 전표 기반 실측"
+            grade={after.grade}
+            value={after.total}
+            maxValue={maxValue}
+            accent
+            improvedBy={gradeUp}
+          />
         ) : (
-          <div className="grid place-items-center rounded-lg border-2 border-dashed border-line p-[18px] text-center">
-            <p className="text-[13.5px] text-muted">
-              ③ AI 분류를 먼저 실행하면
-              <br />
-              전표 기반 실측 등급이 여기 표시됩니다.
-            </p>
+          <div className="rounded-xl border-2 border-dashed border-line p-4 text-center text-[12.5px] text-muted">
+            ③ AI 분류를 먼저 실행하면 실측 배출량이 표시됩니다
+          </div>
+        )}
+        <p className="text-[11.5px] text-faint">
+          {GRADE_DESC[after ? after.grade : before.grade]}
+        </p>
+        {after && (
+          <div className="flex items-center justify-between border-t border-line pt-3 text-[11.5px] text-muted">
+            <span>
+              Scope1 <span className="font-semibold text-ink">{fmt(after.scope1)}</span> · Scope2{" "}
+              <span className="font-semibold text-ink">{fmt(after.scope2)}</span>
+            </span>
+            {after.hitl_count > 0 && (
+              <span className="rounded-md bg-hitl/25 px-2 py-0.5 font-semibold text-hitl-ink">
+                HITL {after.hitl_count}건
+              </span>
+            )}
           </div>
         )}
       </div>
 
-      <div className="mt-4 rounded-[10px] bg-brand-soft p-4 text-[13.5px]">
-        <div className="font-bold text-brand-ink">동종 업종 벤치마킹</div>
-        <p className="mt-1.5 text-[#2c4b45]">
-          {benchmark.percentile_text ? (
-            <>
-              <span className="font-bold text-ink">{benchmark.percentile_text}</span>
-              {benchmark.hint ? ` — ${benchmark.hint}` : ""}
-            </>
-          ) : (
-            `${benchmark.industry_name ?? benchmark.industry_code} 벤치마킹은 분류 실행 후 산출됩니다.`
-          )}
+      <div className="mt-3 rounded-2xl bg-surface p-5">
+        {hasDistribution ? (
+          <>
+            <p className="text-[12px] font-semibold text-muted">
+              동종 {benchmark.industry_name ?? benchmark.industry_code} 대비
+              배출량
+            </p>
+            <p className="mt-0.5 text-[16px] font-bold text-ink">
+              상위 <span className="text-brand-ink">{benchmark.percentile_pct}%</span>
+              입니다
+            </p>
+            <DistributionTrack
+              min={benchmark.min!}
+              max={benchmark.max!}
+              value={benchmark.value!}
+            />
+            {benchmark.hint && (
+              <p className="mt-3 text-[12.5px] leading-relaxed text-muted">
+                {benchmark.hint}
+              </p>
+            )}
+          </>
+        ) : (
+          <>
+            <div className="text-[12px] font-semibold text-muted">
+              동종 업종 벤치마킹 · {benchmark.industry_name ?? benchmark.industry_code}
+            </div>
+            <p className="mt-1.5 text-[13px] leading-relaxed text-muted">
+              벤치마킹은 분류 실행 후 산출됩니다.
+            </p>
+          </>
+        )}
+      </div>
+
+      <div className="mt-5 rounded-2xl bg-surface p-5 text-center">
+        <div className="text-[13px] font-semibold text-ink">
+          우대금리 대상 안내
+        </div>
+        <p className="mt-1 text-[12.5px] text-muted">
+          PCAF {after ? after.grade : before.grade}등급 기준, 담당 은행원과의
+          상담을 통해 우대금리 자격을 확인할 수 있어요.
         </p>
       </div>
     </section>

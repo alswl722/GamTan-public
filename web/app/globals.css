@@ -1,46 +1,39 @@
+/* Pretendard — 토스 계열 서비스가 쓰는 한글 웹폰트, variable 버전 CDN */
+@import url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css");
 @import "tailwindcss";
 
 /* ==========================================================================
-   감탄 디자인 토큰 (v0.1)
+   iM-Bridge 디자인 토큰 (v0.2 — 토스 스타일 리디자인)
+   컬러는 iM뱅크 공식 브랜드 가이드 값 그대로 사용 (Primary/Secondary/로고타입 그레이).
    Tailwind v4 @theme — 여기 정의한 color 토큰은 bg / text / border 유틸로 생성됨.
-   예) --color-plan → bg-plan, text-plan, border-plan
    ========================================================================== */
 @theme {
-  /* 브랜드 (iM뱅크 민트 + 라임) / 중립 */
-  --color-brand: #04c1a8; /* iM 민트 — 메인 */
-  --color-brand-ink: #037a6b; /* 진한 민트 — hover/텍스트 */
-  --color-brand-soft: #e6faf6; /* 연한 민트 — 배경 틴트 */
-  --color-lime: #9fe30f; /* iM 라임 — 강조/포인트 */
-  --color-bg: #f5f8f7;
+  /* Primary — iM Mint → iM Lime. 포인트로만 쓴다 (전 화면 유일한 강조축) */
+  --color-brand: #00c7a9; /* iM Mint */
+  --color-brand-ink: #00967f; /* hover/진한 텍스트용 (Mint 다크 배리언트) */
+  --color-brand-soft: #e3faf5; /* 배경 틴트 */
+  --color-lime: #e2f15e; /* iM Lime */
+
+  /* 중립 — iM Gray 축. 화면 대부분은 이 축만으로 구성 */
+  --color-bg: #f7f8fa;
   --color-surface: #ffffff;
-  --color-ink: #0f1a17;
-  --color-muted: #5c6a66;
-  --color-line: #e2e9e6;
+  --color-ink: #222222;
+  --color-muted: #666666; /* iM Gray */
+  --color-faint: #9ca3af;
+  --color-line: #e8eaed;
 
-  /* Scope — 배출 구분 */
-  --color-scope1: #e8590c; /* 직접배출 (연소) — 주황 */
-  --color-scope2: #1c7ed6; /* 간접배출 (전기) — 파랑 */
+  /* 의미색 — Secondary 팔레트를 도메인 구분이 필요한 곳에만 배정 (그 외 강조는 전부 brand) */
+  --color-scope1: #7db5ff; /* iM Blue — 직접배출(연소) */
+  --color-scope2: #53e1e5; /* iM Light Blue — 간접배출(전기) */
+  --color-hitl: #d1b5ff; /* iM Purple — 검토필요 경고 */
+  --color-hitl-ink: #7a4fd9; /* HITL 텍스트용 다크 배리언트 (연보라는 텍스트 대비 부족) */
 
-  /* 트레이스 타입 — 킬러씬 A (계획/관찰/행동) */
-  --color-plan: #4263eb; /* 계획 — 블루 */
-  --color-observe: #f08c00; /* 관찰 — 앰버 */
-  --color-act: #0ca678; /* 행동 — 그린 */
-
-  /* PCAF 데이터 품질 등급 (1 좋음 → 5 나쁨) */
-  --color-pcaf-1: #087f5b;
-  --color-pcaf-2: #2f9e44;
-  --color-pcaf-3: #f59f00;
-  --color-pcaf-4: #e8590c;
-  --color-pcaf-5: #868e96;
-
-  /* 상태 */
-  --color-hitl: #d6336c; /* 검토필요 (HITL) */
-  --color-estimated: #7048e8; /* 추정치 */
-  --color-ok: #2f9e44;
-
-  --font-sans: system-ui, -apple-system, "Apple SD Gothic Neo", "Malgun Gothic",
-    "Segoe UI", Roboto, sans-serif;
+  --font-sans: "Pretendard Variable", Pretendard, system-ui, -apple-system,
+    "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
   --font-mono: ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  --shadow-card: 0 1px 2px rgba(23, 24, 28, 0.04), 0 8px 24px -12px rgba(23, 24, 28, 0.08);
+  --shadow-float: 0 12px 32px -8px rgba(0, 150, 127, 0.18);
 }
 
 html {
@@ -51,4 +44,35 @@ body {
   background: var(--color-bg);
   color: var(--color-ink);
   font-family: var(--font-sans);
+  letter-spacing: -0.011em;
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* 스텝 전환 — 슬라이드 + 페이드 */
+@keyframes step-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.step-enter {
+  animation: step-in 0.38s cubic-bezier(0.16, 1, 0.3, 1);
 }
