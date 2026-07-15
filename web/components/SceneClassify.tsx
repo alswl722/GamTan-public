@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { apiGet, apiPost, COMPANY_ID } from "@/lib/api";
-import { WireframeBadge } from "./WireframeBadge";
 
 /** 장면 ③ — AI 분류 + 근거 (킬러씬 B). /classify/{id} 실데이터. */
 
@@ -24,14 +23,17 @@ type ClassifyResponse = { results: Row[] };
 function ScopeTag({ scope }: { scope: 1 | 2 | null }) {
   if (scope === null) {
     return (
-      <span className="rounded bg-hitl/10 px-2 py-0.5 text-xs font-semibold text-hitl">
+      <span className="rounded-md bg-hitl/25 px-2 py-0.5 text-[11.5px] font-bold text-hitl-ink">
         Scope 미정
       </span>
     );
   }
-  const cls = scope === 1 ? "text-scope1 bg-scope1/10" : "text-scope2 bg-scope2/10";
+  const cls =
+    scope === 1
+      ? "text-ink bg-scope1/25"
+      : "text-ink bg-scope2/25";
   return (
-    <span className={`rounded px-2 py-0.5 text-xs font-semibold ${cls}`}>
+    <span className={`rounded-md px-2 py-0.5 text-[11.5px] font-bold ${cls}`}>
       Scope {scope}
     </span>
   );
@@ -41,24 +43,26 @@ function ConfidenceBar({ value }: { value: number }) {
   const low = value < 0.7;
   return (
     <span className="ml-auto flex items-center gap-1.5">
-      <span className="text-[11.5px] text-muted">신뢰도</span>
-      <span className="h-1.5 w-16 overflow-hidden rounded-full bg-line">
+      <span className="h-1.5 w-14 overflow-hidden rounded-full bg-line">
         <span
-          className={`block h-full ${low ? "bg-hitl" : "bg-ok"}`}
+          className={`block h-full ${low ? "bg-hitl-ink" : "bg-brand"}`}
           style={{ width: `${Math.round(value * 100)}%` }}
         />
       </span>
-      <span className="tabular-nums text-[11.5px] font-medium">
+      <span className="tabular-nums text-[11.5px] font-semibold text-muted">
         {value.toFixed(2)}
       </span>
     </span>
   );
 }
 
-export function SceneClassify() {
+export function SceneClassify({ onNext }: { onNext: () => void }) {
   const [rows, setRows] = useState<Row[]>([]);
-  const [status, setStatus] = useState<"idle" | "loading" | "done" | "error">("idle");
+  const [status, setStatus] = useState<"idle" | "loading" | "done" | "error">(
+    "idle",
+  );
   const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<number | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -89,43 +93,42 @@ export function SceneClassify() {
     }
   }
 
+  const hitlCount = rows.filter((r) => r.hitl).length;
+
   return (
-    <section className="rounded-xl border border-line bg-surface p-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-base font-semibold">
-          ③ AI 분류 + 근거
-          <span className="ml-2 rounded bg-scope2/10 px-2 py-0.5 text-[11px] font-bold text-scope2">
-            킬러씬 B
-          </span>
-        </h2>
-        {status === "done" ? (
+    <section>
+      <div className="flex items-center gap-2">
+        <span className="rounded-full bg-bg px-2.5 py-1 text-[11px] font-bold text-muted">
+          킬러씬 B
+        </span>
+        {status === "done" && (
           <span className="rounded-full bg-brand-soft px-2.5 py-1 text-[11px] font-semibold text-brand-ink">
             실제 분류 결과
           </span>
-        ) : (
-          <WireframeBadge />
         )}
       </div>
-      <p className="mt-1 text-[13.5px] text-muted">
-        비정형 전표를 Scope·연료로 분류하고 판단 근거를 남깁니다. 신뢰도가 낮으면
-        스스로 사람 검토(HITL)로 넘깁니다.
+      <h2 className="mt-3 text-[17px] font-bold leading-snug text-ink">
+        비정형 전표를 AI가 읽고 분류했어요
+      </h2>
+      <p className="mt-1 text-[13px] leading-relaxed text-muted">
+        신뢰도가 낮으면 스스로 사람에게 넘겨요. 카드를 눌러 근거를 확인하세요.
       </p>
 
       {rows.length === 0 && (
-        <div className="mt-[18px] rounded-lg border border-dashed border-line bg-bg p-6 text-center">
+        <div className="mt-6 rounded-2xl border border-dashed border-line bg-surface p-8 text-center">
           <button
             type="button"
             onClick={runClassification}
             disabled={status === "loading"}
-            className="rounded-lg bg-brand px-5 py-3 text-sm font-semibold text-white hover:bg-brand-ink disabled:opacity-60"
+            className="rounded-2xl bg-brand px-6 py-3.5 text-[14.5px] font-bold text-white transition-colors hover:bg-brand-ink disabled:opacity-60"
           >
             {status === "loading" ? "분류 중…" : "AI 분류 실행"}
           </button>
-          <p className="mt-3 text-[11px] text-muted">
+          <p className="mt-3 text-[12px] text-faint">
             룰 매칭 → 애매한 건만 Gemini 호출 → 저신뢰 건은 HITL로 이관
           </p>
           {error && (
-            <div className="mt-3 rounded-md bg-hitl/10 p-2 text-[11px] text-hitl">
+            <div className="mt-3 rounded-xl bg-hitl/25 px-3 py-2 text-[12px] text-hitl-ink">
               {error} · API 서버(8000)가 켜져 있는지 확인
             </div>
           )}
@@ -133,55 +136,84 @@ export function SceneClassify() {
       )}
 
       {rows.length > 0 && (
-        <div className="mt-[18px] space-y-3">
-          {rows.map((r) => (
-            <div
-              key={r.voucher_id}
-              className={`rounded-lg border p-4 ${
-                r.hitl ? "border-hitl/40 bg-hitl/5" : "border-line"
-              }`}
-            >
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <span className="font-mono text-[13.5px] font-semibold">
-                    “{r.raw}”
-                  </span>
-                  {r.hitl && (
-                    <span className="rounded bg-hitl px-2 py-0.5 text-[11px] font-bold text-white">
-                      검토필요 · HITL
-                    </span>
+        <>
+          {hitlCount > 0 && (
+            <div className="mt-4 flex items-center gap-2 rounded-xl bg-hitl/20 px-3.5 py-2.5 text-[12px] font-semibold text-hitl-ink">
+              <span className="h-1.5 w-1.5 rounded-full bg-hitl-ink" />
+              {hitlCount}건은 신뢰도가 낮아 사람 검토(HITL)로 넘겼어요
+            </div>
+          )}
+          <div
+            className={`max-h-[380px] space-y-2 overflow-y-auto ${hitlCount > 0 ? "mt-2.5" : "mt-4"}`}
+          >
+            {rows.map((r) => {
+              const open = expanded === r.voucher_id;
+              return (
+                <div
+                  key={r.voucher_id}
+                  className={`rounded-xl bg-surface transition-shadow ${
+                    r.hitl ? "ring-1 ring-hitl/40" : ""
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setExpanded(open ? null : r.voucher_id)}
+                    className="flex w-full flex-col gap-1.5 p-3.5 text-left"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-[13px] font-semibold text-ink">
+                          “{r.raw}”
+                        </span>
+                        {r.hitl && (
+                          <span className="rounded-md bg-hitl-ink px-1.5 py-0.5 text-[10px] font-bold text-white">
+                            HITL
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-[13px] font-semibold tabular-nums text-ink">
+                        {(r.amount_krw ?? 0).toLocaleString()}원
+                      </span>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5 text-[11.5px]">
+                      <ScopeTag scope={r.scope} />
+                      {r.category && (
+                        <span className="rounded-md border border-line px-1.5 py-0.5 text-muted">
+                          {r.category}
+                        </span>
+                      )}
+                      {r.fuel && (
+                        <span className="rounded-md border border-line px-1.5 py-0.5 text-muted">
+                          {r.fuel}
+                        </span>
+                      )}
+                      <ConfidenceBar value={r.confidence} />
+                    </div>
+                  </button>
+
+                  {open && (
+                    <div className="step-enter border-t border-line px-3.5 py-2.5 text-[12px] leading-relaxed text-muted">
+                      <span className="font-semibold text-ink">판단 근거</span>{" "}
+                      · {r.evidence ?? "근거 없음"}
+                      <span className="ml-2 rounded-md border border-line px-1.5 py-0.5 text-[10px] text-faint">
+                        {r.method === "rule" ? "룰 매칭" : "Gemini"}
+                      </span>
+                    </div>
                   )}
                 </div>
-                <span className="text-[13.5px] tabular-nums text-muted">
-                  {(r.amount_krw ?? 0).toLocaleString()}원
-                </span>
-              </div>
+              );
+            })}
+          </div>
 
-              <div className="mt-2 flex flex-wrap items-center gap-2 text-[12.5px]">
-                <ScopeTag scope={r.scope} />
-                {r.category && (
-                  <span className="rounded border border-line px-2 py-0.5 text-muted">
-                    {r.category}
-                  </span>
-                )}
-                {r.fuel && (
-                  <span className="rounded border border-line px-2 py-0.5 text-muted">
-                    {r.fuel}
-                  </span>
-                )}
-                <span className="rounded border border-line px-2 py-0.5 text-[11px] text-muted">
-                  {r.method === "rule" ? "룰 매칭" : "Gemini"}
-                </span>
-                <ConfidenceBar value={r.confidence} />
-              </div>
-
-              <div className="mt-2.5 rounded-lg bg-bg px-2.5 py-2 text-[12.5px] text-muted">
-                <span className="font-semibold text-ink">근거</span> ·{" "}
-                {r.evidence ?? "근거 없음"}
-              </div>
-            </div>
-          ))}
-        </div>
+          <button
+            type="button"
+            onClick={onNext}
+            className="mt-6 w-full rounded-2xl bg-brand py-4 text-[15.5px] font-bold text-white transition-colors hover:bg-brand-ink"
+          >
+            리포트 확인하러 가기
+          </button>
+        </>
       )}
     </section>
   );

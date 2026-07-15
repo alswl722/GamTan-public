@@ -2,18 +2,17 @@
 
 import { useEffect, useState } from "react";
 import { apiGet, COMPANY_ID } from "@/lib/api";
-import { WireframeBadge } from "./WireframeBadge";
 
 /** 장면 ② — 에이전트 트레이스 뷰 (킬러씬 A). /trace/latest 실데이터 + 목업 폴백. */
 
 type StepType = "계획" | "관찰" | "행동";
 
-const STEP_STYLE: Record<StepType, { dot: string; chip: string; icon: string }> =
-  {
-    계획: { dot: "bg-plan", chip: "bg-plan/10 text-plan", icon: "◇" },
-    관찰: { dot: "bg-observe", chip: "bg-observe/10 text-observe", icon: "◎" },
-    행동: { dot: "bg-act", chip: "bg-act/10 text-act", icon: "▶" },
-  };
+// 색이 아니라 아이콘 모양 + 텍스트 라벨로만 3가지 판단 타입을 구분한다.
+const STEP_ICON: Record<StepType, string> = {
+  계획: "◇",
+  관찰: "◎",
+  행동: "▶",
+};
 
 type Step = { type: StepType; tool?: string | null; message: string };
 
@@ -32,16 +31,17 @@ type TraceResponse = {
   steps: { step_type: StepType; tool_name: string | null; message: string }[];
 };
 
-export function SceneTrace() {
-  const [steps, setSteps] = useState<Step[]>(MOCK_TRACE);
+export function SceneTrace({ onNext }: { onNext: () => void }) {
+  const [allSteps, setAllSteps] = useState<Step[]>(MOCK_TRACE);
   const [live, setLive] = useState(false);
+  const [visible, setVisible] = useState(0);
 
   useEffect(() => {
     let alive = true;
     apiGet<TraceResponse>(`/trace/latest?company_id=${COMPANY_ID}`)
       .then((res) => {
         if (!alive || !res.steps?.length) return;
-        setSteps(
+        setAllSteps(
           res.steps.map((s) => ({
             type: s.step_type,
             tool: s.tool_name,
@@ -58,61 +58,90 @@ export function SceneTrace() {
     };
   }, []);
 
+  // 판단 일지를 한 줄씩 순차 노출 — "AI가 지금 생각 중"인 연출
+  useEffect(() => {
+    setVisible(0);
+    const timers = allSteps.map((_, i) =>
+      setTimeout(() => setVisible((v) => Math.max(v, i + 1)), i === 0 ? 150 : 150 + i * 550),
+    );
+    return () => timers.forEach(clearTimeout);
+  }, [allSteps]);
+
+  const steps = allSteps.slice(0, visible);
+  const done = visible >= allSteps.length;
+
   return (
-    <section className="rounded-xl border border-line bg-surface p-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-base font-semibold">
-          ② 에이전트 트레이스 뷰
-          <span className="ml-2 rounded bg-scope1/10 px-2 py-0.5 text-[11px] font-bold text-scope1">
-            킬러씬 A
-          </span>
-        </h2>
-        {live ? (
+    <section>
+      <div className="flex items-center gap-2">
+        <span className="rounded-full bg-bg px-2.5 py-1 text-[11px] font-bold text-muted">
+          킬러씬 A
+        </span>
+        {live && (
           <span className="rounded-full bg-brand-soft px-2.5 py-1 text-[11px] font-semibold text-brand-ink">
             실행 트레이스
           </span>
-        ) : (
-          <WireframeBadge />
         )}
       </div>
-      <p className="mt-1 text-sm text-muted">
-        에이전트가 스스로 결손을 발견하고 자기 답을 의심하는 판단 일지. 모든
-        판단에 근거가 남습니다.
+      <h2 className="mt-3 text-[17px] font-bold leading-snug text-ink">
+        에이전트가 스스로 결손을 발견하고 있어요
+      </h2>
+      <p className="mt-1 text-[13px] leading-relaxed text-muted">
+        모든 판단에는 근거가 남습니다.
       </p>
 
-      <ol className="mt-6 space-y-0">
+      <ol className="mt-4 max-h-[340px] space-y-0 overflow-y-auto rounded-2xl bg-surface p-4">
         {steps.map((step, i) => {
-          const s = STEP_STYLE[step.type] ?? STEP_STYLE["관찰"];
-          const last = i === steps.length - 1;
+          const icon = STEP_ICON[step.type] ?? STEP_ICON["관찰"];
+          const last = i === allSteps.length - 1;
           return (
-            <li key={i} className="relative flex gap-4 pb-6">
+            <li
+              key={i}
+              className="step-enter relative flex gap-3 pb-3.5 last:pb-0"
+            >
               {!last && (
-                <span className="absolute left-[11px] top-6 h-full w-px bg-line" />
+                <span className="absolute left-[9px] top-5 h-full w-px bg-line" />
               )}
-              <span
-                className={`relative z-10 mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-full text-[11px] text-white ${s.dot}`}
-              >
-                {s.icon}
+              <span className="relative z-10 mt-0.5 grid h-[18px] w-[18px] shrink-0 place-items-center rounded-full bg-bg text-[9.5px] text-muted">
+                {icon}
               </span>
-              <div className="flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span
-                    className={`rounded px-2 py-0.5 text-xs font-semibold ${s.chip}`}
-                  >
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[11px] font-bold text-ink">
                     {step.type}
                   </span>
                   {step.tool && (
-                    <span className="rounded border border-line px-2 py-0.5 text-[11px] text-muted">
+                    <span className="rounded bg-bg px-1.5 py-0.5 text-[10px] text-muted">
                       {step.tool}
                     </span>
                   )}
                 </div>
-                <p className="mt-1.5 text-sm leading-relaxed">{step.message}</p>
+                <p className="mt-1 text-[12.5px] leading-snug text-ink">
+                  {step.message}
+                </p>
               </div>
             </li>
           );
         })}
+        {!done && (
+          <li className="flex items-center gap-2 pt-1 pl-7 text-[11.5px] text-faint">
+            <span className="flex gap-1">
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-faint [animation-delay:-0.3s]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-faint [animation-delay:-0.15s]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-faint" />
+            </span>
+            판단 중…
+          </li>
+        )}
       </ol>
+
+      <button
+        type="button"
+        onClick={onNext}
+        disabled={!done}
+        className="mt-6 w-full rounded-2xl bg-brand py-4 text-[15.5px] font-bold text-white transition-colors hover:bg-brand-ink disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        {done ? "판단 근거 확인하러 가기" : "에이전트 판단 진행 중…"}
+      </button>
     </section>
   );
 }

@@ -136,12 +136,24 @@ def _benchmark(company, dist1, dist2, after) -> dict:
         "industry_name": industry_name,
         "percentile_text": None,
         "hint": "가스 고지서를 추가 연동하면 결손월 보정분이 실측으로 바뀌어 등급이 오릅니다.",
+        # 프론트 분포 시각화용 — 값이 없으면 전부 None
+        "value": None,
+        "min": None,
+        "median": None,
+        "max": None,
+        "percentile_pct": None,
     }
     # 실측 총량이 있으면 그걸로, 없으면 Before 추정으로 위치 계산
     value = after["total"] if after else None
     lo = (dist1 or {}).get("min", 0) + (dist2 or {}).get("min", 0)
     hi = (dist1 or {}).get("max", 0) + (dist2 or {}).get("max", 0)
+    med = (dist1 or {}).get("median", 0) + (dist2 or {}).get("median", 0)
     if value is not None and hi > lo:
         pct = max(0.0, min(1.0, (value - lo) / (hi - lo)))
         result["percentile_text"] = f"동종 {industry_name} 대비 상위 {round(pct * 100)}%"
+        result["value"] = round(value, 2)
+        result["min"] = round(lo, 2)
+        result["median"] = round(med, 2)
+        result["max"] = round(hi, 2)
+        result["percentile_pct"] = round(pct * 100)
     return result

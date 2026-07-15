@@ -2,7 +2,7 @@
 export function WireframeBadge() {
   return (
     <span className="inline-flex items-center gap-1 rounded-full border border-dashed border-line bg-bg px-2.5 py-1 text-[11px] font-medium text-muted">
-      <span className="h-1.5 w-1.5 rounded-full bg-estimated" />
+      <span className="h-1.5 w-1.5 rounded-full bg-faint" />
       와이어프레임 · 목업 데이터
     </span>
   );

@@ -2,7 +2,7 @@
 
 여기 모아두면 "전표/분포를 DB에서 꺼내는" 로직이 한 곳에만 존재한다.
 """
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.orm import Session
 
 from db.models import Classification, Voucher, IndustryDistribution, EmissionFactor, UnitPrice
@@ -77,14 +77,16 @@ def get_unit_prices(session: Session) -> list[UnitPrice]:
 def get_classifications(session: Session, company_id: int) -> list[dict]:
     """장면③(AI 분류+근거)용 — Scope 1/2 확정 건 + HITL 대기 건만 반환.
 
+    정렬: 사람 검토가 필요한 HITL 건을 최상단에 먼저 보여주고, 그 다음은 월·발행일순.
     (제외/참고분류는 감사·집계 목적으로 DB엔 남아있지만 이 화면에는 안 보여줌)
     """
+    hitl_first = case((Classification.status == "review_required", 0), else_=1)
     stmt = (
         select(Classification, Voucher)
         .join(Voucher, Classification.voucher_id == Voucher.id)
         .where(Voucher.company_id == company_id)
         .where((Classification.scope.in_((1, 2))) | (Classification.status == "review_required"))
-        .order_by(Voucher.month, Voucher.issue_date)
+        .order_by(hitl_first, Voucher.month, Voucher.issue_date)
     )
     rows = session.execute(stmt).all()
     return [

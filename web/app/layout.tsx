@@ -15,35 +15,32 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="ko" className="h-full antialiased">
-      <body className="min-h-full flex flex-col">
-        <header className="sticky top-0 z-10 border-b border-line bg-surface">
-          <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-5">
-            <Link href="/" className="flex items-center gap-2.5">
-              <img src="/im-symbol.png" alt="iM Bank" className="h-7 w-auto" />
-
-              <span className="text-[15px] font-semibold tracking-tight">
+      <body className="min-h-full flex flex-col bg-bg">
+        <header className="sticky top-0 z-20 border-b border-line/70 bg-surface/80 backdrop-blur-md">
+          <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-5">
+            <Link href="/" className="flex items-center gap-2">
+              <img src="/im-symbol.png" alt="iM Bank" className="h-6 w-auto" />
+              <span className="text-[15px] font-bold tracking-tight text-ink">
                 감탄
               </span>
             </Link>
             <nav className="flex items-center gap-1 text-[13.5px]">
               <Link
                 href="/owner"
-                className="rounded-lg px-3 py-1.5 font-medium text-muted hover:bg-brand-soft hover:text-brand-ink"
+                className="rounded-full px-3.5 py-2 font-semibold text-muted transition-colors hover:bg-brand-soft hover:text-brand-ink"
               >
-                사장님
+                사장님 화면
               </Link>
               <Link
                 href="/admin"
-                className="rounded-lg px-3 py-1.5 font-medium text-muted hover:bg-brand-soft hover:text-brand-ink"
+                className="rounded-full px-3.5 py-2 font-semibold text-muted transition-colors hover:bg-brand-soft hover:text-brand-ink"
               >
                 관리자
               </Link>
             </nav>
           </div>
         </header>
-        <main className="mx-auto w-full max-w-5xl flex-1 px-5 py-6">
-          {children}
-        </main>
+        <main className="flex w-full flex-1 flex-col">{children}</main>
       </body>
     </html>
   );
