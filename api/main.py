@@ -13,12 +13,14 @@ from api.routers import agent, classify, mock, pcaf, scenario, trace
 
 app = FastAPI(title="iM-Bridge API", version="0.1.0")
 
-# web 컨테이너/로컬 dev(3000) 에서의 호출 허용
+# web 컨테이너(3010)/로컬 dev(3000) 에서의 호출 허용
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "http://localhost:3010",
+        "http://127.0.0.1:3010",
     ],
     allow_methods=["*"],
     allow_headers=["*"],

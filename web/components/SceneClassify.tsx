@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { apiGet, apiPost, COMPANY_ID } from "@/lib/api";
+import { apiGet, apiPost, BASE_URL, COMPANY_ID } from "@/lib/api";
 
 /** 장면 ③ — AI 분류 + 근거 (킬러씬 B). /classify/{id} 실데이터. */
 
@@ -184,7 +184,7 @@ export function SceneClassify({ onNext }: { onNext: () => void }) {
       {rows.length === 0 && status === "error" && (
         <div className="mt-6 rounded-2xl border border-dashed border-line bg-surface p-8 text-center">
           <div className="mb-3 rounded-xl bg-hitl/25 px-3 py-2 text-[12px] text-hitl-ink">
-            {error} · API 서버(8000)가 켜져 있는지 확인
+            {error} · API 서버({BASE_URL})가 켜져 있는지 확인
           </div>
           <button
             type="button"

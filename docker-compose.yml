@@ -7,7 +7,7 @@ services:
       dockerfile: docker/api.Dockerfile
     env_file: .env # DATABASE_URL, ANTHROPIC_API_KEY 등 런타임 주입
     ports:
-      - "8000:8000"
+      - "8010:8000" # 호스트 8010 → 컨테이너 8000 (다른 프로젝트와 포트 충돌 방지)
     volumes:
       - ./api:/app/api # 핫리로드용 소스 마운트
       - ./db:/app/db
@@ -29,9 +29,9 @@ services:
       context: .
       dockerfile: docker/web.Dockerfile
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_API_URL=http://localhost:8010
     ports:
-      - "3000:3000"
+      - "3010:3000" # 호스트 3010 → 컨테이너 3000 (다른 프로젝트와 포트 충돌 방지)
     volumes:
       - ./web:/app # 핫리로드용 소스 마운트
       - /app/node_modules # 컨테이너 node_modules 보존 (호스트로 덮이지 않게)
