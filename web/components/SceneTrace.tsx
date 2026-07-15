@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { apiGet, COMPANY_ID } from "@/lib/api";
+import { apiGet, apiPost, COMPANY_ID } from "@/lib/api";
 
 /** 장면 ② — 에이전트 트레이스 뷰 (킬러씬 A). /trace/latest 실데이터 + 목업 폴백. */
 
@@ -31,32 +31,66 @@ type TraceResponse = {
   steps: { step_type: StepType; tool_name: string | null; message: string }[];
 };
 
+function mapSteps(res: TraceResponse): Step[] {
+  return res.steps.map((s) => ({
+    type: s.step_type,
+    tool: s.tool_name,
+    message: s.message,
+  }));
+}
+
+type Scenario = { name: string; label: string };
+
 export function SceneTrace({ onNext }: { onNext: () => void }) {
   const [allSteps, setAllSteps] = useState<Step[]>(MOCK_TRACE);
   const [live, setLive] = useState(false);
   const [visible, setVisible] = useState(0);
+  const [running, setRunning] = useState(false);
+  const [scenarios, setScenarios] = useState<Scenario[]>([]);
+  const [selected, setSelected] = useState("");
 
   useEffect(() => {
     let alive = true;
     apiGet<TraceResponse>(`/trace/latest?company_id=${COMPANY_ID}`)
       .then((res) => {
         if (!alive || !res.steps?.length) return;
-        setAllSteps(
-          res.steps.map((s) => ({
-            type: s.step_type,
-            tool: s.tool_name,
-            message: s.message,
-          })),
-        );
+        setAllSteps(mapSteps(res));
         setLive(true);
       })
       .catch(() => {
         /* 폴백: 목업 유지 */
       });
+    apiGet<{ scenarios: Scenario[] }>(`/scenario`)
+      .then((res) => {
+        if (!alive || !res.scenarios?.length) return;
+        setScenarios(res.scenarios);
+        setSelected(res.scenarios[0].name);
+      })
+      .catch(() => {});
     return () => {
       alive = false;
     };
   }, []);
+
+  // 선택 시나리오를 로드(전표 리셋) → 에이전트 실행 → 트레이스 재조회
+  async function runAgent() {
+    setRunning(true);
+    try {
+      if (selected) await apiPost(`/scenario/${selected}/${COMPANY_ID}`);
+      await apiPost(`/agent/run/${COMPANY_ID}`);
+      const res = await apiGet<TraceResponse>(
+        `/trace/latest?company_id=${COMPANY_ID}`,
+      );
+      if (res.steps?.length) {
+        setAllSteps(mapSteps(res));
+        setLive(true);
+      }
+    } catch {
+      /* 서버 미기동 등 — 목업 유지 */
+    } finally {
+      setRunning(false);
+    }
+  }
 
   // 판단 일지를 한 줄씩 순차 노출 — "AI가 지금 생각 중"인 연출
   useEffect(() => {
@@ -72,7 +106,7 @@ export function SceneTrace({ onNext }: { onNext: () => void }) {
 
   return (
     <section>
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <span className="rounded-full bg-bg px-2.5 py-1 text-[11px] font-bold text-muted">
           킬러씬 A
         </span>
@@ -80,6 +114,30 @@ export function SceneTrace({ onNext }: { onNext: () => void }) {
           <span className="rounded-full bg-brand-soft px-2.5 py-1 text-[11px] font-semibold text-brand-ink">
             실행 트레이스
           </span>
+        )}
+        {scenarios.length > 0 && (
+          <div className="ml-auto flex items-center gap-1.5">
+            <select
+              value={selected}
+              onChange={(e) => setSelected(e.target.value)}
+              disabled={running}
+              className="rounded-lg bg-bg px-2 py-1.5 text-[11.5px] font-medium text-ink disabled:opacity-60"
+            >
+              {scenarios.map((s) => (
+                <option key={s.name} value={s.name}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={runAgent}
+              disabled={running}
+              className="rounded-lg bg-brand px-3 py-1.5 text-[11.5px] font-bold text-white transition-colors hover:bg-brand-ink disabled:opacity-60"
+            >
+              {running ? "실행 중…" : "에이전트 실행"}
+            </button>
+          </div>
         )}
       </div>
       <h2 className="mt-3 text-[17px] font-bold leading-snug text-ink">
