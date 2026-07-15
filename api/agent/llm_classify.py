@@ -81,6 +81,12 @@ def _cache_put(session: Session, text_hash: str, item_description: str, response
     session.commit()
 
 
+# 공개 별칭 — tools.py 가 병렬 분류에서 캐시 조회/저장을 직접 오케스트레이션할 때 사용.
+hash_item = _hash
+cache_get = _cache_get
+cache_put = _cache_put
+
+
 def _build_prompt(item_description: str, amount_krw: int, rule_hint: dict | None) -> str:
     parts = [
         f'품목명: "{item_description}"',
@@ -146,14 +152,27 @@ def classify_with_llm(
     if cached is not None:
         return cached
 
+    result = classify_with_llm_nocache(item_description, amount_krw, rule_hint)
+    if result.get("confidence", 0) > 0 or result.get("scope") is not None:
+        _cache_put(session, text_hash, item_description, result)
+    return result
+
+
+def classify_with_llm_nocache(
+    item_description: str,
+    amount_krw: int,
+    rule_hint: dict | None = None,
+) -> dict:
+    """세션(DB) 없이 Gemini만 호출 — 캐시 미스 건을 스레드풀에서 병렬 호출할 때 사용.
+
+    실패 시 _fallback_result 를 반환할 뿐 캐시엔 쓰지 않는다(호출부가 판단해 기록).
+    """
     prompt = _build_prompt(item_description, amount_krw, rule_hint)
 
-    result = None
     last_error = "unknown"
     for _attempt in range(2):  # 최초 시도 + 1회 재시도 (CLAUDE.md §5-2)
         try:
-            result = _call_gemini(prompt)
-            break
+            return _call_gemini(prompt)
         except (json.JSONDecodeError, ValueError) as e:
             last_error = f"JSON 파싱 실패: {e}"
             continue
@@ -161,9 +180,4 @@ def classify_with_llm(
             last_error = f"API 호출 실패: {e}"
             continue
 
-    if result is None:
-        result = _fallback_result(item_description, last_error)
-        return result  # 실패 건은 캐시에 남기지 않음 — 다음 시도 때 다시 호출되도록
-
-    _cache_put(session, text_hash, item_description, result)
-    return result
+    return _fallback_result(item_description, last_error)

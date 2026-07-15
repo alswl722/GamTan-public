@@ -101,7 +101,11 @@ def _execute(name: str, args: dict, session: Session, company: Company) -> dict:
     if name == "collect_vouchers":
         return collect_vouchers(session, cid)
     if name == "classify_vouchers":
-        return classify_vouchers(session, cid)
+        from api.agent import progress
+
+        return classify_vouchers(
+            session, cid, on_progress=lambda done, total: progress.tick(cid, done, total)
+        )
     if name == "calculate_pcaf":
         return calculate_pcaf(session, cid)
     if name == "get_industry_distribution":

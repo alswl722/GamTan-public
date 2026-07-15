@@ -4,10 +4,18 @@
 도구④ 업종 벤치마킹. 시그니처를 여기서 고정하면, 다음 슬라이스의
 오케스트레이터는 이 함수를 호출만 하면 된다.
 """
+from concurrent.futures import ThreadPoolExecutor
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from api.agent.llm_classify import classify_with_llm
+from api.agent.llm_classify import (
+    cache_get,
+    cache_put,
+    classify_with_llm,
+    classify_with_llm_nocache,
+    hash_item,
+)
 from api.agent.rules import match_rule
 from api.queries import (
     get_coverage,
@@ -69,31 +77,36 @@ def _unclassified_vouchers(session: Session, company_id: int) -> list[Voucher]:
     return session.execute(stmt).scalars().all()
 
 
-def _classify_one(
-    session: Session,
+def _rule_decision(voucher: Voucher) -> tuple[dict | None, dict | None]:
+    """룰 매칭만 수행. (확정 결과 dict | None, rule) — 확정 아니면 LLM 필요."""
+    rule = match_rule(voucher.item_description)
+    if rule is not None and rule["auto_action"] in _SHORT_CIRCUIT_ACTIONS:
+        confidence = _RULE_CONFIDENCE.get(rule["quality_grade"], 0.85)
+        decided = {
+            "scope": rule["scope"],
+            "category": rule["category"],
+            "fuel_type": rule["fuel_type"],
+            "evidence": f"[{rule['rule_id']}] {rule['reasoning']}",
+            "method": "rule",
+            "mixed_item": rule["mixed_item"],
+            "confidence": confidence,
+        }
+        return decided, rule
+    return None, rule
+
+
+def _build_classification(
     voucher: Voucher,
+    decided: dict,
     price_index: dict,
     factor_index: dict,
 ) -> Classification:
-    rule = match_rule(voucher.item_description)
+    """분류 결과(룰 또는 LLM) → Classification + 결정론적 계산(도구③)까지 채워 반환."""
     amount = voucher.supply_amount_krw
-
-    if rule is not None and rule["auto_action"] in _SHORT_CIRCUIT_ACTIONS:
-        confidence = _RULE_CONFIDENCE.get(rule["quality_grade"], 0.85)
-        scope, category, fuel_type = rule["scope"], rule["category"], rule["fuel_type"]
-        evidence = f"[{rule['rule_id']}] {rule['reasoning']}"
-        method = "rule"
-        mixed_item = rule["mixed_item"]
-        status = "auto"
-    else:
-        # 검토후분류/사람검토로 매치됐거나(rule_hint로 힌트만 제공) 아예 미매칭 → LLM
-        llm = classify_with_llm(session, voucher.item_description, int(amount or 0), rule_hint=rule)
-        confidence = float(llm.get("confidence") or 0.0)
-        scope, category, fuel_type = llm.get("scope"), llm.get("category"), llm.get("fuel_type")
-        evidence = llm.get("evidence")
-        method = "llm"
-        mixed_item = bool(llm.get("mixed_item"))
-        status = "auto" if confidence >= CONFIDENCE_THRESHOLD else "review_required"
+    scope, category, fuel_type = decided["scope"], decided["category"], decided["fuel_type"]
+    evidence = decided["evidence"]
+    confidence = decided["confidence"]
+    status = "auto" if confidence >= CONFIDENCE_THRESHOLD else "review_required"
 
     classification = Classification(
         voucher_id=voucher.id,
@@ -103,8 +116,8 @@ def _classify_one(
         amount_krw=amount,  # LLM이 반환한 금액이 아니라 전표 원본 금액을 신뢰 (LLM 산수 금지 원칙)
         confidence=confidence,
         evidence=evidence,
-        method=method,
-        mixed_item=1 if mixed_item else 0,
+        method=decided["method"],
+        mixed_item=1 if decided["mixed_item"] else 0,
         status=status,
     )
 
@@ -137,21 +150,114 @@ def _classify_one(
     return classification
 
 
-def classify_vouchers(session: Session, company_id: int) -> dict:
+def _classify_one(
+    session: Session,
+    voucher: Voucher,
+    price_index: dict,
+    factor_index: dict,
+) -> Classification:
+    """단건 분류(순차 경로) — 룰 확정 아니면 그 자리에서 LLM 호출(캐시 포함)."""
+    decided, rule = _rule_decision(voucher)
+    if decided is None:
+        amount = voucher.supply_amount_krw
+        llm = classify_with_llm(session, voucher.item_description, int(amount or 0), rule_hint=rule)
+        decided = {
+            "scope": llm.get("scope"),
+            "category": llm.get("category"),
+            "fuel_type": llm.get("fuel_type"),
+            "evidence": llm.get("evidence"),
+            "method": "llm",
+            "mixed_item": bool(llm.get("mixed_item")),
+            "confidence": float(llm.get("confidence") or 0.0),
+        }
+    return _build_classification(voucher, decided, price_index, factor_index)
+
+
+_LLM_MAX_WORKERS = 6  # 동시 Gemini 호출 수 상한 — 무료 티어 QPS 보호용 (CLAUDE.md §5-4)
+
+
+def classify_vouchers(
+    session: Session,
+    company_id: int,
+    on_progress=None,
+) -> dict:
     """도구② 전표 분류 — 룰 매칭 우선, 애매·미매칭 건만 Gemini 호출.
 
     이미 분류된 전표는 건너뛴다(재실행 안전). 분류 직후 도구③ 계산 엔진으로
     activity_amount/activity_unit/emission_co2e까지 채워 저장한다.
+
+    캐시 미스로 실제 Gemini 호출이 필요한 건만 스레드풀로 병렬 처리한다
+    (세션은 스레드 세이프하지 않으므로 네트워크 호출만 병렬화하고, DB 판정·
+    커밋은 메인 스레드에서 순차로 수행 — CLAUDE.md §5-4 캐시 레이어와 병행).
+
+    on_progress(done, total): 선택적 콜백 — 프론트 진행률 폴링용(장면②).
     """
     vouchers = _unclassified_vouchers(session, company_id)
     price_index = index_unit_prices(get_unit_prices(session))
     factor_index = index_emission_factors(get_emission_factors(session))
+    total = len(vouchers)
+    done = 0
 
-    created: list[Classification] = []
-    for voucher in vouchers:
-        classification = _classify_one(session, voucher, price_index, factor_index)
-        session.add(classification)
-        created.append(classification)
+    def _tick():
+        nonlocal done
+        done += 1
+        if on_progress:
+            on_progress(done, total)
+
+    # 1단계 — 룰 확정 건은 즉시 처리, 나머지는 캐시 조회(순차, DB IO라 빠름)까지만.
+    pending: list[tuple[Voucher, dict | None, int, int]] = []  # (voucher, rule_hint, amount, index)
+    created: list[Classification | None] = [None] * total
+    for i, voucher in enumerate(vouchers):
+        decided, rule = _rule_decision(voucher)
+        if decided is not None:
+            created[i] = _build_classification(voucher, decided, price_index, factor_index)
+            _tick()
+            continue
+        amount = int(voucher.supply_amount_krw or 0)
+        text_hash = hash_item(voucher.item_description)
+        cached = cache_get(session, text_hash)
+        if cached is not None:
+            decided = {
+                "scope": cached.get("scope"),
+                "category": cached.get("category"),
+                "fuel_type": cached.get("fuel_type"),
+                "evidence": cached.get("evidence"),
+                "method": "llm",
+                "mixed_item": bool(cached.get("mixed_item")),
+                "confidence": float(cached.get("confidence") or 0.0),
+            }
+            created[i] = _build_classification(voucher, decided, price_index, factor_index)
+            _tick()
+        else:
+            pending.append((voucher, rule, amount, i))
+
+    # 2단계 — 캐시 미스인 것만 스레드풀로 병렬 Gemini 호출(세션 없이, 순수 네트워크).
+    if pending:
+        with ThreadPoolExecutor(max_workers=_LLM_MAX_WORKERS) as pool:
+            futures = {
+                pool.submit(classify_with_llm_nocache, v.item_description, amount, rule): (v, i)
+                for v, rule, amount, i in pending
+            }
+            for fut in futures:
+                v, i = futures[fut]
+                llm = fut.result()
+                decided = {
+                    "scope": llm.get("scope"),
+                    "category": llm.get("category"),
+                    "fuel_type": llm.get("fuel_type"),
+                    "evidence": llm.get("evidence"),
+                    "method": "llm",
+                    "mixed_item": bool(llm.get("mixed_item")),
+                    "confidence": float(llm.get("confidence") or 0.0),
+                }
+                created[i] = _build_classification(v, decided, price_index, factor_index)
+                # 성공 건만 캐시에 남김(실패 폴백은 다음 실행 때 재시도되도록 — 기존 정책 유지)
+                if decided["confidence"] > 0 or decided["scope"] is not None:
+                    cache_put(session, hash_item(v.item_description), v.item_description, llm)
+                _tick()
+
+    for c in created:
+        session.add(c)
     session.commit()
 
     return {
