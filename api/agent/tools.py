@@ -12,7 +12,6 @@ from sqlalchemy.orm import Session
 from api.agent.llm_classify import (
     cache_get,
     cache_put,
-    classify_with_llm,
     classify_with_llm_nocache,
     hash_item,
 )
@@ -150,27 +149,17 @@ def _build_classification(
     return classification
 
 
-def _classify_one(
-    session: Session,
-    voucher: Voucher,
-    price_index: dict,
-    factor_index: dict,
-) -> Classification:
-    """단건 분류(순차 경로) — 룰 확정 아니면 그 자리에서 LLM 호출(캐시 포함)."""
-    decided, rule = _rule_decision(voucher)
-    if decided is None:
-        amount = voucher.supply_amount_krw
-        llm = classify_with_llm(session, voucher.item_description, int(amount or 0), rule_hint=rule)
-        decided = {
-            "scope": llm.get("scope"),
-            "category": llm.get("category"),
-            "fuel_type": llm.get("fuel_type"),
-            "evidence": llm.get("evidence"),
-            "method": "llm",
-            "mixed_item": bool(llm.get("mixed_item")),
-            "confidence": float(llm.get("confidence") or 0.0),
-        }
-    return _build_classification(voucher, decided, price_index, factor_index)
+def _llm_result_to_decision(llm: dict) -> dict:
+    """Gemini(또는 캐시) 응답 dict → _build_classification 이 먹는 결정 dict로 변환."""
+    return {
+        "scope": llm.get("scope"),
+        "category": llm.get("category"),
+        "fuel_type": llm.get("fuel_type"),
+        "evidence": llm.get("evidence"),
+        "method": "llm",
+        "mixed_item": bool(llm.get("mixed_item")),
+        "confidence": float(llm.get("confidence") or 0.0),
+    }
 
 
 _LLM_MAX_WORKERS = 6  # 동시 Gemini 호출 수 상한 — 무료 티어 QPS 보호용 (CLAUDE.md §5-4)
@@ -217,15 +206,7 @@ def classify_vouchers(
         text_hash = hash_item(voucher.item_description)
         cached = cache_get(session, text_hash)
         if cached is not None:
-            decided = {
-                "scope": cached.get("scope"),
-                "category": cached.get("category"),
-                "fuel_type": cached.get("fuel_type"),
-                "evidence": cached.get("evidence"),
-                "method": "llm",
-                "mixed_item": bool(cached.get("mixed_item")),
-                "confidence": float(cached.get("confidence") or 0.0),
-            }
+            decided = _llm_result_to_decision(cached)
             created[i] = _build_classification(voucher, decided, price_index, factor_index)
             _tick()
         else:
@@ -241,15 +222,7 @@ def classify_vouchers(
             for fut in futures:
                 v, i = futures[fut]
                 llm = fut.result()
-                decided = {
-                    "scope": llm.get("scope"),
-                    "category": llm.get("category"),
-                    "fuel_type": llm.get("fuel_type"),
-                    "evidence": llm.get("evidence"),
-                    "method": "llm",
-                    "mixed_item": bool(llm.get("mixed_item")),
-                    "confidence": float(llm.get("confidence") or 0.0),
-                }
+                decided = _llm_result_to_decision(llm)
                 created[i] = _build_classification(v, decided, price_index, factor_index)
                 # 성공 건만 캐시에 남김(실패 폴백은 다음 실행 때 재시도되도록 — 기존 정책 유지)
                 if decided["confidence"] > 0 or decided["scope"] is not None:
