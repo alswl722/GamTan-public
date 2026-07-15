@@ -12,7 +12,7 @@ def _cases():
 
 
 def test_expected_results_has_rows():
-    assert len(EXPECTED) == 40
+    assert len(EXPECTED) == 41
 
 
 def test_auto_classified_rows_match_expected_scope_and_fuel():

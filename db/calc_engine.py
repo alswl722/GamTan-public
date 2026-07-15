@@ -33,6 +33,8 @@ class ClassifiedItemInput(BaseModel):
     amount_krw: float = Field(ge=0)
     year: int
     month: int = Field(ge=1, le=12)
+    quantity: float | None = None     # 전표에 적힌 실측 사용량 (있으면 1순위 = 실측)
+    quantity_unit: str | None = None  # L | kWh | m3 등
 
 
 def index_unit_prices(rows) -> dict:
@@ -77,51 +79,75 @@ def index_emission_factors(rows) -> dict:
     return idx
 
 
-def compute_emission(item: ClassifiedItemInput, price_index: dict, factor_index: dict) -> dict:
-    """금액 → 물량 → 배출량(kgCO2e). 결정론적 순수 계산.
+# 회계 규칙(엑셀 노트): LPG는 프로판/부탄·단위(kg/L) 구분 문제로 MVP 자동계산 제외 → 사람검토
+_LPG_FUELS = ("LPG", "LPG(프로판)", "LPG(부탄)")
+# 전기·도시가스는 단가 역산보다 고지서 사용량 우선 → 수량 없으면 추정 대신 사람검토
+_QUANTITY_ONLY = ("전기", "도시가스")
 
-    반환:
-      {activity_amount, activity_unit, emission_co2e, skipped, reason}
-      - skipped=True: 계산 대상 아님(제외/연료 불명). emission=0, 정상 흐름.
-      - skipped=False: 정상 산정. emission_co2e 는 kgCO2e.
-    예외:
-      - CalcDataGap: 계수는 있으나 단가 없음(진짜 갭) → 상위에서 HITL.
+
+def compute_emission(item: ClassifiedItemInput, price_index: dict, factor_index: dict) -> dict:
+    """활동량 → 배출량(kgCO2e). 결정론적 순수 계산. 활동량 산정은 회계 노트의 우선순위:
+       1순위 실측 수량(전표에 kWh/L/m³) → 그대로  2순위 금액÷월별단가 추정  3순위 사람검토.
+
+    반환: {activity_amount, activity_unit, emission_co2e, skipped, reason, method, needs_review}
+      - method: "measured"(실측·상위등급) | "spend"(추정) | "review" | None(제외)
+      - needs_review=True → 상위에서 HITL(status=review_required)
+    예외: CalcDataGap — 계수·연료 유효한데 해당 월 단가가 없는 진짜 갭.
     """
-    # 1) 제외 — scope 없음(사무용품·식대 등 탄소 산정 대상 아님)
+    # 1) 제외 — scope 없음(사무용품·식대 등)
     if item.scope is None:
         return _skip("scope 없음 — 탄소 산정 제외")
 
-    # 2) 연료 불명 — 계수 인덱스에 없음 (가스종류 불명·연료종류 불명·산업가스 등)
+    # 2) LPG — 프로판/부탄·단위 구분 문제로 자동계산 제외 → 사람검토
+    if item.fuel_type in _LPG_FUELS:
+        return _review("LPG(프로판/부탄·단위 구분) 자동계산 제외 — 사람 검토 필요")
+
+    # 3) 연료 불명 — 계수 인덱스에 없음(가스종류 불명 등)
     factor = factor_index.get((item.fuel_type, item.scope))
     if factor is None:
         return _skip(f"배출계수 없음 — 연료 불명({item.fuel_type})")
 
-    # 3) 진짜 데이터 갭 — 연료는 유효한데 해당 월 단가가 없음 → 계산 불가 → HITL
-    price_entry = price_index.get((item.fuel_type, item.year, item.month))
-    if price_entry is None or not price_entry.get("price"):
-        raise CalcDataGap(
-            f"단가 없음 — {item.fuel_type} {item.year}-{item.month:02d} (HITL 회부)"
-        )
+    # 4) 1순위 — 실측 수량이 있으면 그대로 사용 (spend 추정보다 정확 = PCAF 상위등급)
+    if item.quantity and item.quantity > 0:
+        activity = round(float(item.quantity), 4)
+        unit = item.quantity_unit or factor["unit"]
+        method = "measured"
+    elif item.fuel_type in _QUANTITY_ONLY:
+        # 전기·도시가스는 금액 역산 안 함 → 수량 없으면 사람검토
+        return _review(f"{item.fuel_type} 사용량 미기재 — 금액 역산 대신 사람 검토")
+    else:
+        # 2순위 — 휘발유·경유: 금액÷월별단가 추정
+        price_entry = price_index.get((item.fuel_type, item.year, item.month))
+        if price_entry is None or not price_entry.get("price"):
+            raise CalcDataGap(f"단가 없음 — {item.fuel_type} {item.year}-{item.month:02d} (HITL 회부)")
+        activity = round(item.amount_krw / price_entry["price"], 4)
+        unit = factor["unit"] or price_entry.get("unit")
+        method = "spend"
 
-    # 4) 결정론적 계산
-    activity_amount = round(item.amount_krw / price_entry["price"], 4)
-    emission_co2e = round(activity_amount * factor["gwp_co2e"], 4)
+    emission = round(activity * factor["gwp_co2e"], 4)
     return {
-        "activity_amount": activity_amount,
-        "activity_unit": factor["unit"] or price_entry.get("unit"),
-        "emission_co2e": emission_co2e,   # kgCO2e
+        "activity_amount": activity,
+        "activity_unit": unit,
+        "emission_co2e": emission,   # kgCO2e
         "skipped": False,
         "reason": None,
+        "method": method,
+        "needs_review": False,
     }
 
 
 def _skip(reason: str) -> dict:
     return {
-        "activity_amount": 0.0,
-        "activity_unit": None,
-        "emission_co2e": 0.0,
-        "skipped": True,
-        "reason": reason,
+        "activity_amount": 0.0, "activity_unit": None, "emission_co2e": 0.0,
+        "skipped": True, "reason": reason, "method": None, "needs_review": False,
+    }
+
+
+def _review(reason: str) -> dict:
+    """계산 불가·규칙상 사람검토 대상 — emission 0, HITL 플래그."""
+    return {
+        "activity_amount": 0.0, "activity_unit": None, "emission_co2e": 0.0,
+        "skipped": True, "reason": reason, "method": "review", "needs_review": True,
     }
 
 

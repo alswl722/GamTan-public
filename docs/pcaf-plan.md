@@ -9,7 +9,7 @@
 - `기대_결과` 시트는 100건이 아니라 **40건만** 채워져 있다 — 계산 엔진 단위테스트 fixture로 이 40건을 쓴다.
 - "외 1종" 혼합 품목은 **주 품목 100% 귀속** (분할 없음) — R028/R029 원칙, I001/I023으로 검증됨.
 - 전기(kWh)·LPG 단가가 `기대_결과`의 암시적 가정과 어긋남(전기 ~2.1배, LPG ~11~14%) — **현재 엑셀(배출계수 시트) 단가를 그대로 쓰고, 소스 문구·PR 설명에 회계 확인 필요로 플래그만 남긴다.** 단위테스트는 이 오차를 감안해 연료별로 허용오차를 다르게 둔다.
-- **도구②(전표 분류) LLM은 Claude가 아니라 Gemini로 변경** (`google-genai` SDK, `gemini-2.5-flash`, `.env`의 `GEMINI_API_KEY` — 키는 사용자가 직접 입력). `requirements.txt`에 `anthropic`은 두고 `google-genai`를 추가(에이전트 오케스트레이터는 8월에 별도 결정, 이번엔 분류만 Gemini로 변경). CLAUDE.md §3 LLM 스택 문구를 이 범위로 갱신한다.
+- **도구②(전표 분류) LLM은 Claude가 아니라 Gemini로 변경** (`google-genai` SDK, `gemini-3.5-flash`, `.env`의 `GEMINI_API_KEY` — 키는 사용자가 직접 입력). `requirements.txt`에 `anthropic`은 두고 `google-genai`를 추가(에이전트 오케스트레이터는 8월에 별도 결정, 이번엔 분류만 Gemini로 변경). CLAUDE.md §3 LLM 스택 문구를 이 범위로 갱신한다.
 - **PCAF 1~5등급 산정 공식이 프로젝트 어디에도 없어 이번에 새로 설계**(아래 §PCAF 설계). 회계 담당 확인 전까지 임시안으로 코드에 명시.
 - 데모 기업 `○○정밀`의 실제 DB id = `2` (프론트 `COMPANY_ID`와 일치, 별도 조치 불필요).
 
@@ -43,7 +43,7 @@ PCAF 집계 (읽기 전용, 저장된 Classification 사용)
 ### 3. `api/agent/llm_classify.py` (신규)
 - `classify_with_llm(session, item_description, amount_krw) -> dict`: CLAUDE.md 고정 스키마(`raw_text, scope, category, fuel_type, amount_krw, mixed_item, confidence, evidence`)로 응답받는 Gemini 호출.
   - `hashlib.sha256(item_description.encode()).hexdigest()`로 `llm_cache.text_hash` 조회 → 있으면 `hit_count+=1, last_used_at=now()` 후 즉시 반환(**Gemini 미호출**, 캐시 정식 기능).
-  - 캐시 미스: `google.genai` client, `gemini-2.5-flash`, `response_mime_type: application/json` + JSON 스키마 강제(google-genai의 `response_schema`)로 구조화 출력.
+  - 캐시 미스: `google.genai` client, `gemini-3.5-flash`, `response_mime_type: application/json` + JSON 스키마 강제(google-genai의 `response_schema`)로 구조화 출력.
   - 프롬프트: 고정 스키마 설명 + Scope1(이동연소/고정연소)·Scope2(간접배출) 정의 + "지게차 경유 외 1종" 예시 + 룰 매칭에서 힌트가 있으면 포함(`rule_hint` optional 파라미터로 확장 — 룰이 애매하다고 표시한 경우 그 reasoning도 프롬프트에 포함).
   - JSON 파싱 실패 시 1회 재시도(CLAUDE.md 규칙) → 그래도 실패하면 `confidence=0.0, status="review_required"`로 HITL.
   - 성공 시 `llm_cache`에 신규 insert.
@@ -98,7 +98,7 @@ PCAF 집계 (읽기 전용, 저장된 Classification 사용)
 
 ### 14. `.env` (변경) — `GEMINI_API_KEY=` 빈 값 라인 추가(사용자가 직접 채움). 기존 `DATABASE_URL`은 손대지 않음.
 
-### 15. `CLAUDE.md` (변경) — §3 LLM 행: "전표 분류(도구②)는 Gemini API(google-genai, gemini-2.5-flash)로 변경. 에이전트 오케스트레이터(8월 예정)는 별도 결정 전까지 기존 Claude API tool use 문구 유지"로 갱신.
+### 15. `CLAUDE.md` (변경) — §3 LLM 행: "전표 분류(도구②)는 Gemini API(google-genai, gemini-3.5-flash)로 변경. 에이전트 오케스트레이터(8월 예정)는 별도 결정 전까지 기존 Claude API tool use 문구 유지"로 갱신.
 
 ## 담당 분담 (2인)
 
