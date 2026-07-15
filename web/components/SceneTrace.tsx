@@ -73,8 +73,18 @@ export function SceneTrace({ onNext }: { onNext: () => void }) {
   }, []);
 
   // 선택 시나리오를 로드(전표 리셋) → 에이전트 실행 → 트레이스 재조회
+  // 실행 중에는 /trace/latest를 짧게 폴링해 지금까지 쌓인 판단을 실시간으로 보여준다.
   async function runAgent() {
     setRunning(true);
+    setAllSteps([]);
+    const poll = setInterval(() => {
+      apiGet<TraceResponse>(`/trace/latest?company_id=${COMPANY_ID}`)
+        .then((res) => {
+          if (res.steps?.length) setAllSteps(mapSteps(res));
+        })
+        .catch(() => {});
+    }, 1000);
+
     try {
       if (selected) await apiPost(`/scenario/${selected}/${COMPANY_ID}`);
       await apiPost(`/agent/run/${COMPANY_ID}`);
@@ -88,6 +98,7 @@ export function SceneTrace({ onNext }: { onNext: () => void }) {
     } catch {
       /* 서버 미기동 등 — 목업 유지 */
     } finally {
+      clearInterval(poll);
       setRunning(false);
     }
   }
@@ -135,7 +146,11 @@ export function SceneTrace({ onNext }: { onNext: () => void }) {
               disabled={running}
               className="rounded-lg bg-brand px-3 py-1.5 text-[11.5px] font-bold text-white transition-colors hover:bg-brand-ink disabled:opacity-60"
             >
-              {running ? "실행 중…" : "에이전트 실행"}
+              {running
+                ? allSteps.length > 0
+                  ? `실행 중… (${allSteps.length}단계 진행)`
+                  : "실행 중…"
+                : "에이전트 실행"}
             </button>
           </div>
         )}

@@ -19,6 +19,7 @@ type Row = {
 };
 
 type ClassifyResponse = { results: Row[] };
+type ProgressResponse = { done: number; total: number; finished: boolean };
 
 function ScopeTag({ scope }: { scope: 1 | 2 | null }) {
   if (scope === null) {
@@ -36,6 +37,36 @@ function ScopeTag({ scope }: { scope: 1 | 2 | null }) {
     <span className={`rounded-md px-2 py-0.5 text-[11.5px] font-bold ${cls}`}>
       Scope {scope}
     </span>
+  );
+}
+
+function ClassifyProgressRing({ progress }: { progress: ProgressResponse | null }) {
+  const pct =
+    progress && progress.total > 0
+      ? Math.round((progress.done / progress.total) * 100)
+      : 0;
+  const r = 40;
+  const circumference = 2 * Math.PI * r;
+
+  return (
+    <div className="relative grid h-[104px] w-[104px] place-items-center">
+      <svg className="absolute inset-0 -rotate-90" viewBox="0 0 96 96">
+        <circle cx="48" cy="48" r={r} fill="none" stroke="var(--color-line)" strokeWidth="7" />
+        <circle
+          cx="48"
+          cy="48"
+          r={r}
+          fill="none"
+          stroke="var(--color-brand)"
+          strokeWidth="7"
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={circumference * (1 - pct / 100)}
+          style={{ transition: "stroke-dashoffset 0.4s ease-out" }}
+        />
+      </svg>
+      <span className="text-[20px] font-extrabold tabular-nums text-ink">{pct}%</span>
+    </div>
   );
 }
 
@@ -63,26 +94,45 @@ export function SceneClassify({ onNext }: { onNext: () => void }) {
   );
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<number | null>(null);
+  const [progress, setProgress] = useState<ProgressResponse | null>(null);
 
   useEffect(() => {
     let alive = true;
     apiGet<ClassifyResponse>(`/classify/${COMPANY_ID}`)
       .then((res) => {
         if (!alive) return;
-        setRows(res.results);
-        if (res.results.length > 0) setStatus("done");
+        if (res.results.length > 0) {
+          // 이미 분류된 건이 있으면(재진입) 결과만 보여줌 — 재실행 없음
+          setRows(res.results);
+          setStatus("done");
+        } else {
+          // 처음 진입 시 — 버튼 없이 화면 진입과 동시에 바로 분류 시작
+          runClassification();
+        }
       })
       .catch(() => {
-        /* 서버 미기동 등 — 아래 "AI 분류 실행" 버튼으로 재시도 가능 */
+        // 서버 미기동 등 — 조회 자체가 실패해도 진입 시 바로 실행 시도
+        runClassification();
       });
     return () => {
       alive = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function runClassification() {
     setStatus("loading");
     setError(null);
+    setProgress(null);
+
+    const poll = setInterval(() => {
+      apiGet<ProgressResponse>(`/classify/progress/${COMPANY_ID}`)
+        .then((p) => {
+          if (p.total > 0) setProgress(p);
+        })
+        .catch(() => {});
+    }, 800);
+
     try {
       const res = await apiPost<ClassifyResponse>(`/classify/${COMPANY_ID}`);
       setRows(res.results);
@@ -90,6 +140,9 @@ export function SceneClassify({ onNext }: { onNext: () => void }) {
     } catch (e) {
       setError(e instanceof Error ? e.message : "분류 실패");
       setStatus("error");
+    } finally {
+      clearInterval(poll);
+      setProgress(null);
     }
   }
 
@@ -114,24 +167,32 @@ export function SceneClassify({ onNext }: { onNext: () => void }) {
         신뢰도가 낮으면 스스로 사람에게 넘겨요. 카드를 눌러 근거를 확인하세요.
       </p>
 
-      {rows.length === 0 && (
+      {rows.length === 0 && status === "loading" && (
+        <div className="mt-6 flex flex-col items-center rounded-2xl bg-surface p-8 text-center">
+          <ClassifyProgressRing progress={progress} />
+          <p className="mt-4 text-[13px] font-semibold text-ink">
+            {progress && progress.total > 0
+              ? `전표 ${progress.done} / ${progress.total}건 분류 중…`
+              : "분류 준비 중…"}
+          </p>
+          <p className="mt-1 text-[12px] text-faint">
+            룰 매칭 → 애매한 건만 Gemini 병렬 호출 → 저신뢰 건은 HITL로 이관
+          </p>
+        </div>
+      )}
+
+      {rows.length === 0 && status === "error" && (
         <div className="mt-6 rounded-2xl border border-dashed border-line bg-surface p-8 text-center">
+          <div className="mb-3 rounded-xl bg-hitl/25 px-3 py-2 text-[12px] text-hitl-ink">
+            {error} · API 서버(8000)가 켜져 있는지 확인
+          </div>
           <button
             type="button"
             onClick={runClassification}
-            disabled={status === "loading"}
-            className="rounded-2xl bg-brand px-6 py-3.5 text-[14.5px] font-bold text-white transition-colors hover:bg-brand-ink disabled:opacity-60"
+            className="rounded-2xl bg-brand px-6 py-3.5 text-[14.5px] font-bold text-white transition-colors hover:bg-brand-ink"
           >
-            {status === "loading" ? "분류 중…" : "AI 분류 실행"}
+            다시 시도
           </button>
-          <p className="mt-3 text-[12px] text-faint">
-            룰 매칭 → 애매한 건만 Gemini 호출 → 저신뢰 건은 HITL로 이관
-          </p>
-          {error && (
-            <div className="mt-3 rounded-xl bg-hitl/25 px-3 py-2 text-[12px] text-hitl-ink">
-              {error} · API 서버(8000)가 켜져 있는지 확인
-            </div>
-          )}
         </div>
       )}
 
