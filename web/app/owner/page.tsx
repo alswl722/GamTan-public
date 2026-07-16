@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { SceneConsent } from "@/components/SceneConsent";
-import { SceneTrace } from "@/components/SceneTrace";
+import { SceneTrace, type TraceRunState } from "@/components/SceneTrace";
 import { SceneClassify } from "@/components/SceneClassify";
 import { ScenePcaf } from "@/components/ScenePcaf";
 
@@ -15,12 +15,16 @@ const STEPS = [
 
 export default function OwnerPage() {
   const [active, setActive] = useState(0);
-  const [renderKey, setRenderKey] = useState(0);
+  // SceneTrace는 스텝 전환마다 언마운트되므로, 실행 결과는 여기(owner 페이지)
+  // 레벨에 보관해 뒤로 갔다 돌아와도 유지되게 한다.
+  const [traceRunState, setTraceRunState] = useState<TraceRunState>({
+    allSteps: [],
+    finished: false,
+  });
 
   function goTo(i: number) {
     if (i < 0 || i >= STEPS.length) return;
     setActive(i);
-    setRenderKey((k) => k + 1);
   }
 
   return (
@@ -67,9 +71,15 @@ export default function OwnerPage() {
         </div>
       </div>
 
-      <div key={renderKey} className="step-enter mt-6 flex-1">
+      <div className="step-enter mt-6 flex-1">
         {active === 0 && <SceneConsent onNext={() => goTo(1)} />}
-        {active === 1 && <SceneTrace onNext={() => goTo(2)} />}
+        {active === 1 && (
+          <SceneTrace
+            onNext={() => goTo(2)}
+            runState={traceRunState}
+            onRunStateChange={setTraceRunState}
+          />
+        )}
         {active === 2 && <SceneClassify onNext={() => goTo(3)} />}
         {active === 3 && <ScenePcaf />}
       </div>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { apiPost, COMPANY_ID } from "@/lib/api";
+import { apiPost, BASE_URL, COMPANY_ID } from "@/lib/api";
 
 /** 장면 ① — 마이데이터 연동 동의. 버튼 클릭 → Mock API 로 실제 전표 수집. */
 
@@ -242,7 +242,7 @@ export function SceneConsent({ onNext }: { onNext: () => void }) {
 
       {error && (
         <div className="mt-4 rounded-xl bg-hitl/25 px-3.5 py-2.5 text-[12.5px] text-hitl-ink">
-          {error} · API 서버(8000)가 켜져 있는지 확인
+          {error} · API 서버({BASE_URL})가 켜져 있는지 확인
         </div>
       )}
 
