@@ -18,6 +18,51 @@ from sqlalchemy.orm import Session
 from api.queries import get_coverage, get_distribution
 from db.models import Classification, Company, Voucher
 
+
+def portfolio_summary(session: Session) -> dict:
+    """관리자 대시보드 — 거래 기업 전체의 금융배출량 집계 + PCAF 등급 분포.
+
+    각 기업의 company_pcaf_summary 를 재사용해 실측(after) 우선, 없으면 기준선(before)
+    으로 합산한다. 데모는 시연 기업 1곳이지만 로직은 N개 기업으로 그대로 확장된다
+    — 프론트가 company_count 를 정직하게 표기(현재 1개 → 결선 포트폴리오).
+    """
+    companies = session.execute(select(Company).order_by(Company.id)).scalars().all()
+    grade_dist = {g: 0 for g in range(1, 6)}
+    per_company = []
+    s1_total = s2_total = 0.0
+
+    for co in companies:
+        summ = company_pcaf_summary(session, co.id)
+        after = summ["after"]
+        used = after or summ["before"]         # 분류 미실행 기업은 기준선(5등급)으로
+        s1 = used.get("scope1", 0.0) or 0.0
+        s2 = used.get("scope2", 0.0) or 0.0
+        grade = used["grade"]
+        grade_dist[grade] = grade_dist.get(grade, 0) + 1
+        s1_total += s1
+        s2_total += s2
+        per_company.append({
+            "company_id": co.id,
+            "company_name": co.name,
+            "industry_name": co.industry_name,
+            "grade": grade,
+            "measured": after is not None,       # 전표 기반 실측인지, 기준선 추정인지
+            "scope1": round(s1, 2),
+            "scope2": round(s2, 2),
+            "total": round(s1 + s2, 2),
+            "hitl_count": (after or {}).get("hitl_count", 0),
+        })
+
+    return {
+        "company_count": len(companies),
+        "scope1_total": round(s1_total, 2),
+        "scope2_total": round(s2_total, 2),
+        "total": round(s1_total + s2_total, 2),
+        "grade_distribution": grade_dist,        # {등급: 기업수}
+        "hitl_total": sum(c["hitl_count"] for c in per_company),
+        "companies": per_company,
+    }
+
 # get_coverage 의 연료 대분류 → Scope 매핑 (결손 보정 시 어느 Scope 에 얹을지)
 _FUEL_BUCKET_SCOPE = {"전기": 2, "가스": 1, "경유/유류": 1}
 

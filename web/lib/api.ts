@@ -38,6 +38,24 @@ export async function apiPost<T>(
   return res.json() as Promise<T>;
 }
 
+export async function apiPatch<T>(
+  path: string,
+  body?: unknown,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+): Promise<T> {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method: "PATCH",
+    headers: body ? { "Content-Type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+    cache: "no-store",
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) {
+    throw new Error(`API ${path} 실패: ${res.status}`);
+  }
+  return res.json() as Promise<T>;
+}
+
 /** 에이전트 실행은 분류(LLM 병렬 호출) 포함이라 더 길게 허용. */
 export const AGENT_RUN_TIMEOUT_MS = 60_000;
 
