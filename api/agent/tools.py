@@ -186,6 +186,8 @@ def classify_vouchers(
     factor_index = index_emission_factors(get_emission_factors(session))
     total = len(vouchers)
     done = 0
+    if on_progress:
+        on_progress(0, total)  # 시작 즉시 리셋 — 이전 실행의 '완료 100%' 잔류 방지
 
     def _tick():
         nonlocal done
@@ -213,21 +215,33 @@ def classify_vouchers(
             pending.append((voucher, rule, amount, i))
 
     # 2단계 — 캐시 미스인 것만 스레드풀로 병렬 Gemini 호출(세션 없이, 순수 네트워크).
+    # 동일 품목 텍스트는 1회만 호출·1회만 캐시 저장 — 같은 배치에 '디젤유'가 2장 있을 때
+    # cache_put 이 두 번 돌면 text_hash unique 충돌로 실행 전체가 죽는다.
     if pending:
+        unique: dict[str, tuple[str, int, dict | None]] = {}  # hash -> (text, amount, rule_hint)
+        for v, rule, amount, _i in pending:
+            unique.setdefault(hash_item(v.item_description), (v.item_description, amount, rule))
+
+        results: dict[str, dict] = {}
         with ThreadPoolExecutor(max_workers=_LLM_MAX_WORKERS) as pool:
             futures = {
-                pool.submit(classify_with_llm_nocache, v.item_description, amount, rule): (v, i)
-                for v, rule, amount, i in pending
+                pool.submit(classify_with_llm_nocache, text, amount, rule): h
+                for h, (text, amount, rule) in unique.items()
             }
             for fut in futures:
-                v, i = futures[fut]
-                llm = fut.result()
-                decided = _llm_result_to_decision(llm)
-                created[i] = _build_classification(v, decided, price_index, factor_index)
-                # 성공 건만 캐시에 남김(실패 폴백은 다음 실행 때 재시도되도록 — 기존 정책 유지)
-                if decided["confidence"] > 0 or decided["scope"] is not None:
-                    cache_put(session, hash_item(v.item_description), v.item_description, llm)
-                _tick()
+                results[futures[fut]] = fut.result()
+
+        for h, llm in results.items():
+            # 성공 건만 캐시에 남김(실패 폴백은 다음 실행 때 재시도되도록 — 기존 정책 유지)
+            if (llm.get("confidence") or 0) > 0 or llm.get("scope") is not None:
+                text, _, _ = unique[h]
+                cache_put(session, h, text, llm)
+
+        for v, rule, amount, i in pending:
+            llm = results[hash_item(v.item_description)]
+            decided = _llm_result_to_decision(llm)
+            created[i] = _build_classification(v, decided, price_index, factor_index)
+            _tick()
 
     for c in created:
         session.add(c)

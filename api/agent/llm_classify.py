@@ -71,6 +71,8 @@ def _cache_get(session: Session, text_hash: str) -> dict | None:
 
 
 def _cache_put(session: Session, text_hash: str, item_description: str, response: dict) -> None:
+    from sqlalchemy.exc import IntegrityError
+
     session.add(
         LlmCache(
             text_hash=text_hash,
@@ -78,7 +80,11 @@ def _cache_put(session: Session, text_hash: str, item_description: str, response
             llm_response=response,
         )
     )
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError:
+        # 동일 text_hash 가 이미 존재(동시 실행 등) — 기존 캐시를 신뢰하고 이번 건은 버림
+        session.rollback()
 
 
 # 공개 별칭 — tools.py 가 병렬 분류에서 캐시 조회/저장을 직접 오케스트레이션할 때 사용.
@@ -103,7 +109,10 @@ def _build_prompt(item_description: str, amount_krw: int, rule_hint: dict | None
 
 
 def _call_gemini(prompt: str) -> dict:
-    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    client = genai.Client(
+        api_key=os.getenv("GEMINI_API_KEY"),
+        http_options=types.HttpOptions(timeout=10_000),  # ms — 행 걸림은 빠르게 실패로
+    )
     resp = client.models.generate_content(
         model=MODEL,
         contents=prompt,
@@ -119,15 +128,18 @@ def _call_gemini(prompt: str) -> dict:
 def _fallback_result(item_description: str, reason: str) -> dict:
     """JSON 파싱/호출 실패 시 — 낮은 confidence로 HITL 이관되도록 함.
 
-    원문 API 오류(429 JSON 등)를 evidence에 그대로 노출하지 않고 간결히 분류한다.
+    실패 가시성 원칙: 실패를 그럴듯한 사유로 포장하지 않고 사실만 적는다
+    (원문 API 오류 JSON 은 노출하지 않되, 실패 종류는 정확히).
     """
     r = (reason or "").lower()
     if "resource_exhausted" in r or "429" in r or "quota" in r:
-        why = "LLM 호출 한도 초과(무료 티어 일일 20회) 일시 보류"
+        why = "LLM 호출 실패(요청 한도 초과)"
     elif "json" in r:
         why = "LLM 응답 형식 오류"
+    elif "timeout" in r or "deadline" in r:
+        why = "LLM 호출 실패(시간 초과)"
     else:
-        why = "LLM 일시 오류"
+        why = "LLM 호출 실패"
     return {
         "raw_text": item_description,
         "scope": None,
@@ -136,7 +148,7 @@ def _fallback_result(item_description: str, reason: str) -> dict:
         "amount_krw": None,
         "mixed_item": False,
         "confidence": 0.0,
-        "evidence": f"{why} → 사람 검토 필요",
+        "evidence": f"{why} — 미분류, 사람 검토 필요",
     }
 
 

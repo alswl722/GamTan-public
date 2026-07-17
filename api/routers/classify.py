@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from api.agent import progress
+from api.agent.run_lock import company_run_lock
 from api.agent.tools import classify_vouchers
 from api.db import get_session
 from api.queries import get_classifications
@@ -17,12 +18,16 @@ router = APIRouter(prefix="/classify", tags=["classify"])
 
 @router.post("/{company_id}")
 def run_classification(company_id: int, session: Session = Depends(get_session)):
-    """미분류 전표를 룰→Gemini 파이프라인으로 분류(이미 분류된 건은 스킵)."""
-    summary = classify_vouchers(
-        session,
-        company_id,
-        on_progress=lambda done, total: progress.tick(company_id, done, total),
-    )
+    """미분류 전표를 룰→Gemini 파이프라인으로 분류(이미 분류된 건은 스킵).
+
+    같은 company 동시 실행은 409 — 중복 insert(unique 충돌) 방지.
+    """
+    with company_run_lock(company_id):
+        summary = classify_vouchers(
+            session,
+            company_id,
+            on_progress=lambda done, total: progress.tick(company_id, done, total),
+        )
     return {**summary, "results": get_classifications(session, company_id)}
 
 

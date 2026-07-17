@@ -6,9 +6,13 @@
 LLM 산수 금지 원칙과 동일한 결로: "애매한 것만 모델에게, 나머지는 코드로."
 
 전 단계를 [계획]/[관찰]/[행동]으로 trace_logs에 기록한다(장면② 데이터 소스).
-GEMINI_API_KEY 가 없거나 이상치 판단 호출이 실패하면, 규칙 기반 판정
-(품목 문구에 '증차'/'설비' 등 포함 여부)으로 대체해 항상 리포트가 끝까지 완료된다.
+
+실패 가시성 원칙: GEMINI_API_KEY 가 없거나 이상치 판단 호출이 실패하면
+대체 판정 없이 **실패 자체를 트레이스에 기록**하고 해당 건을 사장 검토로
+넘긴다 — 제대로 안 돌아가면 안 돌아가는 것이 화면에 그대로 보여야 한다.
 """
+from statistics import median
+
 from sqlalchemy.orm import Session
 
 from api.agent.tools import (
@@ -22,7 +26,7 @@ from db.models import Classification, Company, Voucher
 
 MODEL = "gemini-3.5-flash"   # 분류(llm_classify)와 동일 모델로 통일
 
-_OPENER = "2024년 12개월 전표 분석 시작 → 결손 검사를 먼저 수행"
+_OPENER = "최근 12개월 전표 분석 시작 → 결손 검사를 먼저 수행"
 
 _ANOMALY_JUDGE_PROMPT = """너는 중소기업 전표를 검토하는 회계 보조 AI다.
 아래 전표 품목명들을 보고, 이 달의 배출량이 업종 평균보다 훨씬 높은 것이
@@ -44,30 +48,44 @@ _TOOL_META = {
     "inspect_vouchers": ("행동", "전표 재파싱기"),
 }
 
-_ANOMALY_THRESHOLD = 2.5  # 월별 배출량이 업종 월중앙값의 N배↑면 이상치로 의심
+_ANOMALY_THRESHOLD = 2.5    # 월별 배출량이 같은 연료의 평월 중앙값의 N배↑면 이상치로 의심
+_ANOMALY_PEER_FACTOR = 2.0  # + 다른 어떤 월보다도 N배↑ — 계절성(동절기 가스)은 비슷한 형제 월이 있어 걸러짐
+_ANOMALY_MIN_MONTHS = 3     # 연료별 데이터가 이보다 적으면 평월 기준을 세울 수 없어 판단 보류
 
 
 # ── 이상치 감지·재검증 (결정론 계산 — LLM 산수 금지 원칙 유지) ────────────────
 def _check_anomalies(session: Session, company: Company) -> dict:
-    """월별 Scope1 배출량 vs 업종 월중앙값. 임계 배수↑ 이상치 목록 반환."""
+    """월×연료별 Scope1 배출량을 **같은 연료의 나머지 월(평월) 중앙값**과 비교.
+
+    업종 연중앙값÷12 비교는 계절성(동절기 가스↑)을 이상치로 오검출한다.
+    자기 평월 대비 배수는 단가·계수 스케일이 약분되어 데이터 갱신에도 안정적.
+    """
     from sqlalchemy import func, select
 
-    dist = get_industry_distribution(session, company.industry_code, 1)
-    median = (dist or {}).get("median")
-    if not median:
-        return {"outliers": []}
-    monthly_median_kg = median * 1000.0 / 12.0   # 연 tCO2e → 월 kgCO2e
     rows = session.execute(
         select(Voucher.month, Classification.fuel_type, func.sum(Classification.emission_co2e))
         .join(Classification, Classification.voucher_id == Voucher.id)
         .where(Voucher.company_id == company.id, Classification.scope == 1, Classification.emission_co2e > 0)
         .group_by(Voucher.month, Classification.fuel_type)
     ).all()
-    outliers = []
+    by_fuel: dict[str, dict[int, float]] = {}
     for month, fuel, emission in rows:
-        ratio = (emission or 0) / monthly_median_kg if monthly_median_kg else 0
-        if ratio >= _ANOMALY_THRESHOLD:
-            outliers.append({"month": int(month), "fuel": fuel, "ratio": round(ratio, 1)})
+        by_fuel.setdefault(fuel, {})[int(month)] = float(emission or 0)
+
+    outliers = []
+    for fuel, months in by_fuel.items():
+        if len(months) < _ANOMALY_MIN_MONTHS:
+            continue
+        for month, emission in months.items():
+            others = [v for m, v in months.items() if m != month]
+            baseline = median(others)
+            if not baseline:
+                continue
+            ratio = emission / baseline
+            # 계절성 방어: 진짜 이상치는 다른 '모든' 월보다 확연히 크다.
+            # 동절기 가스는 이웃 겨울 월(12↔1월)이 비슷해 peer 조건에서 걸러진다.
+            if ratio >= _ANOMALY_THRESHOLD and emission >= _ANOMALY_PEER_FACTOR * max(others):
+                outliers.append({"month": month, "fuel": fuel, "ratio": round(ratio, 1)})
     outliers.sort(key=lambda o: -o["ratio"])
     return {"outliers": outliers}
 
@@ -159,9 +177,9 @@ def _summarize(name: str, args: dict, result: dict) -> tuple[str, dict | None]:
         outliers = result.get("outliers", [])
         if outliers:
             o = outliers[0]
-            msg = f"{o['month']}월 {o['fuel']} 배출량이 업종 월중앙값의 {o['ratio']}배 — 이상치 의심"
+            msg = f"{o['month']}월 {o['fuel']} 배출량이 평월 중앙값의 {o['ratio']}배 — 이상치 의심"
         else:
-            msg = "월별 배출량 모두 업종 정상 범위 — 이상치 없음"
+            msg = "월별 배출량 모두 평월 대비 정상 범위 — 이상치 없음"
         return msg, {"outliers": outliers}
 
     if name == "inspect_vouchers":
@@ -185,9 +203,11 @@ def _run_tool_and_log(session, company, sid, name, args) -> dict:
 def _judge_anomaly_with_llm(items: str) -> tuple[bool, str] | None:
     """전표 문구를 보고 이상치가 정상 사유인지 LLM에게 짧게 묻는다.
 
-    반환: (정상 여부, 사유) 또는 실패 시 None(호출부가 규칙 기반으로 대체).
-    산수·집계는 절대 여기서 하지 않는다 — check_anomalies 가 이미 결정론적으로
-    계산한 배수를 근거로, "이 문구가 그 배수를 설명하는가"만 판단시킨다.
+    반환: (정상 여부, 사유) 또는 실패 시 None.
+    실패 시 대체 판정은 없다 — 호출부가 실패를 트레이스에 기록하고 사장 검토로
+    넘긴다(실패 가시성 원칙). 산수·집계는 절대 여기서 하지 않는다 —
+    check_anomalies 가 이미 결정론적으로 계산한 배수를 근거로,
+    "이 문구가 그 배수를 설명하는가"만 판단시킨다.
     """
     import os
 
@@ -196,8 +216,12 @@ def _judge_anomaly_with_llm(items: str) -> tuple[bool, str] | None:
         return None
     try:
         from google import genai
+        from google.genai import types
 
-        client = genai.Client(api_key=api_key)
+        client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(timeout=10_000),  # ms — 행 걸림은 빠르게 실패로
+        )
         resp = client.models.generate_content(
             model=MODEL,
             contents=_ANOMALY_JUDGE_PROMPT.format(items=items),
@@ -207,20 +231,34 @@ def _judge_anomaly_with_llm(items: str) -> tuple[bool, str] | None:
             reason = text.split("|", 1)[1].strip() if "|" in text else "정당한 사유 확인"
             return True, reason
         return False, ""
-    except Exception:  # noqa: BLE001 — 실패 시 규칙 기반으로 조용히 대체
+    except Exception:  # noqa: BLE001 — 실패는 None으로 반환, 호출부가 트레이스에 노출
         return None
 
 
-def _judge_anomaly_rule_based(items: str) -> tuple[bool, str]:
-    """LLM 미가용 시 대체 — 문구 키워드 매칭(결정론적, 항상 완료 보장)."""
-    if any(k in items for k in ("증차", "증설", "신규", "확장")):
-        return True, "설비 증가 관련 문구 확인(규칙 기반 판정)"
-    return False, ""
+def _annotate_classifications(session: Session, company_id: int, month: int, fuel: str, note: str) -> None:
+    """이상치 재검증 결과를 해당 월·연료 분류 행의 evidence에 주석으로 남긴다.
+
+    트레이스의 "정상 판정 + 주석 추가"가 말뿐이 아니라 실제 데이터(장면③의
+    evidence 펼침)에 반영되도록 — 전 판단 evidence 저장 원칙(CLAUDE.md §5-5).
+    """
+    from sqlalchemy import select
+
+    rows = session.execute(
+        select(Classification)
+        .join(Voucher, Voucher.id == Classification.voucher_id)
+        .where(Voucher.company_id == company_id, Voucher.month == month,
+               Classification.fuel_type == fuel)
+    ).scalars().all()
+    for c in rows:
+        c.evidence = f"{c.evidence or ''} | 이상치 재검증: {note}".strip(" |")
+    session.commit()
 
 
 # ── 메인 실행 경로: 뻔한 단계는 코드, 이상치 판단만 LLM ──────────────────────
-def _run_agent_core(session: Session, company: Company, sid: str, judge_mode: str) -> None:
+def _run_agent_core(session: Session, company: Company, sid: str) -> int:
+    """전 단계 실행. 반환: LLM 판단 실패 건수(실패 가시성 — mode 산정용)."""
     cid = company.id
+    judge_failures = 0
     log_step(session, cid, sid, "계획", _OPENER)
 
     collect = _run_tool_and_log(session, company, sid, "collect_vouchers", {})
@@ -241,23 +279,27 @@ def _run_agent_core(session: Session, company: Company, sid: str, judge_mode: st
                                  {"month": o["month"], "fuel": o["fuel"]})
         items = " / ".join(v["item"] for v in insp.get("vouchers", []))
 
-        judged = _judge_anomaly_with_llm(items) if judge_mode == "llm" else None
+        judged = _judge_anomaly_with_llm(items)
         if judged is None:
-            is_normal, reason = _judge_anomaly_rule_based(items)
-            judge_note = "규칙 기반"
-        else:
-            is_normal, reason = judged
-            judge_note = "AI 판단"
-
-        if is_normal:
+            # 실패를 숨기지 않는다 — 대체 판정 없이 실패 자체를 기록하고 사람에게
+            judge_failures += 1
             log_step(session, cid, sid, "관찰",
-                     f"'{items}' — {reason} → 오분류 아님, 정상 판정 + 주석 추가 ({judge_note})")
+                     "이상치 재검증 실패 — LLM 호출 불가. 자동 판정 없이 사장 검토로 이관")
+            _run_tool_and_log(session, company, sid, "notify_owner",
+                              {"message": f"{o['month']}월 {o['fuel']} 이상치({o['ratio']}배) 재검증 실패 — 사장 검토 요청"})
+        elif judged[0]:
+            reason = judged[1]
+            log_step(session, cid, sid, "관찰",
+                     f"'{items}' — {reason} → 오분류 아님, 정상 판정 + 주석 추가")
+            _annotate_classifications(session, cid, o["month"], o["fuel"],
+                                      f"평월 대비 {o['ratio']}배이나 {reason} — 정상 판정")
         else:
             _run_tool_and_log(session, company, sid, "notify_owner",
                               {"message": f"{o['month']}월 {o['fuel']} 이상치({o['ratio']}배) 사유 불명 — 사장 검토 요청"})
 
     _run_tool_and_log(session, company, sid, "calculate_pcaf", {})
     log_step(session, cid, sid, "계획", "리포트 생성 완료 → 부족 데이터는 사장 연동 요청 목록에 반영")
+    return judge_failures
 
 
 def run_agent(session: Session, company_id: int) -> dict:
@@ -265,11 +307,10 @@ def run_agent(session: Session, company_id: int) -> dict:
 
     뻔한 단계(수집·알림·분류·계산·벤치마킹)는 항상 코드로 즉시 실행하고,
     이상치가 실제로 발견됐을 때만 그 지점에서 LLM 판단을 1회 시도한다.
-    GEMINI_API_KEY 가 없거나 판단 호출이 실패해도 규칙 기반으로 대체되어
-    리포트는 항상 끝까지 완료된다 — "폴백으로 전체를 다시 도는" 구조가 아니다.
+    판단 실패 시 대체 판정 없이 실패가 트레이스에 기록된다(실패 가시성 원칙).
+    반환 mode: "llm"(판단 전부 정상) | "judge_failed"(판단 실패 발생).
+    실행 자체가 죽으면 "실행 중단" 스텝을 남기고 예외를 그대로 올린다.
     """
-    import os
-
     company = session.get(Company, company_id)
     if company is None:
         raise ValueError(f"company_id={company_id} 없음")
@@ -277,8 +318,18 @@ def run_agent(session: Session, company_id: int) -> dict:
     from db.models import TraceLog  # 지역 import — 순환 회피
 
     sid = new_session_id()
-    judge_mode = "llm" if os.getenv("GEMINI_API_KEY") else "rule"
-    _run_agent_core(session, company, sid, judge_mode)
+    try:
+        judge_failures = _run_agent_core(session, company, sid)
+    except Exception as e:
+        # 반쪽 트레이스를 '진행 중'처럼 남기지 않는다 — 중단 사실을 기록 후 재전파
+        session.rollback()
+        try:
+            log_step(session, company_id, sid, "관찰",
+                     f"실행 중단 — {type(e).__name__}. 리포트 미완성, 원인 확인 필요")
+        except Exception:  # noqa: BLE001 — 기록 실패(DB 장애 등)가 원인 예외를 가리면 안 됨
+            pass
+        raise
 
     count = session.query(TraceLog).filter_by(session_id=sid).count()
-    return {"session_id": sid, "mode": judge_mode, "step_count": count}
+    mode = "judge_failed" if judge_failures else "llm"
+    return {"session_id": sid, "mode": mode, "step_count": count}

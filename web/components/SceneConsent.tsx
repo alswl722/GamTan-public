@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { apiPost, BASE_URL, COMPANY_ID } from "@/lib/api";
+import { apiPost, getCompanyId } from "@/lib/api";
 
 /** 장면 ① — 마이데이터 연동 동의. 버튼 클릭 → Mock API 로 실제 전표 수집. */
 
@@ -31,19 +31,22 @@ export function SceneConsent({ onNext }: { onNext: () => void }) {
   async function connect() {
     setPhase("collecting");
     setError(null);
+    setSourceStatus({ hometax: "waiting", kepco: "waiting" });
     try {
+      const cid = await getCompanyId();
       setSourceStatus((s) => ({ ...s, hometax: "loading" }));
-      const ht = await apiPost<CollectResult>(`/mock/hometax/${COMPANY_ID}`);
+      const ht = await apiPost<CollectResult>(`/mock/hometax/${cid}`);
       setCounts((c) => ({ ...c, hometax: ht.count }));
       setSourceStatus((s) => ({ ...s, hometax: "done", kepco: "loading" }));
 
-      const kp = await apiPost<CollectResult>(`/mock/kepco/${COMPANY_ID}`);
+      const kp = await apiPost<CollectResult>(`/mock/kepco/${cid}`);
       setCounts((c) => ({ ...c, kepco: kp.count }));
       setSourceStatus((s) => ({ ...s, kepco: "done" }));
 
       setPhase("done");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "수집 실패");
+    } catch (err) {
+      console.error("마이데이터 수집 실패:", err);
+      setError("데이터 수집에 실패했습니다. 서버 연결 상태를 확인한 뒤 다시 시도해 주세요.");
       setPhase("error");
     }
   }
@@ -242,7 +245,7 @@ export function SceneConsent({ onNext }: { onNext: () => void }) {
 
       {error && (
         <div className="mt-4 rounded-xl bg-hitl/25 px-3.5 py-2.5 text-[12.5px] text-hitl-ink">
-          {error} · API 서버({BASE_URL})가 켜져 있는지 확인
+          {error}
         </div>
       )}
 
@@ -253,6 +256,14 @@ export function SceneConsent({ onNext }: { onNext: () => void }) {
           className="mt-6 w-full rounded-2xl bg-brand py-4 text-[15.5px] font-bold text-white transition-colors hover:bg-brand-ink"
         >
           연동 완료 · 다음으로 ({total}건)
+        </button>
+      ) : phase === "error" ? (
+        <button
+          type="button"
+          onClick={connect}
+          className="mt-6 w-full rounded-2xl bg-brand py-4 text-[15.5px] font-bold text-white transition-colors hover:bg-brand-ink"
+        >
+          다시 시도
         </button>
       ) : (
         <p className="mt-6 text-center text-[12.5px] text-faint">

@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { apiGet, COMPANY_ID } from "@/lib/api";
+import { apiGet, getCompanyId } from "@/lib/api";
 
-/** 장면 ④ — PCAF Before/After + 벤치마킹. /pcaf/{id} 실데이터 + 목업 폴백. */
+/** 장면 ④ — PCAF Before/After + 벤치마킹. /pcaf/{id} 실데이터만 사용.
+ *  API 실패 시 목업으로 위장하지 않고 에러 배너 + 재시도를 표시한다(실패 가시성). */
 
 // PCAF 등급을 사장님이 바로 이해할 수 있는 한 줄 설명으로 매핑 (1=가장 정확 → 5=가장 부정확)
 const GRADE_DESC: Record<number, string> = {
@@ -60,32 +61,6 @@ type Benchmark = {
   percentile_pct: number | null;
 };
 type PcafResponse = { before: Before; after: After | null; benchmark: Benchmark };
-
-// 백엔드 미연결 시 폴백 (CLAUDE.md §8 기대효과 수치)
-const MOCK: PcafResponse = {
-  before: { grade: 5, scope1: 33.9, scope2: 18.1, emission_tco2e: 52.0 },
-  after: {
-    grade: 3,
-    scope1: 22.1,
-    scope2: 16.3,
-    total: 38.4,
-    measured_tco2e: 33.7,
-    estimated_gap_tco2e: 4.7,
-    hitl_count: 2,
-    gap_months: [{ fuel: "가스", missing_months: [3, 4, 5] }],
-  },
-  benchmark: {
-    industry_code: "C251",
-    industry_name: "금속가공업",
-    percentile_text: "동종 금속가공업 대비 상위 34%",
-    hint: "가스 고지서 2장을 추가 연동하면 결손월 보정분이 실측으로 바뀌어 등급이 오릅니다.",
-    value: 38.4,
-    min: 12.0,
-    median: 45.0,
-    max: 90.0,
-    percentile_pct: 34,
-  },
-};
 
 const fmt = (n: number) => n.toFixed(1);
 
@@ -173,27 +148,55 @@ function DistributionTrack({
 }
 
 export function ScenePcaf() {
-  const [data, setData] = useState<PcafResponse>(MOCK);
-  const [live, setLive] = useState(false);
+  const [data, setData] = useState<PcafResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function load() {
+    setError(null);
+    try {
+      const cid = await getCompanyId();
+      const res = await apiGet<PcafResponse>(`/pcaf/${cid}`);
+      setData(res);
+    } catch (err) {
+      // 목업으로 위장하지 않는다 — 실패는 실패로 표시
+      console.error("PCAF 조회 실패:", err);
+      setData(null);
+      setError("산정 결과를 불러오지 못했습니다. 서버 연결 상태를 확인한 뒤 다시 시도해 주세요.");
+    }
+  }
 
   useEffect(() => {
-    let alive = true;
-    apiGet<PcafResponse>(`/pcaf/${COMPANY_ID}`)
-      .then((res) => {
-        if (!alive || !res?.before) return;
-        setData(res);
-        setLive(true);
-      })
-      .catch(() => {
-        /* 폴백: 목업 유지 */
-      });
-    return () => {
-      alive = false;
-    };
+    void load();
   }, []);
 
+  if (!data) {
+    return (
+      <section>
+        <h2 className="text-[17px] font-bold leading-snug text-ink">
+          측정 결과를 불러오는 중이에요
+        </h2>
+        {error ? (
+          <>
+            <div className="mt-4 rounded-xl bg-red-50 px-4 py-3 text-[12.5px] leading-relaxed text-red-600">
+              {error}
+            </div>
+            <button
+              type="button"
+              onClick={() => void load()}
+              className="mt-4 w-full rounded-2xl bg-brand py-4 text-[15.5px] font-bold text-white transition-colors hover:bg-brand-ink"
+            >
+              다시 시도
+            </button>
+          </>
+        ) : (
+          <p className="mt-1 text-[13px] leading-relaxed text-muted">잠시만 기다려 주세요…</p>
+        )}
+      </section>
+    );
+  }
+
   const { before, after, benchmark } = data;
-  const maxValue = Math.max(before.emission_tco2e, after?.total ?? 0) * 1.05;
+  const maxValue = Math.max(before.emission_tco2e, after?.total ?? 0) * 1.05 || 1;
   const gradeUp = after ? before.grade - after.grade : 0;
   const hasDistribution =
     benchmark.value !== null &&
@@ -203,13 +206,9 @@ export function ScenePcaf() {
 
   return (
     <section>
-      <div className="flex items-center gap-2">
-        {live && (
-          <span className="rounded-full bg-brand-soft px-2.5 py-1 text-[11px] font-semibold text-brand-ink">
-            실측 산정
-          </span>
-        )}
-      </div>
+      <span className="inline-block rounded-full bg-brand-soft px-2.5 py-1 text-[11px] font-semibold text-brand-ink">
+        실측 산정
+      </span>
       <h2 className="mt-3 text-[17px] font-bold leading-snug text-ink">
         측정이 끝났어요
       </h2>

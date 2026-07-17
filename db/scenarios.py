@@ -4,6 +4,7 @@ synth_generator(파라미터형)로 상황별 전표를 찍고, 대상 company�
 전표·분류·트레이스를 리셋한 뒤 재적재한다. 프론트 드롭다운/POST로 전환.
 
 시나리오별로 에이전트가 다르게 판단:
+- demo        : 3~5월 가스 결손 + 7월 경유 급증 → 킬러씬 A 전체(결손 감지 + 자가검증)
 - gas_gap     : 3~5월 도시가스 결손 → 결손 감지·사장 알림
 - normal      : 결손·이상치 없음 → 알림 없이 분류·계산만
 - diesel_spike: 7월 경유 급증(+'증차' 문구) → 이상치 의심·재검증·정상 판정
@@ -24,6 +25,14 @@ _SUPPLIER = {"경유": "구미석유", "도시가스": "대성에너지", "전�
 
 
 SCENARIOS: dict[str, dict] = {
+    # 첫 항목 = 프론트 기본 선택. 킬러씬 A의 두 축(결손 감지 + 이상치 자가검증)을
+    # 한 실행에서 모두 보여주는 시연 기본 시나리오.
+    "demo": {
+        "label": "시연 · 3~5월 가스 결손 + 7월 경유 이상치",
+        "config": GenConfig(count=0, year=YEAR, gap_months=[3, 4, 5],
+                            anomaly={"month": 7, "fuel": "경유", "multiplier": 3.2}),
+        "justify": {"month": 7, "fuel": "경유", "text": "지게차 경유 (2대 증차분)"},
+    },
     "gas_gap": {
         "label": "기본 · 3~5월 가스 결손",
         "config": GenConfig(count=0, year=YEAR, gap_months=[3, 4, 5], anomaly=None),
