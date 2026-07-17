@@ -1,5 +1,3 @@
-import { WireframeBadge } from "@/components/WireframeBadge";
-
 /**
  * 관리자 대시보드 — v0.1 스코프에서는 placeholder 스텁.
  * (CLAUDE.md §9: 관리자 대시보드는 8월 결선 확장 대상)
@@ -26,15 +24,12 @@ const CARDS = [
 
 export default function AdminPage() {
   return (
-    <div>
-      <div className="mb-6 flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">관리자 대시보드</h1>
-          <p className="mt-1 text-sm text-muted">
-            은행 ESG·여신 담당자용 집계 화면
-          </p>
-        </div>
-        <WireframeBadge />
+    <div className="mx-auto w-full max-w-5xl px-5 py-8">
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold tracking-tight">관리자 대시보드</h1>
+        <p className="mt-1 text-sm text-muted">
+          은행 ESG·여신 담당자용 집계 화면
+        </p>
       </div>
 
       <div className="mb-6 rounded-lg border border-dashed border-line bg-surface p-4 text-sm text-muted">

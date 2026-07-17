@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { apiGet, apiPost, BASE_URL, COMPANY_ID } from "@/lib/api";
+import { apiGet, apiPost, getCompanyId } from "@/lib/api";
 
 /** 장면 ③ — AI 분류 + 근거 (킬러씬 B). /classify/{id} 실데이터. */
 
@@ -98,7 +98,8 @@ export function SceneClassify({ onNext }: { onNext: () => void }) {
 
   useEffect(() => {
     let alive = true;
-    apiGet<ClassifyResponse>(`/classify/${COMPANY_ID}`)
+    getCompanyId()
+      .then((cid) => apiGet<ClassifyResponse>(`/classify/${cid}`))
       .then((res) => {
         if (!alive) return;
         if (res.results.length > 0) {
@@ -110,8 +111,10 @@ export function SceneClassify({ onNext }: { onNext: () => void }) {
           runClassification();
         }
       })
-      .catch(() => {
-        // 서버 미기동 등 — 조회 자체가 실패해도 진입 시 바로 실행 시도
+      .catch((err) => {
+        // StrictMode 이중 마운트에서 이중 실행되지 않도록 alive 확인 후 시도
+        if (!alive) return;
+        console.error("분류 결과 조회 실패:", err);
         runClassification();
       });
     return () => {
@@ -125,23 +128,26 @@ export function SceneClassify({ onNext }: { onNext: () => void }) {
     setError(null);
     setProgress(null);
 
-    const poll = setInterval(() => {
-      apiGet<ProgressResponse>(`/classify/progress/${COMPANY_ID}`)
-        .then((p) => {
-          if (p.total > 0) setProgress(p);
-        })
-        .catch(() => {});
-    }, 800);
-
+    let poll: ReturnType<typeof setInterval> | null = null;
     try {
-      const res = await apiPost<ClassifyResponse>(`/classify/${COMPANY_ID}`);
+      const cid = await getCompanyId();
+      poll = setInterval(() => {
+        apiGet<ProgressResponse>(`/classify/progress/${cid}`)
+          .then((p) => {
+            if (p.total > 0) setProgress(p);
+          })
+          .catch(() => {});
+      }, 800);
+
+      const res = await apiPost<ClassifyResponse>(`/classify/${cid}`);
       setRows(res.results);
       setStatus("done");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "분류 실패");
+    } catch (err) {
+      console.error("분류 실행 실패:", err);
+      setError("분류 실행에 실패했습니다. 서버 연결 상태를 확인한 뒤 다시 시도해 주세요.");
       setStatus("error");
     } finally {
-      clearInterval(poll);
+      if (poll) clearInterval(poll);
       setProgress(null);
     }
   }
@@ -150,16 +156,11 @@ export function SceneClassify({ onNext }: { onNext: () => void }) {
 
   return (
     <section>
-      <div className="flex items-center gap-2">
-        <span className="rounded-full bg-bg px-2.5 py-1 text-[11px] font-bold text-muted">
-          킬러씬 B
+      {status === "done" && (
+        <span className="inline-block rounded-full bg-brand-soft px-2.5 py-1 text-[11px] font-semibold text-brand-ink">
+          실제 분류 결과
         </span>
-        {status === "done" && (
-          <span className="rounded-full bg-brand-soft px-2.5 py-1 text-[11px] font-semibold text-brand-ink">
-            실제 분류 결과
-          </span>
-        )}
-      </div>
+      )}
       <h2 className="mt-3 text-[17px] font-bold leading-snug text-ink">
         비정형 전표를 AI가 읽고 분류했어요
       </h2>
@@ -184,7 +185,7 @@ export function SceneClassify({ onNext }: { onNext: () => void }) {
       {rows.length === 0 && status === "error" && (
         <div className="mt-6 rounded-2xl border border-dashed border-line bg-surface p-8 text-center">
           <div className="mb-3 rounded-xl bg-hitl/25 px-3 py-2 text-[12px] text-hitl-ink">
-            {error} · API 서버({BASE_URL})가 켜져 있는지 확인
+            {error}
           </div>
           <button
             type="button"

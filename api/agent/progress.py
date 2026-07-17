@@ -7,12 +7,7 @@ classify_vouchers 는 동기 호출(POST 응답까지 블로킹)이라, 진행 �
 import threading
 
 _lock = threading.Lock()
-_progress: dict[int, dict] = {}  # company_id -> {done, total, done_at: bool}
-
-
-def reset(company_id: int, total: int) -> None:
-    with _lock:
-        _progress[company_id] = {"done": 0, "total": total, "finished": total == 0}
+_progress: dict[int, dict] = {}  # company_id -> {done, total, finished: bool}
 
 
 def tick(company_id: int, done: int, total: int) -> None:

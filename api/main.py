@@ -1,7 +1,8 @@
-"""iM-Bridge FastAPI 앱 — v0.1 뼈대.
+"""iM-Bridge FastAPI 앱.
 
-지금은 헬스체크만. 8월 확장 시 이 앱에 라우터(/mock/hometax, 분류,
-오케스트레이터 등)를 추가한다 — 루프 코드 교체 없이 꽂기만.
+라우터: /mock(마이데이터), /trace(장면②), /classify(장면③), /pcaf(장면④),
+/agent(오케스트레이터), /scenario(데모 전환), /company(시연 기업 조회).
+8월 확장 시 라우터를 추가로 꽂기만 한다.
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,7 +10,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from api.db import get_engine
-from api.routers import agent, classify, mock, pcaf, scenario, trace
+from api.routers import agent, classify, company, mock, pcaf, scenario, trace
 
 app = FastAPI(title="iM-Bridge API", version="0.1.0")
 
@@ -33,6 +34,7 @@ app.include_router(classify.router)
 app.include_router(pcaf.router)
 app.include_router(agent.router)
 app.include_router(scenario.router)
+app.include_router(company.router)
 
 
 @app.get("/health")

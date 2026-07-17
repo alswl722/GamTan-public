@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { apiGet, apiPost, COMPANY_ID } from "@/lib/api";
+import { AGENT_RUN_TIMEOUT_MS, apiGet, apiPost, getCompanyId } from "@/lib/api";
 
 /** 장면 ② — 에이전트 트레이스 뷰. /trace/latest 실데이터만 사용(목업 없음). */
 
@@ -14,15 +14,16 @@ const STEP_ICON: Record<StepType, string> = {
   행동: "▶",
 };
 
-type Step = { type: StepType; tool?: string | null; message: string };
+type Step = { id: number; type: StepType; tool?: string | null; message: string };
 
 type TraceResponse = {
   session_id: string | null;
-  steps: { step_type: StepType; tool_name: string | null; message: string }[];
+  steps: { id: number; step_type: StepType; tool_name: string | null; message: string }[];
 };
 
 function mapSteps(res: TraceResponse): Step[] {
   return res.steps.map((s) => ({
+    id: s.id,
     type: s.step_type,
     tool: s.tool_name,
     message: s.message,
@@ -54,15 +55,28 @@ export function SceneTrace({
   const [allSteps, setAllStepsLocal] = useState<Step[]>(committedSteps);
   const [visible, setVisible] = useState(finished ? committedSteps.length : 0);
   const [running, setRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [scenarios, setScenarios] = useState<Scenario[]>([]);
   const [selected, setSelected] = useState("");
 
+  // 최신 스텝 목록을 ref로도 유지 — 실행 실패 시 폴링으로 모인 만큼을 커밋할 때 사용.
+  const stepsRef = useRef<Step[]>(committedSteps);
   function setAllSteps(updater: Step[] | ((prev: Step[]) => Step[])) {
     setAllStepsLocal((prev) => {
       const next = typeof updater === "function" ? updater(prev) : updater;
+      stepsRef.current = next;
       return next;
     });
   }
+
+  // 폴링 인터벌은 ref로 들고 언마운트 시 반드시 정리한다.
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const sessionRef = useRef<string | null>(null);
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, []);
 
   // 페이지 진입 시엔 예전 실행 결과를 불러오지 않는다 — 실행 전엔 화면에
   // 아무 스텝도 없어야 한다. 시나리오 드롭다운만 채워둔다.
@@ -74,50 +88,75 @@ export function SceneTrace({
         setScenarios(res.scenarios);
         setSelected(res.scenarios[0].name);
       })
-      .catch(() => {});
+      .catch((err) => {
+        if (alive) console.error("시나리오 목록 조회 실패:", err);
+      });
     return () => {
       alive = false;
     };
   }, []);
 
-  // 선택 시나리오를 로드(전표 리셋) → 에이전트 실행 → 트레이스 재조회
-  // 실행 중에는 /trace/latest를 짧게 폴링해 지금까지 쌓인 판단을 실시간으로 보여준다.
+  // 선택 시나리오를 로드(전표·트레이스 리셋)한 **다음에야** 폴링을 시작한다 —
+  // 리셋 전에 폴링하면 이전 실행의 트레이스가 새 실행 화면에 섞인다.
   // 폴링마다 목록을 통째로 교체하면 이미 노출된 스텝까지 처음부터 재생되므로,
-  // "새로 늘어난 스텝만" 뒤에 이어붙인다(visible 애니메이션은 새 스텝에만 적용).
+  // 같은 세션이면 "새로 늘어난 스텝만" 이어붙이고, 세션이 바뀌면 교체한다.
   async function runAgent() {
     setRunning(true);
+    setError(null);
     setAllSteps([]);
     setVisible(0);
     prevCountRef.current = 0;
+    sessionRef.current = null;
     onRunStateChange({ allSteps: [], finished: false });
 
-    const poll = setInterval(() => {
-      apiGet<TraceResponse>(`/trace/latest?company_id=${COMPANY_ID}`)
-        .then((res) => {
-          const next = mapSteps(res);
-          setAllSteps((prev) => (next.length > prev.length ? next : prev));
-        })
-        .catch(() => {});
-    }, 1000);
-
-    let finalSteps: Step[] = [];
+    let succeeded = false;
     try {
-      if (selected) await apiPost(`/scenario/${selected}/${COMPANY_ID}`);
-      await apiPost(`/agent/run/${COMPANY_ID}`);
-      const res = await apiGet<TraceResponse>(
-        `/trace/latest?company_id=${COMPANY_ID}`,
-      );
-      if (res.steps?.length) {
-        finalSteps = mapSteps(res);
-        setAllSteps(finalSteps);
+      const cid = await getCompanyId();
+      if (selected) await apiPost(`/scenario/${selected}/${cid}`);
+
+      pollRef.current = setInterval(() => {
+        apiGet<TraceResponse>(`/trace/latest?company_id=${cid}`)
+          .then((res) => {
+            const next = mapSteps(res);
+            if (res.session_id !== sessionRef.current) {
+              // 새 실행 세션 감지 — 길이 비교 없이 통째로 교체 + 애니메이션 리셋
+              sessionRef.current = res.session_id;
+              prevCountRef.current = 0;
+              setVisible(0);
+              setAllSteps(next);
+            } else {
+              setAllSteps((prev) => (next.length > prev.length ? next : prev));
+            }
+          })
+          .catch(() => {}); // 폴링 1회 실패는 다음 틱이 재시도 — 최종 성패는 아래서 판정
+      }, 1000);
+
+      await apiPost(`/agent/run/${cid}`, undefined, AGENT_RUN_TIMEOUT_MS);
+      const res = await apiGet<TraceResponse>(`/trace/latest?company_id=${cid}`);
+      if (res.steps.length > 0) {
+        // 빈 응답(동시 리셋 등)으로 폴링 누적분을 덮지 않는다
+        sessionRef.current = res.session_id;
+        setAllSteps(mapSteps(res));
       }
-    } catch {
-      /* 서버 미기동 등 — 있는 만큼만 표시 */
+      succeeded = true;
+    } catch (err) {
+      // 실패를 무음으로 삼키지 않는다 — 배너 표시 + 버튼은 재시도로 남는다
+      console.error("에이전트 실행 실패:", err);
+      const conflict = err instanceof Error && err.message.includes("409");
+      setError(
+        conflict
+          ? "이미 실행 중입니다 — 진행 중인 실행이 끝난 뒤 다시 시도해 주세요."
+          : "에이전트 실행에 실패했습니다. 서버 연결 상태를 확인한 뒤 다시 시도해 주세요.",
+      );
     } finally {
-      clearInterval(poll);
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
       setRunning(false);
-      // 실행 결과를 상위(owner 페이지)로 커밋 — 스텝을 이동했다 돌아와도 유지된다.
-      onRunStateChange({ allSteps: finalSteps, finished: true });
+      // 폴링으로 모인 만큼은 보존해 커밋 — 빈 배열로 덮지 않는다.
+      // finished는 성공 시에만 true — 실패 시 버튼이 '실행(재시도)'으로 남는다.
+      onRunStateChange({ allSteps: stepsRef.current, finished: succeeded });
     }
   }
 
@@ -192,7 +231,7 @@ export function SceneTrace({
             const last = i === allSteps.length - 1;
             return (
               <li
-                key={i}
+                key={step.id}
                 className="step-enter relative flex gap-3 pb-3.5 last:pb-0"
               >
                 {!last && (
@@ -230,6 +269,12 @@ export function SceneTrace({
             </li>
           )}
         </ol>
+      )}
+
+      {error && (
+        <div className="mt-4 rounded-xl bg-red-50 px-4 py-3 text-[12.5px] leading-relaxed text-red-600">
+          {error}
+        </div>
       )}
 
       <button
