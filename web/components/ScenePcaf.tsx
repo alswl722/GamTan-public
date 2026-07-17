@@ -250,7 +250,7 @@ export function ScenePcaf() {
             </span>
             {after.hitl_count > 0 && (
               <span className="rounded-md bg-hitl/25 px-2 py-0.5 font-semibold text-hitl-ink">
-                HITL {after.hitl_count}건
+                검토 예정 {after.hitl_count}건
               </span>
             )}
           </div>

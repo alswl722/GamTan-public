@@ -179,12 +179,13 @@ export function SceneTrace({
   }, [allSteps]);
 
   const steps = allSteps.slice(0, visible);
-  // "지금까지 받은 스텝을 다 보여줬다"와 "에이전트 실행 자체가 끝났다"는 다른 조건.
-  // running이 true인 동안은 스텝이 더 늘어날 수 있으므로, 실행이 완전히
-  // 끝나고(finished) 화면 애니메이션도 다 따라잡았을 때만 진짜 완료로 본다.
-  const done = finished && !running && visible >= allSteps.length && allSteps.length > 0;
+  // 데이터 완료(dataReady)와 "리빌 애니메이션이 다 따라잡았다"는 별개다.
+  // 버튼의 다음 단계 진행 여부는 데이터 완료에만 걸어야 한다 — 애니메이션이
+  // 폴링 속도를 못 따라가 몇 초 지연되는 동안 "에이전트 실행"으로 되돌아가
+  // 재실행을 유발하던 버그가 있었다. 화면 재생(visible)은 순수 연출로만 쓴다.
+  const dataReady = finished && !running && allSteps.length > 0;
 
-  const buttonLabel = done
+  const buttonLabel = dataReady
     ? "판단 근거 확인하러 가기"
     : running
       ? allSteps.length > 0
@@ -193,7 +194,7 @@ export function SceneTrace({
       : "에이전트 실행";
 
   function handleButtonClick() {
-    if (done) {
+    if (dataReady) {
       onNext();
     } else if (!running) {
       runAgent();
@@ -286,7 +287,7 @@ export function SceneTrace({
         {buttonLabel}
       </button>
 
-      {done && (
+      {dataReady && (
         <button
           type="button"
           onClick={runAgent}
