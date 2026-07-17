@@ -61,10 +61,7 @@ export default function OwnerPage() {
 
         <div className="mt-6 flex items-center justify-between">
           <div>
-            <span className="text-[11px] font-bold tracking-wide text-faint">
-              STEP {active + 1} / {STEPS.length}
-            </span>
-            <h1 className="mt-1 text-[21px] font-extrabold tracking-tight text-ink">
+            <h1 className="text-[21px] font-extrabold tracking-tight text-ink">
               ○○정밀 탄소 측정 여정
             </h1>
           </div>

@@ -121,6 +121,15 @@ function DistributionTrack({
   // 배출량이 적을수록 "상위" → 트랙은 진한(상위) → 연한(하위) 순으로 좌에서 우로 흐름
   const valuePct = Math.min(100, Math.max(0, ((value - min) / span) * 100));
 
+  // 마운트 시 0%에서 시작해 실제 위치로 스윽 슬라이드 — transition은 값이
+  // "변할 때"만 트리거되므로, 첫 페인트는 0%로 그린 뒤 다음 프레임에 목표
+  // 위치로 옮겨 애니메이션을 강제로 발생시킨다.
+  const [animatedPct, setAnimatedPct] = useState(0);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setAnimatedPct(valuePct));
+    return () => cancelAnimationFrame(id);
+  }, [valuePct]);
+
   return (
     <div className="mt-3">
       <div
@@ -131,8 +140,8 @@ function DistributionTrack({
         }}
       >
         <div
-          className="absolute -top-[7px] -translate-x-1/2"
-          style={{ left: `${valuePct}%` }}
+          className="absolute -top-[7px] -translate-x-1/2 transition-[left] duration-700 ease-out"
+          style={{ left: `${animatedPct}%` }}
         >
           <svg width="12" height="8" viewBox="0 0 12 8" fill="none">
             <path d="M6 8L0.5 0H11.5L6 8Z" fill="var(--color-ink)" />
@@ -183,13 +192,20 @@ export function ScenePcaf() {
             <button
               type="button"
               onClick={() => void load()}
-              className="mt-4 w-full rounded-2xl bg-brand py-4 text-[15.5px] font-bold text-white transition-colors hover:bg-brand-ink"
+              className="btn-cta mt-4 w-full rounded-2xl bg-brand py-4 text-[15.5px] font-bold text-white"
             >
               다시 시도
             </button>
           </>
         ) : (
-          <p className="mt-1 text-[13px] leading-relaxed text-muted">잠시만 기다려 주세요…</p>
+          <p className="mt-1 flex items-center gap-2 text-[13px] leading-relaxed text-muted">
+            잠시만 기다려 주세요…
+            <span className="flex gap-1">
+              <span className="dot-bounce h-1.5 w-1.5 rounded-full bg-brand [animation-delay:-0.3s]" />
+              <span className="dot-bounce h-1.5 w-1.5 rounded-full bg-brand [animation-delay:-0.15s]" />
+              <span className="dot-bounce h-1.5 w-1.5 rounded-full bg-brand" />
+            </span>
+          </p>
         )}
       </section>
     );

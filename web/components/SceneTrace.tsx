@@ -262,9 +262,9 @@ export function SceneTrace({
           {running && (
             <li className="flex items-center gap-2 pt-1 pl-7 text-[11.5px] text-faint">
               <span className="flex gap-1">
-                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-faint [animation-delay:-0.3s]" />
-                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-faint [animation-delay:-0.15s]" />
-                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-faint" />
+                <span className="dot-bounce h-2 w-2 rounded-full bg-brand [animation-delay:-0.3s]" />
+                <span className="dot-bounce h-2 w-2 rounded-full bg-brand [animation-delay:-0.15s]" />
+                <span className="dot-bounce h-2 w-2 rounded-full bg-brand" />
               </span>
               판단 중…
             </li>
@@ -282,7 +282,7 @@ export function SceneTrace({
         type="button"
         onClick={handleButtonClick}
         disabled={running}
-        className="mt-6 w-full rounded-2xl bg-brand py-4 text-[15.5px] font-bold text-white transition-colors hover:bg-brand-ink disabled:cursor-not-allowed disabled:opacity-60"
+        className="btn-cta mt-6 w-full rounded-2xl bg-brand py-4 text-[15.5px] font-bold text-white"
       >
         {buttonLabel}
       </button>

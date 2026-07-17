@@ -128,7 +128,7 @@ export function SceneConsent({ onNext }: { onNext: () => void }) {
           type="button"
           onClick={connect}
           disabled={!agreed}
-          className="mt-4 w-full rounded-2xl bg-brand py-4 text-[15.5px] font-bold text-white transition-colors hover:bg-brand-ink disabled:opacity-40"
+          className="btn-cta mt-4 w-full rounded-2xl bg-brand py-4 text-[15.5px] font-bold text-white"
         >
           동의하고 연동 시작
         </button>
@@ -253,7 +253,7 @@ export function SceneConsent({ onNext }: { onNext: () => void }) {
         <button
           type="button"
           onClick={onNext}
-          className="mt-6 w-full rounded-2xl bg-brand py-4 text-[15.5px] font-bold text-white transition-colors hover:bg-brand-ink"
+          className="btn-cta mt-6 w-full rounded-2xl bg-brand py-4 text-[15.5px] font-bold text-white"
         >
           연동 완료 · 다음으로 ({total}건)
         </button>
@@ -261,7 +261,7 @@ export function SceneConsent({ onNext }: { onNext: () => void }) {
         <button
           type="button"
           onClick={connect}
-          className="mt-6 w-full rounded-2xl bg-brand py-4 text-[15.5px] font-bold text-white transition-colors hover:bg-brand-ink"
+          className="btn-cta mt-6 w-full rounded-2xl bg-brand py-4 text-[15.5px] font-bold text-white"
         >
           다시 시도
         </button>

@@ -20,7 +20,7 @@ export default function RootLayout({
           <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-5">
             <Link href="/" className="flex items-center gap-2">
               <img src="/im-symbol.png" alt="iM Bank" className="h-6 w-auto" />
-              <span className="text-[15px] font-bold tracking-tight text-ink">
+              <span className="text-[20px] font-light tracking-tight text-ink">
                 감탄
               </span>
             </Link>
