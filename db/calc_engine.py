@@ -83,6 +83,9 @@ def index_emission_factors(rows) -> dict:
 _LPG_FUELS = ("LPG", "LPG(프로판)", "LPG(부탄)")
 # 전기·도시가스는 단가 역산보다 고지서 사용량 우선 → 수량 없으면 추정 대신 사람검토
 _QUANTITY_ONLY = ("전기", "도시가스")
+# "연료 종류를 특정 못 함" 센티넬 — 룰/LLM이 명시적으로 불명이라 표시한 경우.
+# 이건 계산 대상 아님(정상 스킵)이지만, 아래 '진짜 연료명인데 계수 미등록'과는 구분한다.
+_UNKNOWN_FUELS = ("불명", "연료종류 불명", "가스종류 불명", "없음", "산업가스", "")
 
 
 def compute_emission(item: ClassifiedItemInput, price_index: dict, factor_index: dict) -> dict:
@@ -102,10 +105,17 @@ def compute_emission(item: ClassifiedItemInput, price_index: dict, factor_index:
     if item.fuel_type in _LPG_FUELS:
         return _review("LPG(프로판/부탄·단위 구분) 자동계산 제외 — 사람 검토 필요")
 
-    # 3) 연료 불명 — 계수 인덱스에 없음(가스종류 불명 등)
+    # 3) 계수 인덱스에 없음 — 두 경우를 구분한다:
+    #    (a) 연료 불명 센티넬(가스종류 불명 등) → 애초에 계산 대상 아님, 정상 스킵
+    #    (b) 진짜 연료명인데 계수 미등록(등유·아세틸렌 등, 룰은 Scope1로 확정) →
+    #        조용히 배출량 0으로 빠지면 "Scope1인데 배출 0" 유령 데이터가 됨. HITL로.
     factor = factor_index.get((item.fuel_type, item.scope))
     if factor is None:
-        return _skip(f"배출계수 없음 — 연료 불명({item.fuel_type})")
+        if item.fuel_type in _UNKNOWN_FUELS:
+            return _skip(f"배출계수 없음 — 연료 불명({item.fuel_type})")
+        return _review(
+            f"배출계수 미등록 — '{item.fuel_type}' 계수를 회계 담당이 추가해야 함 (사람 검토)"
+        )
 
     # 4) 1순위 — 실측 수량이 있으면 그대로 사용 (spend 추정보다 정확 = PCAF 상위등급)
     if item.quantity and item.quantity > 0:

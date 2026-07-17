@@ -114,6 +114,25 @@ def test_quantity_only_without_qty_reviews(price_index, factor_index):
         assert res["emission_co2e"] == 0.0
 
 
+# ── 배출계수 미등록 연료(등유 등)는 조용히 스킵하지 않고 HITL로 ──
+def test_unregistered_factor_goes_to_review(price_index, factor_index):
+    """룰이 Scope1로 확정했지만 계수 테이블에 없는 진짜 연료(등유 등)는
+    배출량 0으로 조용히 빠지면 안 되고(유령 데이터), 사람 검토로 넘어가야 한다."""
+    item = ClassifiedItemInput(fuel_type="등유", scope=1, amount_krw=500_000, year=YEAR, month=3)
+    res = compute_emission(item, price_index, factor_index)
+    assert res["needs_review"] is True
+    assert res["emission_co2e"] == 0.0
+    assert "미등록" in res["reason"]
+
+
+# ── 연료 불명 센티넬은 계산 대상 아님 → 정상 스킵(HITL 아님) ─────
+def test_unknown_fuel_sentinel_skips_not_review(price_index, factor_index):
+    item = ClassifiedItemInput(fuel_type="가스종류 불명", scope=1, amount_krw=300_000, year=YEAR, month=3)
+    res = compute_emission(item, price_index, factor_index)
+    assert res["skipped"] is True
+    assert res["needs_review"] is False
+
+
 # ── 2순위 추정 경로: 경유·휘발유는 수량 없으면 금액÷월별단가 ────
 def test_spend_fallback_diesel(price_index, factor_index):
     item = ClassifiedItemInput(fuel_type="경유", scope=1, amount_krw=700_000, year=YEAR, month=7)
