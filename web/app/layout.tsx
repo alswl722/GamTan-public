@@ -3,7 +3,7 @@ import Link from "next/link";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "감탄 — 전표를 읽는 탄소 측정 에이전트",
+  title: "IM 뱅크 - 탄소 측정 에이전트",
   description:
     "세금계산서·전기 고지서를 AI 에이전트가 읽어 중소기업 탄소 배출량을 자동 산정",
 };
@@ -20,7 +20,10 @@ export default function RootLayout({
           <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-5">
             <Link href="/" className="flex items-center gap-2">
               <img src="/im-symbol.png" alt="iM Bank" className="h-6 w-auto" />
-              <span className="text-[20px] font-light tracking-tight text-ink">
+              <span
+                className="text-[22px] tracking-tight text-ink"
+                style={{ fontFamily: "MaruBuri, var(--font-sans)" }}
+              >
                 감탄
               </span>
             </Link>
