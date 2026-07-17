@@ -165,7 +165,7 @@ export function SceneClassify({ onNext }: { onNext: () => void }) {
         비정형 전표를 AI가 읽고 분류했어요
       </h2>
       <p className="mt-1 text-[13px] leading-relaxed text-muted">
-        신뢰도가 낮으면 스스로 사람에게 넘겨요. 카드를 눌러 근거를 확인하세요.
+        신뢰도가 낮으면 스스로 은행 담당자에게 넘겨요. 카드를 눌러 근거를 확인하세요.
       </p>
 
       {rows.length === 0 && status === "loading" && (
@@ -177,7 +177,7 @@ export function SceneClassify({ onNext }: { onNext: () => void }) {
               : "분류 준비 중…"}
           </p>
           <p className="mt-1 text-[12px] text-faint">
-            룰 매칭 → 애매한 건만 Gemini 병렬 호출 → 저신뢰 건은 HITL로 이관
+            룰 매칭 → 애매한 건만 Gemini 병렬 호출 → 저신뢰 건은 은행 담당자에게 전달
           </p>
         </div>
       )}
@@ -202,7 +202,7 @@ export function SceneClassify({ onNext }: { onNext: () => void }) {
           {hitlCount > 0 && (
             <div className="mt-4 flex items-center gap-2 rounded-xl bg-hitl/20 px-3.5 py-2.5 text-[12px] font-semibold text-hitl-ink">
               <span className="h-1.5 w-1.5 rounded-full bg-hitl-ink" />
-              {hitlCount}건은 신뢰도가 낮아 사람 검토(HITL)로 넘겼어요
+              {hitlCount}건은 신뢰도가 낮아 은행 담당자가 검토할 예정이에요
             </div>
           )}
           <div
@@ -229,7 +229,7 @@ export function SceneClassify({ onNext }: { onNext: () => void }) {
                         </span>
                         {r.hitl && (
                           <span className="rounded-md bg-hitl-ink px-1.5 py-0.5 text-[10px] font-bold text-white">
-                            HITL
+                            검토 예정
                           </span>
                         )}
                       </div>
