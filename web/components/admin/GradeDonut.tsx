@@ -4,24 +4,11 @@
 
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import type { PortfolioResponse } from "@/lib/admin-types";
+import { GRADE_COLORS, GRADE_LABELS } from "@/lib/grade-colors";
 
 // 등급은 순서형 → 브랜드 민트 단일 색조의 순차 램프 (진함=실측 상위, 흐림=추정 하위).
 // 인접 슬라이스 구분은 도넛 흰 간격(paddingAngle) + 범례 직접 라벨이 담당.
-const GRADE_COLORS: Record<string, string> = {
-  "1": "#006b5b",
-  "2": "#00967f",
-  "3": "#00c7a9",
-  "4": "#66ddc8",
-  "5": "#a8ead8",
-};
-
-const GRADE_LABELS: Record<string, string> = {
-  "1": "1등급",
-  "2": "2등급",
-  "3": "3등급",
-  "4": "4등급",
-  "5": "5등급",
-};
+// 색상표는 lib/grade-colors — 우대금리 후보(RateCandidates) 등 다른 등급 표시와 공유.
 
 function DonutChart({
   title,
@@ -49,8 +36,8 @@ function DonutChart({
   return (
     <div className="flex flex-1 flex-col gap-3 min-w-0">
       <div>
-        <h3 className="text-sm font-semibold text-[#222222]">{title}</h3>
-        <p className="mt-0.5 text-xs text-[#9ca3af]">{subtitle}</p>
+        <h3 className="text-sm font-semibold text-ink">{title}</h3>
+        <p className="mt-0.5 text-xs text-faint">{subtitle}</p>
       </div>
 
       <div className="relative h-52">
@@ -74,7 +61,7 @@ function DonutChart({
               formatter={(value) => [`${value}개사`, "기업 수"]}
               contentStyle={{
                 borderRadius: "10px",
-                border: "1px solid #e8eaed",
+                border: "1px solid var(--color-line)",
                 fontSize: "12px",
                 fontFamily: "inherit",
               }}
@@ -83,9 +70,9 @@ function DonutChart({
         </ResponsiveContainer>
 
         <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-          <span className="text-[11px] leading-none text-[#9ca3af]">{centerLabel}</span>
-          <span className="mt-1 text-xl font-bold leading-none text-[#222222]">{centerValue}</span>
-          <span className="mt-0.5 text-[10px] text-[#9ca3af]">{total}개사</span>
+          <span className="text-[11px] leading-none text-faint">{centerLabel}</span>
+          <span className="mt-1 text-xl font-bold leading-none text-ink">{centerValue}</span>
+          <span className="mt-0.5 text-[10px] text-faint">{total}개사</span>
         </div>
       </div>
 
@@ -96,10 +83,10 @@ function DonutChart({
               className="inline-block h-2.5 w-2.5 flex-shrink-0 rounded-sm"
               style={{ backgroundColor: GRADE_COLORS[entry.grade] ?? "#e8eaed" }}
             />
-            <span className="text-xs text-[#666666]">
+            <span className="text-xs text-muted">
               {GRADE_LABELS[entry.grade] ?? `${entry.grade}등급`}
             </span>
-            <span className="text-xs font-semibold text-[#222222]">{entry.value}개사</span>
+            <span className="text-xs font-semibold text-ink">{entry.value}개사</span>
           </div>
         ))}
       </div>
@@ -117,21 +104,21 @@ export function GradeDonut({ data }: { data: PortfolioResponse }) {
     totalCompanies > 0 ? Math.round((afterGoodCount / totalCompanies) * 100) : 0;
 
   return (
-    <div className="flex h-full flex-col rounded-2xl border border-[#e8eaed] bg-white p-6 shadow-card">
+    <div className="flex h-full flex-col rounded-md border border-line bg-surface p-6 shadow-card">
       <div className="mb-2 flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-base font-semibold text-[#222222]">PCAF 등급 분포 비교</h2>
-          <p className="mt-0.5 text-xs text-[#9ca3af]">도입 전 vs 도입 후</p>
+          <h2 className="text-base font-semibold text-ink">PCAF 등급 분포 비교</h2>
+          <p className="mt-0.5 text-xs text-faint">도입 전 vs 도입 후</p>
         </div>
-        <div className="flex-shrink-0 rounded-lg border border-[#00c7a9]/30 bg-[#e3faf5] px-3 py-1.5 text-center">
-          <span className="block text-[11px] leading-tight text-[#666666]">AI 도입 전 5등급 100%</span>
-          <span className="mt-0.5 block text-[11px] font-bold leading-tight text-[#00967f]">
+        <div className="flex-shrink-0 rounded-md border border-brand/30 bg-brand-soft px-3 py-1.5 text-center">
+          <span className="block text-[11px] leading-tight text-muted">AI 도입 전 5등급 100%</span>
+          <span className="mt-0.5 block text-[11px] font-bold leading-tight text-brand-ink">
             → 도입 후 3등급 이상 {afterGoodPct}%
           </span>
         </div>
       </div>
 
-      <div className="mb-6 h-px bg-[#e8eaed]" />
+      <div className="mb-6 h-px bg-line" />
 
       <div className="flex flex-1 flex-col gap-8 sm:flex-row">
         <DonutChart
@@ -144,9 +131,9 @@ export function GradeDonut({ data }: { data: PortfolioResponse }) {
         />
 
         <div className="hidden flex-col items-center justify-center px-2 sm:flex">
-          <div className="w-px flex-1 bg-[#e8eaed]" />
-          <span className="my-2 text-xl text-[#9ca3af]">→</span>
-          <div className="w-px flex-1 bg-[#e8eaed]" />
+          <div className="w-px flex-1 bg-line" />
+          <span className="my-2 text-xl text-faint">→</span>
+          <div className="w-px flex-1 bg-line" />
         </div>
 
         <DonutChart
@@ -159,15 +146,15 @@ export function GradeDonut({ data }: { data: PortfolioResponse }) {
         />
       </div>
 
-      <div className="mt-5 flex flex-wrap gap-x-5 gap-y-2 border-t border-[#e8eaed] pt-4">
+      <div className="mt-5 flex flex-wrap gap-x-5 gap-y-2 border-t border-line pt-4">
         {[
-          { grade: "2·3", color: "#00967f", desc: "전표 실측 → 신뢰도 높음" },
-          { grade: "4", color: "#66ddc8", desc: "부분 측정" },
-          { grade: "5", color: "#a8ead8", desc: "매출·업종 평균 추정" },
+          { grade: "2·3", color: GRADE_COLORS["2"], desc: "전표 실측 → 신뢰도 높음" },
+          { grade: "4", color: GRADE_COLORS["4"], desc: "부분 측정" },
+          { grade: "5", color: GRADE_COLORS["5"], desc: "매출·업종 평균 추정" },
         ].map((item) => (
           <div key={item.grade} className="flex items-center gap-2">
             <span className="h-2.5 w-2.5 flex-shrink-0 rounded-sm" style={{ backgroundColor: item.color }} />
-            <span className="text-xs text-[#666666]">
+            <span className="text-xs text-muted">
               <span className="font-semibold">{item.grade}등급</span> — {item.desc}
             </span>
           </div>

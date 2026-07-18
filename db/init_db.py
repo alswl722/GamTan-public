@@ -32,6 +32,17 @@ def create_tables(engine):
     print("[OK] 테이블 8개 생성 완료")
 
 
+def migrate_columns(engine):
+    """create_all은 신규 테이블만 만들고 기존 테이블 컬럼 추가는 반영하지 않는다.
+    Alembic 없이 운영하는 소규모 스키마라 멱등 ALTER로 직접 보정."""
+    with engine.connect() as conn:
+        conn.execute(text(
+            "ALTER TABLE classifications ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ"
+        ))
+        conn.commit()
+    print("[OK] 컬럼 마이그레이션 확인 완료 (classifications.reviewed_at)")
+
+
 def seed_emission_factors(session: Session):
     """배출계수 — 회계 Excel 값을 항상 우선 반영 (기존 데이터 삭제 후 재적재).
     Excel 없거나 파싱 실패 시에만 하드코딩 폴백 (환경부 인벤토리 2023, source에 '하드코딩' 명시)."""
@@ -170,6 +181,7 @@ def main():
     engine = create_engine(os.getenv("DATABASE_URL"))
     drop_legacy_tables(engine)
     create_tables(engine)
+    migrate_columns(engine)
 
     with Session(engine) as session:
         # 배출계수·환산단가: Excel 값이 있으면 항상 최신 값으로 교체 (skip 없음)

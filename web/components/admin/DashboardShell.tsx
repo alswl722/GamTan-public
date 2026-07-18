@@ -27,7 +27,7 @@ export interface DashboardShellProps {
 }
 
 /** 상단 KPI 스트립 — 한 줄, 헤더에 고정. */
-function KpiStripCompact({ data }: { data: PortfolioResponse }) {
+function KpiStripCompact({ data, onReviewClick }: { data: PortfolioResponse; onReviewClick: () => void }) {
   const fmt = (n: number) => n.toLocaleString("ko-KR", { maximumFractionDigits: 1 });
   const items = [
     { label: "Scope 1", value: fmt(data.scope1_total), unit: "tCO₂e" },
@@ -35,25 +35,36 @@ function KpiStripCompact({ data }: { data: PortfolioResponse }) {
     { label: "합계", value: fmt(data.total), unit: "tCO₂e", accent: true },
     { label: "PCAF 가중평균 등급", value: data.avg_grade != null ? `${data.avg_grade}등급` : "—", unit: "" },
     { label: "실측 커버리지", value: `${data.measured_coverage_pct}%`, unit: "" },
-    { label: "검토 대기", value: String(data.hitl_total), unit: "건", accent: true },
   ];
 
   return (
-    <div className="-mx-1 flex flex-wrap items-center gap-y-2 divide-x divide-[#e8eaed]">
+    <div className="-mx-1 flex flex-wrap items-start gap-y-3 divide-x divide-line">
       {items.map((item) => (
-        <div key={item.label} className="flex items-baseline gap-1.5 px-4 first:pl-0">
-          <span className="whitespace-nowrap text-xs text-[#9ca3af]">{item.label}</span>
-          <span
-            className={cn(
-              "text-sm font-bold tabular-nums",
-              item.accent ? "text-[#00967f]" : "text-[#222222]",
-            )}
-          >
-            {item.value}
+        <div key={item.label} className="flex flex-col gap-0.5 px-4 first:pl-0">
+          <span className="whitespace-nowrap text-xs text-faint">{item.label}</span>
+          <span className="flex items-baseline gap-1">
+            <span
+              className={cn(
+                "text-base font-bold leading-none tabular-nums",
+                item.accent ? "text-brand-ink" : "text-ink",
+              )}
+            >
+              {item.value}
+            </span>
+            {item.unit && <span className="text-xs text-faint">{item.unit}</span>}
           </span>
-          {item.unit && <span className="text-[11px] text-[#9ca3af]">{item.unit}</span>}
         </div>
       ))}
+
+      <button type="button" onClick={onReviewClick} className="flex flex-col gap-0.5 px-4 text-left">
+        <span className="whitespace-nowrap text-xs text-hitl-ink">검토 대기</span>
+        <span className="flex items-baseline gap-1">
+          <span className="text-base font-bold leading-none tabular-nums text-hitl-ink underline decoration-hitl-ink/40 underline-offset-4">
+            {data.hitl_total}
+          </span>
+          <span className="text-xs text-faint">건</span>
+        </span>
+      </button>
     </div>
   );
 }
@@ -63,25 +74,25 @@ export function DashboardShell({ portfolio, hitlQueue, traceRuns }: DashboardShe
 
   return (
     // 루트 레이아웃에 이미 h-16 헤더가 있으므로 그만큼 뺀 높이로 고정 — 페이지 스크롤 없음
-    <div className="flex h-[calc(100vh-4rem)] flex-col overflow-hidden bg-[#f7f8fa]">
+    <div className="flex h-[calc(100vh-4rem)] flex-col overflow-hidden bg-bg">
       {/* 고정 헤더: KPI 스트립 + 탭 바 */}
-      <div className="flex-shrink-0 bg-white">
-        <div className="border-b border-[#e8eaed] px-6 py-3">
-          <KpiStripCompact data={portfolio} />
+      <div className="flex-shrink-0 bg-surface">
+        <div className="border-b border-line px-6 py-3">
+          <KpiStripCompact data={portfolio} onReviewClick={() => setActiveTab("hitl")} />
         </div>
-        <div className="flex h-11 items-end gap-1 border-b border-[#e8eaed] px-6">
+        <div className="flex h-11 items-end gap-1 border-b border-line px-6">
           {TABS.map((tab) => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
               className={cn(
                 "relative h-11 whitespace-nowrap px-5 text-sm font-medium transition-colors focus:outline-none",
-                activeTab === tab.id ? "text-[#00967f]" : "text-[#666666] hover:text-[#222222]",
+                activeTab === tab.id ? "text-brand-ink" : "text-muted hover:text-ink",
               )}
             >
               {tab.label}
               {activeTab === tab.id && (
-                <span className="absolute bottom-0 left-0 right-0 h-0.5 rounded-t-full bg-[#00c7a9]" />
+                <span className="absolute bottom-0 left-0 right-0 h-0.5 rounded-t-full bg-brand" />
               )}
             </button>
           ))}
