@@ -72,6 +72,7 @@ class Classification(Base):
     mixed_item = Column(Integer, default=0)           # 1 = "외 1종" 혼합 품목
     status = Column(String(20), default="auto")       # auto | review_required | confirmed
     classified_at = Column(DateTime(timezone=True), default=now)
+    reviewed_at = Column(DateTime(timezone=True))      # 담당자 확정/반려 시각 (review_required 건만)
 
     voucher = relationship("Voucher", back_populates="classification")
 

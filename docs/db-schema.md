@@ -50,6 +50,7 @@
 | mixed_item | INTEGER | default 0 | 1 = "외 1종" 혼합 |
 | status | VARCHAR(20) | default 'auto' | auto · review_required · confirmed |
 | classified_at | TIMESTAMPTZ | default now | |
+| reviewed_at | TIMESTAMPTZ | | 담당자 확정/반려 시각 (review_required 건만 기록) |
 
 ## 4. `emission_factors` — 배출계수 (환경부·GIR, 회계 담당 관리)
 | 컬럼 | 타입 | 키/제약 | 설명 |
@@ -127,3 +128,7 @@
 ## 참고
 - 정본은 `db/models.py`. 초기화는 `python -m db.init_db`(테이블 생성 + 마스터 데이터 시드), 시연 데이터는 `python -m db.seed_mock`.
 - `init_db`는 확정 스키마 외 잉여 테이블(`classification_results`, `monthly_unit_prices`, `portfolio_summaries`, `hitl_queue`)을 매 실행 시 DROP한다.
+- `Base.metadata.create_all`은 신규 테이블만 생성하고 기존 테이블의 컬럼 추가는 반영하지 않는다(Alembic 미도입). 기존 테이블에 컬럼을 추가할 때는 `db/init_db.py`의 `migrate_columns()`에 멱등 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`를 추가해야 한다 — `classifications.reviewed_at`이 그 예시.
+
+## 변경 이력
+- 2026-07: `classifications.reviewed_at` 추가 — 관리자 대시보드 "검토 대기" 집계(오늘 확정/반려 건수)를 위해 담당자 확정/반려 시각을 기록. `PATCH /admin/classifications/{id}/confirm|reject`, `edit_classification`에서 기록.

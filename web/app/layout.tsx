@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import "./globals.css";
+import { SiteHeader } from "@/components/SiteHeader";
 
 export const metadata: Metadata = {
   title: "IM 뱅크 - 탄소 측정 에이전트",
@@ -16,33 +16,7 @@ export default function RootLayout({
   return (
     <html lang="ko" className="h-full antialiased">
       <body className="min-h-full flex flex-col bg-bg">
-        <header className="sticky top-0 z-20 border-b border-line/70 bg-surface/80 backdrop-blur-md">
-          <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-5">
-            <Link href="/" className="flex items-center gap-2">
-              <img src="/im-symbol.png" alt="iM Bank" className="h-6 w-auto" />
-              <span
-                className="text-[22px] tracking-tight text-ink"
-                style={{ fontFamily: "MaruBuri, var(--font-sans)" }}
-              >
-                감탄
-              </span>
-            </Link>
-            <nav className="flex items-center gap-1 text-[13.5px]">
-              <Link
-                href="/owner"
-                className="rounded-full px-3.5 py-2 font-semibold text-muted transition-colors hover:bg-brand-soft hover:text-brand-ink"
-              >
-                사장님 화면
-              </Link>
-              <Link
-                href="/admin"
-                className="rounded-full px-3.5 py-2 font-semibold text-muted transition-colors hover:bg-brand-soft hover:text-brand-ink"
-              >
-                관리자
-              </Link>
-            </nav>
-          </div>
-        </header>
+        <SiteHeader />
         <main className="flex w-full flex-1 flex-col">{children}</main>
       </body>
     </html>

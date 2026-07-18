@@ -25,6 +25,7 @@ export interface PortfolioResponse {
   avg_grade: number | null;
   measured_coverage_pct: number;
   hitl_total: number;
+  reviewed_today: number;
   companies: Company[];
 }
 

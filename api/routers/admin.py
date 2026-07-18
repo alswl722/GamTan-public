@@ -11,6 +11,8 @@
 사람이 최종 확정하는 HITL 마감만 담당 — 금융분야 AI 가이드라인의 보조수단성 구현.
 모든 담당자 조치는 evidence 에 감사 로그로 남긴다(설명가능성 원칙).
 """
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import func, select
@@ -73,6 +75,7 @@ def confirm_classification(voucher_id: int, session: Session = Depends(get_sessi
     """
     obj = _load_reviewable(session, voucher_id)
     obj.status = "confirmed"
+    obj.reviewed_at = datetime.now(timezone.utc)
     _append_evidence(obj, "담당자 확정(수정 없음)")
     session.commit()
     return {"voucher_id": voucher_id, "status": obj.status}
@@ -106,6 +109,7 @@ def edit_classification(
     recalculated = _recalculate(session, obj)
 
     obj.status = "confirmed"
+    obj.reviewed_at = datetime.now(timezone.utc)
     _append_evidence(
         obj,
         f"담당자 수정: {', '.join(changes)}" if changes else "담당자 확정(수정 없음)",
@@ -168,6 +172,7 @@ def reject_classification(voucher_id: int, session: Session = Depends(get_sessio
     """
     obj = _load_reviewable(session, voucher_id)
     obj.status = "rejected"
+    obj.reviewed_at = datetime.now(timezone.utc)
     _append_evidence(obj, "담당자 반려 — 분류 신뢰 불가, 집계 제외")
     session.commit()
     return {"voucher_id": voucher_id, "status": obj.status}

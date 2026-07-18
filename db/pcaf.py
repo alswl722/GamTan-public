@@ -12,7 +12,9 @@
 
 Before(기준선)은 항상 5등급 — 전표 없이 매출/업종 통계만 대입하는 기존 방식.
 """
-from sqlalchemy import select
+from datetime import datetime, timezone
+
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from api.queries import get_coverage, get_distribution
@@ -71,8 +73,17 @@ def portfolio_summary(session: Session) -> dict:
         # 실측 커버리지 — 전체 배출량 중 실제 전표로 산정된 비율(나머지는 결손월 업종평균 보정)
         "measured_coverage_pct": round(measured_total / total * 100, 1) if total else 0.0,
         "hitl_total": sum(c["hitl_count"] for c in per_company),
+        "reviewed_today": _reviewed_today(session),
         "companies": per_company,
     }
+
+
+def _reviewed_today(session: Session) -> int:
+    """오늘(UTC 자정 이후) 담당자가 확정/반려로 마감한 건수 — 메인 대시보드 진행 현황용."""
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    return session.execute(
+        select(func.count(Classification.id)).where(Classification.reviewed_at >= today_start)
+    ).scalar_one()
 
 # get_coverage 의 연료 대분류 → Scope 매핑 (결손 보정 시 어느 Scope 에 얹을지)
 _FUEL_BUCKET_SCOPE = {"전기": 2, "가스": 1, "경유/유류": 1}

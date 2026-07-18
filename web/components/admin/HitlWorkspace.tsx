@@ -18,9 +18,9 @@ function ConfidenceBadge({ value }: { value: number }) {
     <span
       className={cn(
         "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold",
-        isLow && "bg-[#d1b5ff]/30 text-[#7a4fd9]",
-        isMid && "bg-amber-100 text-amber-700",
-        !isLow && !isMid && "bg-[#e3faf5] text-[#00967f]",
+        isLow && "bg-hitl/30 text-hitl-ink",
+        isMid && "bg-hitl/15 text-hitl-ink",
+        !isLow && !isMid && "bg-brand-soft text-brand-ink",
       )}
     >
       신뢰도 {value.toFixed(2)}
@@ -30,7 +30,7 @@ function ConfidenceBadge({ value }: { value: number }) {
 
 function EditedBadge() {
   return (
-    <span className="rounded-full bg-[#00c7a9]/15 px-1.5 py-0.5 text-[10px] font-semibold text-[#00967f]">
+    <span className="rounded-full bg-brand/15 px-1.5 py-0.5 text-[10px] font-semibold text-brand-ink">
       수정됨
     </span>
   );
@@ -42,8 +42,8 @@ function MethodBadge({ method }: { method: "rule" | "llm" }) {
       className={cn(
         "rounded border px-1.5 py-0.5 text-[10px] font-medium",
         method === "rule"
-          ? "border-slate-200 bg-slate-50 text-slate-500"
-          : "border-blue-100 bg-blue-50 text-blue-500",
+          ? "border-line bg-bg text-muted"
+          : "border-scope2/40 bg-scope2/15 text-ink",
       )}
     >
       {method === "rule" ? "규칙" : "AI"}
@@ -96,36 +96,36 @@ function DetailPane({ item, onDone }: DetailPaneProps) {
   const handleReject = () => run(() => rejectVoucher(item.voucher_id));
 
   const selectCls =
-    "w-full rounded-lg border border-[#e8eaed] bg-white px-3 py-2 text-sm text-[#222222] transition-colors focus:border-[#00c7a9] focus:outline-none focus:ring-2 focus:ring-[#00c7a9]";
+    "w-full rounded-md border border-line bg-surface px-3 py-2 text-sm text-ink transition-colors focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand";
 
   return (
     <div className="flex h-full flex-col gap-5 overflow-y-auto pr-1">
       {/* 1. 전표 원문 */}
       <section>
-        <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-[#9ca3af]">전표 원문</h4>
-        <div className="space-y-2 rounded-xl border border-[#e8eaed] bg-[#f7f8fa] p-4">
+        <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-faint">전표 원문</h4>
+        <div className="space-y-2 rounded-md border border-line bg-bg p-4">
           <div className="flex items-center gap-2">
-            <span className="text-lg font-bold text-[#222222]">{item.raw}</span>
+            <span className="text-lg font-bold text-ink">{item.raw}</span>
             <MethodBadge method={item.method} />
           </div>
           <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
             <div>
-              <span className="text-[#9ca3af]">공급가액</span>
-              <span className="ml-2 font-semibold text-[#222222]">
+              <span className="text-faint">공급가액</span>
+              <span className="ml-2 font-semibold text-ink">
                 {item.amount_krw != null ? `${item.amount_krw.toLocaleString("ko-KR")}원` : "—"}
               </span>
             </div>
             <div>
-              <span className="text-[#9ca3af]">발행월</span>
-              <span className="ml-2 font-semibold text-[#222222]">{item.month}월</span>
+              <span className="text-faint">발행월</span>
+              <span className="ml-2 font-semibold text-ink">{item.month}월</span>
             </div>
             <div>
-              <span className="text-[#9ca3af]">기업</span>
-              <span className="ml-2 font-semibold text-[#222222]">{item.company_name}</span>
+              <span className="text-faint">기업</span>
+              <span className="ml-2 font-semibold text-ink">{item.company_name}</span>
             </div>
             <div>
-              <span className="text-[#9ca3af]">출처</span>
-              <span className="ml-2 font-semibold text-[#222222]">
+              <span className="text-faint">출처</span>
+              <span className="ml-2 font-semibold text-ink">
                 {item.scope === 2 ? "kepco" : "hometax"}
               </span>
             </div>
@@ -135,19 +135,19 @@ function DetailPane({ item, onDone }: DetailPaneProps) {
 
       {/* 2. 검토가 필요한 이유 */}
       <section>
-        <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-[#9ca3af]">
+        <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-faint">
           검토가 필요한 이유
         </h4>
-        <div className="space-y-2 rounded-xl border border-[#d1b5ff]/60 bg-[#d1b5ff]/10 p-4">
+        <div className="space-y-2 rounded-md border border-hitl/60 bg-hitl/10 p-4">
           <div className="flex items-center gap-2">
             <ConfidenceBadge value={item.confidence} />
             <MethodBadge method={item.method} />
             {item.method === "rule" && (
-              <span className="text-[11px] text-[#9ca3af]">규칙 분류 경로 적용</span>
+              <span className="text-[11px] text-faint">규칙 분류 경로 적용</span>
             )}
           </div>
-          <p className="text-sm leading-relaxed text-[#222222]">{item.evidence ?? "판단 근거 없음"}</p>
-          <div className="mt-1 text-xs font-medium text-[#7a4fd9]">
+          <p className="text-sm leading-relaxed text-ink">{item.evidence ?? "판단 근거 없음"}</p>
+          <div className="mt-1 text-xs font-medium text-hitl-ink">
             {item.confidence < 0.5
               ? "→ 담당자 확인 필요: 연료종류 또는 활동 유형 불확실"
               : "→ 검토 권장: 경계값 근처의 분류"}
@@ -157,12 +157,12 @@ function DetailPane({ item, onDone }: DetailPaneProps) {
 
       {/* 3. AI 분류 결과 (수정 가능) */}
       <section>
-        <h4 className="mb-3 text-xs font-semibold uppercase tracking-wider text-[#9ca3af]">
+        <h4 className="mb-3 text-xs font-semibold uppercase tracking-wider text-faint">
           AI 분류 결과 (수정 가능)
         </h4>
         <div className="grid grid-cols-3 gap-3">
           <div>
-            <label className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-[#666666]">
+            <label className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted">
               Scope
               {scopeDirty && <EditedBadge />}
             </label>
@@ -173,7 +173,7 @@ function DetailPane({ item, onDone }: DetailPaneProps) {
             </select>
           </div>
           <div>
-            <label className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-[#666666]">
+            <label className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted">
               카테고리
               {categoryDirty && <EditedBadge />}
             </label>
@@ -187,7 +187,7 @@ function DetailPane({ item, onDone }: DetailPaneProps) {
             </select>
           </div>
           <div>
-            <label className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-[#666666]">
+            <label className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted">
               연료 종류
               {fuelDirty && <EditedBadge />}
             </label>
@@ -202,36 +202,36 @@ function DetailPane({ item, onDone }: DetailPaneProps) {
           </div>
         </div>
         <div className="mt-2 flex items-center gap-2">
-          <span className="text-xs text-[#9ca3af]">공급가액</span>
-          <span className="text-sm font-semibold text-[#222222]">
+          <span className="text-xs text-faint">공급가액</span>
+          <span className="text-sm font-semibold text-ink">
             {item.amount_krw != null ? `${item.amount_krw.toLocaleString("ko-KR")}원` : "—"}
           </span>
-          <span className="text-xs text-[#9ca3af]">(읽기 전용)</span>
+          <span className="text-xs text-faint">(읽기 전용)</span>
         </div>
       </section>
 
       {/* 4. Actions */}
-      <section className="mt-auto border-t border-[#e8eaed] pt-4">
+      <section className="mt-auto border-t border-line pt-4">
         {error && (
-          <div className="mb-2 rounded-lg bg-red-50 px-3 py-2 text-[12px] text-red-600">{error}</div>
+          <div className="mb-2 rounded-md bg-hitl/20 px-3 py-2 text-[12px] text-hitl-ink">{error}</div>
         )}
         <div className="flex flex-wrap gap-2">
           <button
             onClick={handleConfirm}
             disabled={busy}
-            className="min-w-[120px] flex-1 rounded-lg bg-[#00c7a9] px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#00967f] disabled:opacity-60"
+            className="min-w-[120px] flex-1 rounded-md bg-brand px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-brand-ink disabled:opacity-60"
           >
             {busy ? "처리 중…" : hasEdits ? "수정 확정" : "확정"}
           </button>
           <button
             onClick={handleReject}
             disabled={busy}
-            className="min-w-[100px] flex-1 rounded-lg border border-[#e8eaed] bg-white px-4 py-2.5 text-sm font-semibold text-[#666666] transition-colors hover:bg-slate-50 disabled:opacity-60"
+            className="min-w-[100px] flex-1 rounded-md border border-line bg-surface px-4 py-2.5 text-sm font-semibold text-muted transition-colors hover:bg-bg disabled:opacity-60"
           >
             반려
           </button>
         </div>
-        <p className="mt-3 text-[11px] leading-relaxed text-[#9ca3af]">
+        <p className="mt-3 text-[11px] leading-relaxed text-faint">
           확정 시 &quot;담당자 검토 완료&quot; 이력이 기록됩니다. AI는 이 값을 단독으로 변경할 수 없습니다 —
           보조수단성 원칙 (AI = 1차 선별, 담당자 = 최종 판단).
         </p>
@@ -240,26 +240,135 @@ function DetailPane({ item, onDone }: DetailPaneProps) {
   );
 }
 
+interface CompanySummary {
+  name: string;
+  count: number;
+  minConfidence: number;
+}
+
+function CompanyList({
+  companies,
+  selected,
+  onSelect,
+  collapsed,
+  onToggleCollapsed,
+}: {
+  companies: CompanySummary[];
+  selected: string | null;
+  onSelect: (name: string) => void;
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
+}) {
+  if (collapsed) {
+    return (
+      <div className="flex w-14 flex-shrink-0 flex-col overflow-y-auto border-r border-line bg-bg">
+        <button
+          onClick={onToggleCollapsed}
+          className="flex items-center justify-center border-b border-line py-3 text-faint transition-colors hover:text-ink"
+          aria-label="기업 목록 펼치기"
+          title="기업 목록 펼치기"
+        >
+          »
+        </button>
+        {companies.map((c) => (
+          <button
+            key={c.name}
+            onClick={() => onSelect(c.name)}
+            title={`${c.name} (${c.count}건)`}
+            className={cn(
+              "relative flex flex-col items-center gap-1 border-b border-line py-3 transition-colors",
+              selected === c.name ? "border-l-2 border-l-brand bg-brand-soft" : "hover:bg-line/40",
+            )}
+          >
+            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-line text-[11px] font-semibold text-ink">
+              {c.name.slice(0, 1)}
+            </span>
+            <span className="text-[10px] font-semibold text-muted">{c.count}</span>
+            {c.minConfidence < 0.5 && (
+              <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-hitl-ink" />
+            )}
+          </button>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="w-56 flex-shrink-0 overflow-y-auto border-r border-line bg-bg">
+      <div className="flex items-center justify-between border-b border-line px-4 py-3">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-faint">기업</h3>
+        <button
+          onClick={onToggleCollapsed}
+          className="text-faint transition-colors hover:text-ink"
+          aria-label="기업 목록 접기"
+          title="기업 목록 접기"
+        >
+          «
+        </button>
+      </div>
+      {companies.map((c) => (
+        <button
+          key={c.name}
+          onClick={() => onSelect(c.name)}
+          className={cn(
+            "flex w-full items-center justify-between gap-2 border-b border-line px-4 py-3 text-left transition-colors",
+            selected === c.name ? "border-l-2 border-l-brand bg-brand-soft" : "hover:bg-line/40",
+          )}
+        >
+          <div className="min-w-0">
+            <div className="truncate text-sm font-medium text-ink">{c.name}</div>
+            {c.minConfidence < 0.5 && (
+              <div className="mt-0.5 text-[10px] font-medium text-hitl-ink">긴급 건 포함</div>
+            )}
+          </div>
+          <span className="flex-shrink-0 rounded-full bg-line px-2 py-0.5 text-[11px] font-semibold text-muted">
+            {c.count}
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function HitlWorkspace({ initialQueue }: { initialQueue: HitlItem[] }) {
   const [queue, setQueue] = useState<HitlItem[]>(initialQueue);
+  const [selectedCompany, setSelectedCompany] = useState<string | null>(
+    initialQueue[0]?.company_name ?? null,
+  );
   const [selectedId, setSelectedId] = useState<number | null>(initialQueue[0]?.voucher_id ?? null);
-  const [filterCompany, setFilterCompany] = useState("전체");
   const [filterFuel, setFilterFuel] = useState("전체");
   const [filterConfidence, setFilterConfidence] = useState("전체");
   const [sortBy, setSortBy] = useState<"confidence" | "month">("confidence");
+  const [companyListCollapsed, setCompanyListCollapsed] = useState(false);
 
-  const companies = useMemo(
-    () => ["전체", ...Array.from(new Set(queue.map((i) => i.company_name)))],
-    [queue],
-  );
+  const companies = useMemo<CompanySummary[]>(() => {
+    const byCompany = new Map<string, HitlItem[]>();
+    for (const item of queue) {
+      const list = byCompany.get(item.company_name) ?? [];
+      list.push(item);
+      byCompany.set(item.company_name, list);
+    }
+    return Array.from(byCompany.entries())
+      .map(([name, items]) => ({
+        name,
+        count: items.length,
+        minConfidence: Math.min(...items.map((i) => i.confidence)),
+      }))
+      .sort((a, b) => a.minConfidence - b.minConfidence);
+  }, [queue]);
+
   const fuels = useMemo(
     () => ["전체", ...Array.from(new Set(initialQueue.map((i) => i.fuel ?? "미분류")))],
     [initialQueue],
   );
 
+  const companyQueue = useMemo(
+    () => queue.filter((i) => i.company_name === selectedCompany),
+    [queue, selectedCompany],
+  );
+
   const filtered = useMemo(() => {
-    let list = [...queue];
-    if (filterCompany !== "전체") list = list.filter((i) => i.company_name === filterCompany);
+    let list = [...companyQueue];
     if (filterFuel !== "전체") list = list.filter((i) => (i.fuel ?? "미분류") === filterFuel);
     if (filterConfidence === "0.0–0.5") list = list.filter((i) => i.confidence < 0.5);
     if (filterConfidence === "0.5–0.65")
@@ -267,36 +376,45 @@ export function HitlWorkspace({ initialQueue }: { initialQueue: HitlItem[] }) {
     if (filterConfidence === "0.65+") list = list.filter((i) => i.confidence >= 0.65);
     list.sort((a, b) => (sortBy === "confidence" ? a.confidence - b.confidence : a.month - b.month));
     return list;
-  }, [queue, filterCompany, filterFuel, filterConfidence, sortBy]);
+  }, [companyQueue, filterFuel, filterConfidence, sortBy]);
 
   const selected = queue.find((i) => i.voucher_id === selectedId) ?? null;
+
+  function selectCompany(name: string) {
+    setSelectedCompany(name);
+    const first = queue.find((i) => i.company_name === name);
+    setSelectedId(first?.voucher_id ?? null);
+  }
 
   function removeItem(voucherId: number) {
     setQueue((prev) => {
       const next = prev.filter((i) => i.voucher_id !== voucherId);
-      setSelectedId((cur) => (cur === voucherId ? next[0]?.voucher_id ?? null : cur));
+      setSelectedId((cur) => {
+        if (cur !== voucherId) return cur;
+        const nextInCompany = next.find((i) => i.company_name === selectedCompany);
+        if (nextInCompany) return nextInCompany.voucher_id;
+        // 해당 기업 큐가 비면 다음 기업으로 자동 이동
+        const nextCompany = next[0];
+        setSelectedCompany(nextCompany?.company_name ?? null);
+        return nextCompany?.voucher_id ?? null;
+      });
       return next;
     });
   }
 
   const selectCls =
-    "rounded-lg border border-[#e8eaed] bg-white px-2.5 py-1.5 text-xs text-[#666666] transition-colors focus:outline-none focus:ring-1 focus:ring-[#00c7a9]";
+    "rounded-md border border-line bg-surface px-2.5 py-1.5 text-xs text-muted transition-colors focus:outline-none focus:ring-1 focus:ring-brand";
 
   return (
-    <div className="flex h-full flex-col overflow-hidden rounded-2xl border border-[#e8eaed] bg-white shadow-card">
-      <div className="flex items-center justify-between gap-4 border-b border-[#e8eaed] px-6 py-4">
+    <div className="flex h-full flex-col overflow-hidden rounded-md border border-line bg-surface shadow-card">
+      <div className="flex items-center justify-between gap-4 border-b border-line px-6 py-4">
         <div>
-          <h2 className="text-base font-semibold text-[#222222]">담당자 검토</h2>
-          <p className="mt-0.5 text-xs text-[#9ca3af]">담당자 검토 대기 {queue.length}건</p>
+          <h2 className="text-base font-semibold text-ink">담당자 검토</h2>
+          <p className="mt-0.5 text-xs text-faint">
+            담당자 검토 대기 {queue.length}건 · {companies.length}개 기업
+          </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <select className={selectCls} value={filterCompany} onChange={(e) => setFilterCompany(e.target.value)}>
-            {companies.map((c) => (
-              <option key={c} value={c}>
-                {c === "전체" ? "기업 전체" : c}
-              </option>
-            ))}
-          </select>
           <select className={selectCls} value={filterFuel} onChange={(e) => setFilterFuel(e.target.value)}>
             {fuels.map((f) => (
               <option key={f} value={f}>
@@ -326,9 +444,17 @@ export function HitlWorkspace({ initialQueue }: { initialQueue: HitlItem[] }) {
       </div>
 
       <div className="flex min-h-0 flex-1">
-        <div className="w-72 flex-shrink-0 overflow-y-auto border-r border-[#e8eaed] bg-[#f7f8fa] xl:w-80">
+        <CompanyList
+          companies={companies}
+          selected={selectedCompany}
+          onSelect={selectCompany}
+          collapsed={companyListCollapsed}
+          onToggleCollapsed={() => setCompanyListCollapsed((v) => !v)}
+        />
+
+        <div className="w-72 flex-shrink-0 overflow-y-auto border-r border-line bg-bg xl:w-80">
           {filtered.length === 0 ? (
-            <div className="flex h-40 flex-col items-center justify-center text-sm text-[#9ca3af]">
+            <div className="flex h-40 flex-col items-center justify-center text-sm text-faint">
               검토 항목 없음
             </div>
           ) : (
@@ -337,23 +463,20 @@ export function HitlWorkspace({ initialQueue }: { initialQueue: HitlItem[] }) {
                 key={item.voucher_id}
                 onClick={() => setSelectedId(item.voucher_id)}
                 className={cn(
-                  "w-full border-b border-[#e8eaed] px-4 py-3.5 text-left transition-colors",
+                  "w-full border-b border-line px-4 py-3.5 text-left transition-colors",
                   selectedId === item.voucher_id
-                    ? "border-l-2 border-l-[#00c7a9] bg-[#e3faf5]"
-                    : "hover:bg-white",
+                    ? "border-l-2 border-l-brand bg-brand-soft"
+                    : "hover:bg-bg",
                 )}
               >
                 <div className="mb-1 flex items-center justify-between gap-2">
-                  <span className="truncate text-xs font-semibold text-[#222222]">
-                    {item.company_name}
-                  </span>
+                  <span className="truncate text-sm font-semibold text-ink">{item.raw}</span>
                   <ConfidenceBadge value={item.confidence} />
                 </div>
-                <div className="truncate text-sm font-medium text-[#222222]">{item.raw}</div>
-                <div className="mt-1 flex items-center gap-2">
-                  <span className="text-xs text-[#9ca3af]">{item.fuel || "미분류"}</span>
-                  <span className="text-xs text-[#9ca3af]">·</span>
-                  <span className="text-xs text-[#9ca3af]">{item.month}월</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-faint">{item.fuel || "미분류"}</span>
+                  <span className="text-xs text-faint">·</span>
+                  <span className="text-xs text-faint">{item.month}월</span>
                   <MethodBadge method={item.method} />
                 </div>
               </button>
@@ -367,7 +490,7 @@ export function HitlWorkspace({ initialQueue }: { initialQueue: HitlItem[] }) {
               <DetailPane key={selected.voucher_id} item={selected} onDone={removeItem} />
             </div>
           ) : (
-            <div className="flex h-full items-center justify-center text-sm text-[#9ca3af]">
+            <div className="flex h-full items-center justify-center text-sm text-faint">
               좌측에서 항목을 선택하세요
             </div>
           )}

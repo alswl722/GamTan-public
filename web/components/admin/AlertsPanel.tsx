@@ -6,25 +6,25 @@ import type { AlertItem } from "@/lib/admin-types";
 import { cn } from "@/lib/utils";
 
 const SEVERITY_MAP = {
-  high: { label: "긴급", cls: "bg-red-50 text-red-600 border-red-200" },
-  medium: { label: "주의", cls: "bg-amber-50 text-amber-600 border-amber-200" },
-  low: { label: "정보", cls: "bg-slate-50 text-slate-500 border-slate-200" },
+  high: { label: "긴급", cls: "bg-hitl/20 text-hitl-ink border-hitl/40" },
+  medium: { label: "주의", cls: "bg-bg text-muted border-line" },
+  low: { label: "정보", cls: "bg-bg text-faint border-line" },
 };
 
 export function AlertsPanel({ alerts }: { alerts: AlertItem[] }) {
   return (
-    <div className="flex h-full flex-col rounded-2xl border border-[#e8eaed] bg-white shadow-card">
-      <div className="flex items-center justify-between border-b border-[#e8eaed] px-5 py-4">
+    <div className="flex h-full flex-col rounded-md border border-line bg-surface shadow-card">
+      <div className="flex items-center justify-between border-b border-line px-5 py-4">
         <div>
-          <h2 className="text-sm font-semibold text-[#222222]">이상 신호 알림</h2>
-          <p className="mt-0.5 text-xs text-[#9ca3af]">여신 리스크 조기 경보</p>
+          <h2 className="text-sm font-semibold text-ink">이상 신호 알림</h2>
+          <p className="mt-0.5 text-xs text-faint">여신 리스크 조기 경보</p>
         </div>
-        <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-600">
+        <span className="rounded-full border border-line bg-bg px-2 py-1 text-[11px] font-semibold text-muted">
           예시 · 결선 확장
         </span>
       </div>
 
-      <div className="min-h-0 flex-1 divide-y divide-[#e8eaed] overflow-y-auto">
+      <div className="min-h-0 flex-1 divide-y divide-line overflow-y-auto">
         {alerts.map((a) => {
           const sev = SEVERITY_MAP[a.severity];
           return (
@@ -38,18 +38,18 @@ export function AlertsPanel({ alerts }: { alerts: AlertItem[] }) {
                 {sev.label}
               </span>
               <div className="min-w-0">
-                <span className="text-xs font-semibold text-[#222222]">{a.company_name}</span>
-                <span className="ml-1.5 text-xs leading-relaxed text-[#666666]">{a.message}</span>
+                <span className="text-xs font-semibold text-ink">{a.company_name}</span>
+                <span className="ml-1.5 text-xs leading-relaxed text-muted">{a.message}</span>
               </div>
             </div>
           );
         })}
       </div>
 
-      <div className="border-t border-[#e8eaed] bg-amber-50/30 px-5 py-3">
-        <p className="text-[11px] text-[#9ca3af]">
+      <div className="border-t border-line bg-bg px-5 py-3">
+        <p className="text-[11px] text-faint">
           예시 데이터입니다. 실제 엔드포인트{" "}
-          <code className="rounded bg-slate-100 px-1 font-mono">GET /admin/alerts</code> 연결 후 반영됩니다.
+          <code className="rounded bg-line px-1 font-mono">GET /admin/alerts</code> 연결 후 반영됩니다.
         </p>
       </div>
     </div>
