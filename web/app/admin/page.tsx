@@ -1,30 +1,64 @@
+"use client";
+
 /**
  * 관리자 대시보드 — 은행 ESG·여신 담당자 화면.
- * 실데이터 3패널: 포트폴리오 집계 / HITL 검토 큐(확정) / 트레이스 뷰(읽기 전용).
- * (검증 오차율 배지는 트랙 A/B 검증 후 결선에서 확장 — CLAUDE.md §9)
+ * 실데이터: 포트폴리오 집계·담당자 검토 큐·실행 이력 (백엔드 실제 응답).
+ * 목업(예시): 이상 신호·우대금리·검증 오차율 (결선 확장 — 화면에 '예시' 표식).
  */
-import { PortfolioPanel } from "@/components/admin/PortfolioPanel";
-import { HitlQueue } from "@/components/admin/HitlQueue";
-import { AdminTracePanel } from "@/components/admin/AdminTracePanel";
+import { useCallback, useEffect, useState } from "react";
+import { getHitl, getPortfolio, getTraceRuns } from "@/lib/admin-data";
+import type { HitlItem, PortfolioResponse, TraceRunItem } from "@/lib/admin-types";
+import { DashboardShell } from "@/components/admin/DashboardShell";
+
+type Data = { portfolio: PortfolioResponse; hitlQueue: HitlItem[]; traceRuns: TraceRunItem[] };
 
 export default function AdminPage() {
-  return (
-    <div className="mx-auto w-full max-w-5xl px-5 py-8">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold tracking-tight">관리자 대시보드</h1>
-        <p className="mt-1 text-sm text-muted">은행 ESG·여신 담당자용 집계 화면</p>
-      </div>
+  const [data, setData] = useState<Data | null>(null);
+  const [error, setError] = useState(false);
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        {/* 좌: 포트폴리오 집계 (넓게) */}
-        <div className="lg:row-span-2">
-          <PortfolioPanel />
+  const load = useCallback(() => {
+    setError(false);
+    setData(null);
+    Promise.all([getPortfolio(), getHitl(), getTraceRuns()])
+      .then(([portfolio, hitlQueue, traceRuns]) => setData({ portfolio, hitlQueue, traceRuns }))
+      .catch((err) => {
+        console.error("대시보드 데이터 조회 실패:", err);
+        setError(true);
+      });
+  }, []);
+
+  useEffect(load, [load]);
+
+  if (error) {
+    return (
+      <div className="mx-auto grid max-w-md flex-1 place-items-center px-5">
+        <div className="text-center">
+          <div className="mb-3 rounded-xl bg-hitl/20 px-4 py-3 text-sm text-hitl-ink">
+            대시보드 데이터를 불러오지 못했습니다. 서버 연결을 확인해 주세요.
+          </div>
+          <button
+            type="button"
+            onClick={load}
+            className="rounded-xl bg-brand px-5 py-2.5 text-sm font-bold text-white hover:bg-brand-ink"
+          >
+            다시 시도
+          </button>
         </div>
-        {/* 우상: HITL 큐 */}
-        <HitlQueue />
-        {/* 우하: 트레이스 패널 */}
-        <AdminTracePanel />
       </div>
-    </div>
+    );
+  }
+
+  if (!data) {
+    return (
+      <div className="grid flex-1 place-items-center text-sm text-muted">대시보드 불러오는 중…</div>
+    );
+  }
+
+  return (
+    <DashboardShell
+      portfolio={data.portfolio}
+      hitlQueue={data.hitlQueue}
+      traceRuns={data.traceRuns}
+    />
   );
 }

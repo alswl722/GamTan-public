@@ -30,6 +30,8 @@ def portfolio_summary(session: Session) -> dict:
     grade_dist = {g: 0 for g in range(1, 6)}
     per_company = []
     s1_total = s2_total = 0.0
+    grade_weight = 0.0        # Σ(등급 × 배출량) — 배출가중 평균등급용
+    measured_total = 0.0      # 전표 실측분 (결손월 업종평균 보정분 제외)
 
     for co in companies:
         summ = company_pcaf_summary(session, co.id)
@@ -41,6 +43,8 @@ def portfolio_summary(session: Session) -> dict:
         grade_dist[grade] = grade_dist.get(grade, 0) + 1
         s1_total += s1
         s2_total += s2
+        grade_weight += grade * (s1 + s2)
+        measured_total += (after or {}).get("measured_tco2e", 0.0) or 0.0
         per_company.append({
             "company_id": co.id,
             "company_name": co.name,
@@ -53,12 +57,19 @@ def portfolio_summary(session: Session) -> dict:
             "hitl_count": (after or {}).get("hitl_count", 0),
         })
 
+    total = s1_total + s2_total
     return {
         "company_count": len(companies),
         "scope1_total": round(s1_total, 2),
         "scope2_total": round(s2_total, 2),
-        "total": round(s1_total + s2_total, 2),
-        "grade_distribution": grade_dist,        # {등급: 기업수}
+        "total": round(total, 2),
+        "grade_distribution": grade_dist,        # {등급: 기업수} — 도입 후(실측)
+        # 도입 전 기준선은 정의상 전 기업 5등급 (매출·업종 통계 대입) — 대시보드 Before/After용
+        "before_distribution": {g: (len(companies) if g == 5 else 0) for g in range(1, 6)},
+        # 배출가중 평균등급 — 큰 배출원의 데이터 품질이 포트폴리오 품질을 좌우하므로 건수평균 아님
+        "avg_grade": round(grade_weight / total, 1) if total else None,
+        # 실측 커버리지 — 전체 배출량 중 실제 전표로 산정된 비율(나머지는 결손월 업종평균 보정)
+        "measured_coverage_pct": round(measured_total / total * 100, 1) if total else 0.0,
         "hitl_total": sum(c["hitl_count"] for c in per_company),
         "companies": per_company,
     }
@@ -118,7 +129,11 @@ def _after_measured(session, company_id, dist1, dist2) -> dict | None:
         )
         .all()
     )
-    scored = [(c, v) for c, v in rows if c.scope in (1, 2) and c.emission_co2e]
+    # 담당자가 반려한 건(status='rejected')은 분류를 신뢰할 수 없다는 판정이므로 집계 제외
+    scored = [
+        (c, v) for c, v in rows
+        if c.scope in (1, 2) and c.emission_co2e and c.status != "rejected"
+    ]
     hitl_count = sum(1 for c, v in rows if c.status == "review_required")
     if not scored:
         return None
