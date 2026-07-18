@@ -2,7 +2,7 @@
 
 // 실API: GET /admin/traces (실행 이력 목록) + GET /trace/{session_id} (드릴다운 스텝)
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { getTraceSteps } from "@/lib/admin-data";
 import type { TraceRunItem, TraceStep } from "@/lib/admin-types";
 import { cn } from "@/lib/utils";
@@ -181,22 +181,77 @@ function DrillDownModal({ run, onClose }: { run: TraceRunItem; onClose: () => vo
 
 export function TraceHistory({ runs }: { runs: TraceRunItem[] }) {
   const [selected, setSelected] = useState<TraceRunItem | null>(null);
+  // 기간 필터 — 담당자 검토의 필터 행과 같은 위치(헤더 우측)에 배치
+  const [fromTime, setFromTime] = useState("");
+  const [toTime, setToTime] = useState("");
+
+  const filtered = useMemo(() => {
+    if (!fromTime && !toTime) return runs;
+    const from = fromTime ? new Date(fromTime).getTime() : null;
+    const to = toTime ? new Date(toTime).getTime() : null;
+    return runs.filter((r) => {
+      if (!r.ran_at) return true; // 시각 미상 실행은 필터로 숨기지 않는다
+      const t = new Date(r.ran_at).getTime();
+      if (from !== null && t < from) return false;
+      if (to !== null && t > to) return false;
+      return true;
+    });
+  }, [runs, fromTime, toTime]);
+
+  const inputCls =
+    "rounded-lg border border-[#e8eaed] bg-white px-2.5 py-1.5 text-xs text-[#666666] transition-colors focus:outline-none focus:ring-1 focus:ring-[#00c7a9]";
 
   return (
     <>
       <div className="flex h-full flex-col overflow-hidden rounded-2xl border border-[#e8eaed] bg-white shadow-card">
-        <div className="flex items-center justify-between border-b border-[#e8eaed] px-6 py-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#e8eaed] px-6 py-4">
           <div>
             <h2 className="text-base font-semibold text-[#222222]">트레이스 실행 이력</h2>
             <p className="mt-0.5 text-xs text-[#9ca3af]">에이전트 실행 기록 — 행 클릭 시 단계 드릴다운</p>
           </div>
-          <span className="text-xs text-[#9ca3af]">총 {runs.length}건</span>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-1.5 text-xs text-[#9ca3af]">
+              시작
+              <input
+                type="datetime-local"
+                className={inputCls}
+                value={fromTime}
+                onChange={(e) => setFromTime(e.target.value)}
+              />
+            </label>
+            <label className="flex items-center gap-1.5 text-xs text-[#9ca3af]">
+              종료
+              <input
+                type="datetime-local"
+                className={inputCls}
+                value={toTime}
+                onChange={(e) => setToTime(e.target.value)}
+              />
+            </label>
+            {(fromTime || toTime) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setFromTime("");
+                  setToTime("");
+                }}
+                className="rounded-lg border border-[#e8eaed] px-2.5 py-1.5 text-xs font-medium text-[#666666] transition-colors hover:text-[#222222]"
+              >
+                초기화
+              </button>
+            )}
+            <span className="text-xs text-[#9ca3af]">
+              {filtered.length === runs.length
+                ? `총 ${runs.length}건`
+                : `${filtered.length}건 / 총 ${runs.length}건`}
+            </span>
+          </div>
         </div>
 
         <div className="min-h-0 flex-1 overflow-auto">
-          {runs.length === 0 ? (
+          {filtered.length === 0 ? (
             <div className="flex h-40 items-center justify-center text-sm text-[#9ca3af]">
-              실행 이력이 없습니다
+              {runs.length === 0 ? "실행 이력이 없습니다" : "선택한 기간에 실행 이력이 없습니다"}
             </div>
           ) : (
             <table className="w-full text-sm">
@@ -213,7 +268,7 @@ export function TraceHistory({ runs }: { runs: TraceRunItem[] }) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#e8eaed]">
-                {runs.map((run) => (
+                {filtered.map((run) => (
                   <tr
                     key={run.session_id}
                     onClick={() => setSelected(run)}

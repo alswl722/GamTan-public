@@ -5,20 +5,22 @@
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import type { PortfolioResponse } from "@/lib/admin-types";
 
+// 등급은 순서형 → 브랜드 민트 단일 색조의 순차 램프 (진함=실측 상위, 흐림=추정 하위).
+// 인접 슬라이스 구분은 도넛 흰 간격(paddingAngle) + 범례 직접 라벨이 담당.
 const GRADE_COLORS: Record<string, string> = {
-  "1": "#e2f15e", // lime — 최우수 (rare)
-  "2": "#00c7a9", // brand mint — 양호
-  "3": "#53e1e5", // scope2 teal — 양호
-  "4": "#9ca3af", // faint/neutral — 중립
-  "5": "#d1b5ff", // hitl purple — 경고
+  "1": "#006b5b",
+  "2": "#00967f",
+  "3": "#00c7a9",
+  "4": "#66ddc8",
+  "5": "#a8ead8",
 };
 
 const GRADE_LABELS: Record<string, string> = {
-  "1": "1등급 (최우수)",
-  "2": "2등급 (양호)",
-  "3": "3등급 (양호)",
-  "4": "4등급 (중립)",
-  "5": "5등급 (경고)",
+  "1": "1등급",
+  "2": "2등급",
+  "3": "3등급",
+  "4": "4등급",
+  "5": "5등급",
 };
 
 function DonutChart({
@@ -159,16 +161,15 @@ export function GradeDonut({ data }: { data: PortfolioResponse }) {
 
       <div className="mt-5 flex flex-wrap gap-x-5 gap-y-2 border-t border-[#e8eaed] pt-4">
         {[
-          { grade: "2·3", label: "양호", color: "#00c7a9", desc: "전표 실측 → 신뢰도 높음" },
-          { grade: "4", label: "중립", color: "#9ca3af", desc: "부분 측정" },
-          { grade: "5", label: "경고", color: "#d1b5ff", desc: "매출·업종 평균 추정" },
+          { grade: "2·3", color: "#00967f", desc: "전표 실측 → 신뢰도 높음" },
+          { grade: "4", color: "#66ddc8", desc: "부분 측정" },
+          { grade: "5", color: "#a8ead8", desc: "매출·업종 평균 추정" },
         ].map((item) => (
           <div key={item.grade} className="flex items-center gap-2">
             <span className="h-2.5 w-2.5 flex-shrink-0 rounded-sm" style={{ backgroundColor: item.color }} />
             <span className="text-xs text-[#666666]">
-              <span className="font-semibold">{item.grade}등급</span> — {item.label}
+              <span className="font-semibold">{item.grade}등급</span> — {item.desc}
             </span>
-            <span className="text-[11px] text-[#9ca3af]">({item.desc})</span>
           </div>
         ))}
       </div>
