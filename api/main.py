@@ -1,7 +1,8 @@
 """iM-Bridge FastAPI 앱.
 
 라우터: /mock(마이데이터), /trace(장면②), /classify(장면③), /pcaf(장면④),
-/agent(오케스트레이터), /scenario(데모 전환), /company(시연 기업 조회).
+/agent(오케스트레이터), /scenario(데모 전환), /company(시연 기업 조회),
+/admin(관리자 대시보드 — 포트폴리오 집계·HITL 큐).
 8월 확장 시 라우터를 추가로 꽂기만 한다.
 """
 from fastapi import FastAPI
@@ -10,7 +11,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from api.db import get_engine
-from api.routers import agent, classify, company, mock, pcaf, scenario, trace
+from api.routers import admin, agent, classify, company, mock, pcaf, scenario, trace
 
 app = FastAPI(title="iM-Bridge API", version="0.1.0")
 
@@ -35,6 +36,7 @@ app.include_router(pcaf.router)
 app.include_router(agent.router)
 app.include_router(scenario.router)
 app.include_router(company.router)
+app.include_router(admin.router)
 
 
 @app.get("/health")

@@ -106,6 +106,42 @@ def get_classifications(session: Session, company_id: int) -> list[dict]:
     ]
 
 
+def get_hitl_queue(session: Session) -> list[dict]:
+    """전 기업의 HITL 대기 건(status='review_required') — 관리자 검토 큐.
+
+    은행 담당자가 여러 기업의 저신뢰 분류를 한 화면에서 확인·확정한다.
+    (데모는 시연 기업 1곳이지만 쿼리는 기업 무관 — 결선 포트폴리오로 그대로 확장.)
+    정렬: 기업 → 월 → 발행일.
+    """
+    from db.models import Company
+
+    stmt = (
+        select(Classification, Voucher, Company)
+        .join(Voucher, Classification.voucher_id == Voucher.id)
+        .join(Company, Voucher.company_id == Company.id)
+        .where(Classification.status == "review_required")
+        .order_by(Company.id, Voucher.month, Voucher.issue_date)
+    )
+    rows = session.execute(stmt).all()
+    return [
+        {
+            "voucher_id": v.id,
+            "company_id": co.id,
+            "company_name": co.name,
+            "raw": v.item_description,
+            "scope": c.scope,
+            "category": c.category,
+            "fuel": c.fuel_type,
+            "amount_krw": int(c.amount_krw) if c.amount_krw is not None else None,
+            "confidence": c.confidence,
+            "evidence": c.evidence,
+            "method": c.method,
+            "month": v.month,
+        }
+        for c, v, co in rows
+    ]
+
+
 def get_distribution(session: Session, industry_code: str, scope: int) -> dict | None:
     stmt = select(IndustryDistribution).where(
         IndustryDistribution.industry_code == industry_code,
