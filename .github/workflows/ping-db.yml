@@ -1,0 +1,34 @@
+name: Supabase ping (무료 티어 pause 방지)
+
+on:
+  schedule:
+    - cron: "0 1 * * *"   # 매일 KST 10:00 (UTC 01:00)
+  workflow_dispatch:       # 수동 실행 가능
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: DB 핑
+        run: |
+          python3 -c "
+          import urllib.parse, urllib.request, ssl
+
+          url = '${{ secrets.DATABASE_URL }}'
+          # psycopg2 없이 pg wire protocol 없이 간단히 requests로 안 되므로
+          # psycopg2-binary 설치 후 SELECT 1
+          "
+
+      - name: psycopg2로 SELECT 1
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          pip install psycopg2-binary --quiet
+          python3 -c "
+          import os, psycopg2
+          conn = psycopg2.connect(os.environ['DATABASE_URL'])
+          cur = conn.cursor()
+          cur.execute('SELECT 1')
+          print('Supabase 핑 성공:', cur.fetchone())
+          conn.close()
+          "

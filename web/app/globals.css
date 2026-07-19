@@ -1,0 +1,144 @@
+/* Pretendard — 토스 계열 서비스가 쓰는 한글 웹폰트, variable 버전 CDN */
+@import url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css");
+@import "tailwindcss";
+
+/* 마루부리 — 로고("감탄") 전용. 명조 계열의 부드러운 인상을 로고에만 준다. */
+@font-face {
+  font-family: "MaruBuri";
+  src: url("/MaruBuri-Light.otf") format("opentype");
+  font-weight: 300;
+  font-display: swap;
+}
+
+/* ==========================================================================
+   iM-Bridge 디자인 토큰 (v0.2 — 토스 스타일 리디자인)
+   컬러는 iM뱅크 공식 브랜드 가이드 값 그대로 사용 (Primary/Secondary/로고타입 그레이).
+   Tailwind v4 @theme — 여기 정의한 color 토큰은 bg / text / border 유틸로 생성됨.
+   ========================================================================== */
+@theme {
+  /* Primary — iM Mint → iM Lime. 포인트로만 쓴다 (전 화면 유일한 강조축) */
+  --color-brand: #00c7a9; /* iM Mint */
+  --color-brand-ink: #00967f; /* hover/진한 텍스트용 (Mint 다크 배리언트) */
+  --color-brand-soft: #e3faf5; /* 배경 틴트 */
+  --color-lime: #e2f15e; /* iM Lime */
+
+  /* 중립 — iM Gray 축. 화면 대부분은 이 축만으로 구성 */
+  --color-bg: #f7f8fa;
+  --color-surface: #ffffff;
+  --color-ink: #222222;
+  --color-muted: #666666; /* iM Gray */
+  --color-faint: #9ca3af;
+  --color-line: #e8eaed;
+
+  /* 의미색 — Secondary 팔레트를 도메인 구분이 필요한 곳에만 배정 (그 외 강조는 전부 brand) */
+  --color-scope1: #7db5ff; /* iM Blue — 직접배출(연소) */
+  --color-scope2: #53e1e5; /* iM Light Blue — 간접배출(전기) */
+  --color-hitl: #d1b5ff; /* iM Purple — 검토필요 경고 */
+  --color-hitl-ink: #7a4fd9; /* HITL 텍스트용 다크 배리언트 (연보라는 텍스트 대비 부족) */
+
+  --font-sans: "Pretendard Variable", Pretendard, system-ui, -apple-system,
+    "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --font-logo: "MaruBuri", "Pretendard Variable", serif; /* 로고("감탄") 전용 */
+
+  --shadow-card: 0 1px 2px rgba(23, 24, 28, 0.04), 0 8px 24px -12px rgba(23, 24, 28, 0.08);
+  --shadow-float: 0 12px 32px -8px rgba(0, 150, 127, 0.18);
+}
+
+html {
+  color-scheme: light;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  letter-spacing: -0.011em;
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* 스텝 전환 — 슬라이드 + 페이드 */
+@keyframes step-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.step-enter {
+  animation: step-in 0.38s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* 페이지 최초 로드 시 순차 등장 — 아래→위로 확실하게 떠오르도록 step-in보다
+   이동거리를 크게. animation-delay로 오케스트레이션하므로 backwards로 지연
+   구간 동안 시작 상태(투명+아래)를 유지해야 깜빡임이 없다. */
+@keyframes hero-in {
+  from {
+    opacity: 0;
+    transform: translateY(28px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.hero-enter {
+  animation-name: hero-in;
+  animation-duration: 0.7s;
+  animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  animation-fill-mode: backwards;
+}
+
+/* 주 CTA 버튼 공용 — 랜딩 페이지 CTA와 동일한 "살짝 떠오르는" 인터랙션을
+   /owner 마법사 내부 버튼에도 통일 적용 (기존엔 배경색만 바뀌는 밋밋한 버튼). */
+.btn-cta {
+  box-shadow: var(--shadow-float);
+  transition:
+    transform 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+    background-color 0.2s ease-out,
+    opacity 0.2s ease-out;
+}
+.btn-cta:hover:not(:disabled) {
+  transform: translateY(-2px);
+  background-color: var(--color-brand-ink);
+}
+.btn-cta:active:not(:disabled) {
+  transform: translateY(0);
+}
+.btn-cta:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* 에이전트/분류 진행 중 점 3개 — 통통 튀는 느낌을 주려고 오버슈트 이징 사용 */
+@keyframes dot-bounce {
+  0%,
+  80%,
+  100% {
+    transform: translateY(0);
+  }
+  40% {
+    transform: translateY(-6px);
+  }
+}
+.dot-bounce {
+  animation: dot-bounce 0.9s cubic-bezier(0.34, 1.56, 0.64, 1) infinite;
+}
