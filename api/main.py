@@ -5,6 +5,8 @@
 /admin(관리자 대시보드 — 포트폴리오 집계·HITL 큐).
 8월 확장 시 라우터를 추가로 꽂기만 한다.
 """
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -15,7 +17,9 @@ from api.routers import admin, agent, classify, company, mock, pcaf, scenario, t
 
 app = FastAPI(title="iM-Bridge API", version="0.1.0")
 
-# web 컨테이너(3010)/로컬 dev(3000) 에서의 호출 허용
+# 로컬 dev(3000)/web 컨테이너(3010) + 배포 프론트(Vercel) 호출 허용.
+# 배포 주소는 코드에 박지 않고 ALLOWED_ORIGINS 환경변수(콤마 구분)로 주입한다.
+_extra_origins = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -23,6 +27,7 @@ app.add_middleware(
         "http://127.0.0.1:3000",
         "http://localhost:3010",
         "http://127.0.0.1:3010",
+        *_extra_origins,
     ],
     allow_methods=["*"],
     allow_headers=["*"],
