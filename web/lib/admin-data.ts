@@ -8,10 +8,12 @@
 import { apiGet, apiPatch } from "@/lib/api";
 import type {
   AlertItem,
+  BulkActionResult,
   ClassificationEdit,
   HitlItem,
   PortfolioResponse,
   RateCandidateItem,
+  ReviewLogEntry,
   TraceRunItem,
   TraceStep,
 } from "@/lib/admin-types";
@@ -35,6 +37,19 @@ export function editVoucher(voucherId: number, edits: ClassificationEdit) {
 
 export function rejectVoucher(voucherId: number) {
   return apiPatch(`/admin/classifications/${voucherId}/reject`);
+}
+
+/** 여러 건 일괄 확정 — 건별 성공/실패를 그대로 반환(부분 실패를 감추지 않는다). */
+export function bulkConfirm(voucherIds: number[]): Promise<{ results: BulkActionResult[] }> {
+  return apiPatch("/admin/classifications/bulk-confirm", { voucher_ids: voucherIds });
+}
+
+export function bulkReject(voucherIds: number[]): Promise<{ results: BulkActionResult[] }> {
+  return apiPatch("/admin/classifications/bulk-reject", { voucher_ids: voucherIds });
+}
+
+export function getReviewLog(): Promise<ReviewLogEntry[]> {
+  return apiGet<{ entries: ReviewLogEntry[] }>("/admin/review-log").then((r) => r.entries);
 }
 
 export function getTraceRuns(): Promise<TraceRunItem[]> {

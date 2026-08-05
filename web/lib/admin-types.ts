@@ -70,6 +70,24 @@ export interface TraceRunItem {
   result_badges: string[];
 }
 
+/** 일괄 처리(bulk-confirm/bulk-reject) 건별 결과 — 부분 실패를 그대로 드러낸다. */
+export interface BulkActionResult {
+  voucher_id: number;
+  ok: boolean;
+  error?: string;
+}
+
+/** 담당자 조치 이력(감사 로그) 한 건 — Classification.evidence/reviewed_at 을 그대로 노출. */
+export interface ReviewLogEntry {
+  voucher_id: number;
+  company_name: string;
+  raw: string;
+  month: number;
+  status: "confirmed" | "rejected";
+  evidence: string | null;
+  reviewed_at: string | null;
+}
+
 // ── 목업 전용 (실 엔드포인트 없음 — 화면에 "예시" 표식) ──────────────────
 export interface AlertItem {
   id: string;

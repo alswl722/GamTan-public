@@ -6,6 +6,9 @@
 - PATCH /admin/classifications/{id}           분류 수정 후 확정 (담당자 교정)
 - PATCH /admin/classifications/{id}/reject    반려 — 집계에서 제외
 - GET   /admin/traces                         에이전트 실행 이력 목록 (드릴다운은 /trace/{sid})
+- PATCH /admin/classifications/bulk-confirm   여러 건 일괄 확정 (건별 성공/실패 반환)
+- PATCH /admin/classifications/bulk-reject    여러 건 일괄 반려 (건별 성공/실패 반환)
+- GET   /admin/review-log                     담당자 조치 이력(감사 로그) — evidence 누적 기록을 노출
 
 여신 결정·스코어링은 하지 않는다(CLAUDE.md §9). AI가 1차 스크리닝한 저신뢰 건을
 사람이 최종 확정하는 HITL 마감만 담당 — 금융분야 AI 가이드라인의 보조수단성 구현.
@@ -34,6 +37,12 @@ class ClassificationEdit(BaseModel):
     scope: int | None = None
     category: str | None = None
     fuel_type: str | None = None
+
+
+class BulkAction(BaseModel):
+    """일괄 처리 대상 전표 ID 목록."""
+
+    voucher_ids: list[int]
 
 
 @router.get("/portfolio")
@@ -79,6 +88,44 @@ def confirm_classification(voucher_id: int, session: Session = Depends(get_sessi
     _append_evidence(obj, "담당자 확정(수정 없음)")
     session.commit()
     return {"voucher_id": voucher_id, "status": obj.status}
+
+
+def _bulk_apply(session: Session, voucher_ids: list[int], new_status: str, note: str) -> list[dict]:
+    """여러 건에 동일 조치를 적용 — 한 건 실패해도 나머지는 계속 처리한다(부분 실패 가시성).
+
+    ⚠️ 이 라우트는 반드시 `PATCH /classifications/{voucher_id}` 보다 먼저 등록돼야 한다 —
+    안 그러면 "bulk-confirm" 문자열이 {voucher_id}(int) 로 파싱 시도되어 422로 막힌다.
+    """
+    results = []
+    for vid in voucher_ids:
+        try:
+            obj = _load_reviewable(session, vid)
+        except HTTPException as e:
+            session.rollback()
+            results.append({"voucher_id": vid, "ok": False, "error": e.detail})
+            continue
+        obj.status = new_status
+        obj.reviewed_at = datetime.now(timezone.utc)
+        _append_evidence(obj, note)
+        session.commit()
+        results.append({"voucher_id": vid, "ok": True})
+    return results
+
+
+@router.patch("/classifications/bulk-confirm")
+def bulk_confirm(payload: BulkAction, session: Session = Depends(get_session)):
+    """선택한 여러 건을 수정 없이 일괄 확정. 건별 성공/실패를 그대로 반환한다."""
+    return {"results": _bulk_apply(session, payload.voucher_ids, "confirmed", "담당자 일괄 확정(수정 없음)")}
+
+
+@router.patch("/classifications/bulk-reject")
+def bulk_reject(payload: BulkAction, session: Session = Depends(get_session)):
+    """선택한 여러 건을 일괄 반려 — 집계에서 제외. 건별 성공/실패를 그대로 반환한다."""
+    return {
+        "results": _bulk_apply(
+            session, payload.voucher_ids, "rejected", "담당자 일괄 반려 — 분류 신뢰 불가, 집계 제외"
+        )
+    }
 
 
 @router.patch("/classifications/{voucher_id}")
@@ -176,6 +223,39 @@ def reject_classification(voucher_id: int, session: Session = Depends(get_sessio
     _append_evidence(obj, "담당자 반려 — 분류 신뢰 불가, 집계 제외")
     session.commit()
     return {"voucher_id": voucher_id, "status": obj.status}
+
+
+@router.get("/review-log")
+def review_log(session: Session = Depends(get_session)):
+    """담당자 조치 이력(감사 로그) — 확정/반려된 건을 최근 조치순으로.
+
+    별도 감사 테이블을 새로 두지 않는다 — confirm/edit/reject 가 이미 evidence 에
+    "무엇을 했는지"를 원본 판단 근거 뒤에 누적해서 남긴다(설계 원칙: 모든 판단에
+    evidence 저장). 이 엔드포인트는 그 기록을 조회용으로 노출만 한다.
+    """
+    stmt = (
+        select(Classification, Voucher, Company)
+        .join(Voucher, Classification.voucher_id == Voucher.id)
+        .join(Company, Voucher.company_id == Company.id)
+        .where(Classification.reviewed_at.isnot(None))
+        .order_by(Classification.reviewed_at.desc())
+        .limit(300)
+    )
+    rows = session.execute(stmt).all()
+    return {
+        "entries": [
+            {
+                "voucher_id": v.id,
+                "company_name": co.name,
+                "raw": v.item_description,
+                "month": v.month,
+                "status": c.status,
+                "evidence": c.evidence,
+                "reviewed_at": c.reviewed_at.isoformat() if c.reviewed_at else None,
+            }
+            for c, v, co in rows
+        ]
+    }
 
 
 # 실행 이력 메시지에서 결과 배지를 뽑는 규칙 — 트레이스 문구와 1:1로 맞춰둔다.
