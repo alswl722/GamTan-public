@@ -1,6 +1,7 @@
 from sqlalchemy import (
     Column, Integer, String, Float, DateTime, JSON, ForeignKey,
-    SmallInteger, Text, Numeric, Index, UniqueConstraint
+    SmallInteger, Text, Numeric, Index, UniqueConstraint, CheckConstraint,
+    Boolean
 )
 from sqlalchemy.orm import declarative_base, relationship
 from datetime import datetime, timezone
@@ -164,3 +165,93 @@ class IndustryDistribution(Base):
     __table_args__ = (
         Index("ix_industry_dist_code_year", "industry_code", "year"),
     )
+
+
+class FinancialInstitution(Base):
+    """금융기관 — v1 기관 데이터 격리의 루트 (docs/borrower-pcaf-data-plan.md §7.8)"""
+    __tablename__ = "financial_institutions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False)
+    reporting_currency = Column(String(3), nullable=False)   # ISO 4217, 예: KRW
+    tenant_key = Column(String(50), nullable=False, unique=True)
+    created_at = Column(DateTime(timezone=True), default=now)
+
+
+class InstitutionUser(Base):
+    """금융기관 소속 사용자 — 역할 기반 권한의 기반 (§7.9)"""
+    __tablename__ = "institution_users"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    financial_institution_id = Column(Integer, ForeignKey("financial_institutions.id"), nullable=False)
+    user_id = Column(String(100), nullable=False)
+    role = Column(String(20), nullable=False)   # admin | analyst | reviewer | approver | viewer
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), default=now)
+
+    __table_args__ = (
+        CheckConstraint(
+            "role IN ('admin', 'analyst', 'reviewer', 'approver', 'viewer')",
+            name="ck_institution_users_role"
+        ),
+        Index("ix_institution_users_institution_user", "financial_institution_id", "user_id"),
+    )
+
+
+class InstitutionBorrower(Base):
+    """금융기관-차주 관계 — 동의 범위 없이 기관 간 데이터를 공유하지 않는다 (§7.10)"""
+    __tablename__ = "institution_borrowers"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    financial_institution_id = Column(Integer, ForeignKey("financial_institutions.id"), nullable=False)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    external_customer_id = Column(String(100), nullable=False)
+    consent_status = Column(String(20), nullable=False, default="pending")  # pending | active | revoked | expired
+    consent_scope_json = Column(JSON)
+    consent_started_at = Column(DateTime(timezone=True))
+    consent_ended_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), default=now)
+
+    __table_args__ = (
+        CheckConstraint(
+            "consent_status IN ('pending', 'active', 'revoked', 'expired')",
+            name="ck_institution_borrowers_consent_status"
+        ),
+        UniqueConstraint(
+            "financial_institution_id", "external_customer_id",
+            name="uq_institution_borrowers_institution_external_id"
+        ),
+    )
+
+
+class Portfolio(Base):
+    """기관별 기업대출 포트폴리오 — 산정 스냅숏의 상위 단위 (§7.11)"""
+    __tablename__ = "portfolios"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    financial_institution_id = Column(Integer, ForeignKey("financial_institutions.id"), nullable=False)
+    name = Column(String(100), nullable=False)
+    reporting_year = Column(SmallInteger, nullable=False)
+    reporting_date = Column(DateTime(timezone=True))
+    reporting_currency = Column(String(3), nullable=False)
+    scope_mode = Column(String(30), nullable=False)   # supported_business_loans | full_institution
+    total_relevant_outstanding = Column(Numeric(20, 0))
+    reporting_date_events_json = Column(JSON)
+    status = Column(String(20), nullable=False, default="draft")  # draft | calculated | reviewed | approved | superseded
+    version = Column(Integer, nullable=False, default=1)
+    supersedes_portfolio_id = Column(Integer, ForeignKey("portfolios.id"))
+    created_at = Column(DateTime(timezone=True), default=now)
+
+    __table_args__ = (
+        CheckConstraint(
+            "scope_mode IN ('supported_business_loans', 'full_institution')",
+            name="ck_portfolios_scope_mode"
+        ),
+        CheckConstraint(
+            "status IN ('draft', 'calculated', 'reviewed', 'approved', 'superseded')",
+            name="ck_portfolios_status"
+        ),
+        Index("ix_portfolios_institution_year", "financial_institution_id", "reporting_year"),
+    )
+
+
