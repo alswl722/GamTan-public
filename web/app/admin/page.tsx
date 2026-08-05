@@ -2,8 +2,8 @@
 
 /**
  * 관리자 대시보드 — 은행 ESG·여신 담당자 화면.
- * 실데이터: 포트폴리오 집계·담당자 검토 큐·실행 이력 (백엔드 실제 응답).
- * 목업(예시): 이상 신호·우대금리·검증 오차율 (결선 확장 — 화면에 '예시' 표식).
+ * 실데이터: 포트폴리오 집계·담당자 검토 큐·실행 이력·이상 신호 알림 (백엔드 실제 응답).
+ * 목업(예시): 우대금리·검증 오차율 (결선 확장 — 화면에 '예시' 표식).
  */
 import { useCallback, useEffect, useState } from "react";
 import { getHitl, getPortfolio, getReviewLog, getTraceRuns } from "@/lib/admin-data";

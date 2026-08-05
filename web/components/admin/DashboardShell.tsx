@@ -132,7 +132,7 @@ export function DashboardShell({
         {activeTab === "risk" && (
           <div className="grid h-full grid-cols-1 gap-5 overflow-hidden p-5 lg:grid-cols-2">
             <div className="min-h-0">
-              <AlertsPanel alerts={MOCK_ALERTS} />
+              <AlertsPanel alerts={alerts} />
             </div>
             <div className="min-h-0">
               <RateCandidates candidates={MOCK_RATE_CANDIDATES} />

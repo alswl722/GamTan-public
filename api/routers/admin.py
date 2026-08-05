@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from api.db import get_session
 from api.queries import get_emission_factors, get_hitl_queue, get_unit_prices
+from db.alerts import detect_alerts
 from db.calc_engine import CalcDataGap, ClassifiedItemInput, compute_emission, \
     index_emission_factors, index_unit_prices
 from db.models import Classification, Company, TraceLog, Voucher
@@ -55,6 +56,16 @@ def portfolio(session: Session = Depends(get_session)):
 def hitl_queue(session: Session = Depends(get_session)):
     """전 기업의 담당자 검토 대기 건(status='review_required')."""
     return {"queue": get_hitl_queue(session)}
+
+
+@router.get("/alerts")
+def alerts(session: Session = Depends(get_session)):
+    """이상 신호 알림 — 전 기업 배출량 추세 급변·데이터 공백을 스캔(결정론적 계산).
+
+    급등/급감 판정은 코드가 배수로 계산하고, 여신 결정은 하지 않는다(CLAUDE.md §9).
+    담당자가 조짐을 먼저 인지하도록 안내하는 조기 경보일 뿐이다.
+    """
+    return {"alerts": detect_alerts(session)}
 
 
 def _load_reviewable(session: Session, voucher_id: int) -> Classification:

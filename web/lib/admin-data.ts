@@ -1,9 +1,9 @@
 /**
  * 관리자 대시보드 데이터 접근 — 실 API는 기존 fetch 래퍼(apiGet/apiPatch) 위에,
- * 목업(이상신호·우대금리)은 여기 상수로. 실데이터/목업 경계를 한곳에서 본다.
+ * 목업(우대금리)은 여기 상수로. 실데이터/목업 경계를 한곳에서 본다.
  *
- * 실API 연결: 포트폴리오·검토 큐·확정/수정/반려·실행 이력 = 백엔드 실제 응답.
- * 목업(예시): 이상 신호 알림, 우대금리 후보 = 결선 확장 대상(GET /admin/alerts 등 미구현).
+ * 실API 연결: 포트폴리오·검토 큐·확정/수정/반려·실행 이력·이상 신호 알림 = 백엔드 실제 응답.
+ * 목업(예시): 우대금리 후보 = 결선 확장 대상(GET /admin/rate-candidates 등 미구현).
  */
 import { apiGet, apiPatch } from "@/lib/api";
 import type {
@@ -61,20 +61,11 @@ export function getTraceSteps(sessionId: string): Promise<TraceStep[]> {
   return apiGet<{ steps: TraceStep[] }>(`/trace/${sessionId}`).then((r) => r.steps);
 }
 
-// ── 목업 (예시 · 결선 확장) ────────────────────────────────────────────
-export const MOCK_ALERTS: AlertItem[] = [
-  { id: "a001", severity: "high", company_name: "동성금속㈜", message: "7월 경유 사용량 평월 대비 3.2배 급증 (자가검증 결과 정상 판정됨)" },
-  { id: "a002", severity: "high", company_name: "삼양기계산업", message: "3개월 연속 전력 사용량 급감 → 가동률 하락 의심" },
-  { id: "a003", severity: "medium", company_name: "경남철강㈜", message: "6개월간 전표 미연동 → 데이터 공백" },
-  { id: "a004", severity: "medium", company_name: "울산석유화학", message: "5월~7월 전기요금 청구액 전년 동기 대비 41% 감소 → 조업 축소 가능성" },
-  { id: "a005", severity: "low", company_name: "부산조선기자재", message: "중유 구입 단가 전월 대비 18% 급등 — 공급사 변경 여부 확인 필요" },
-  { id: "a006", severity: "high", company_name: "광주자동차부품", message: "12개월 연속 5등급 유지 — 전표 연동 신청 독려 필요" },
-  { id: "a007", severity: "medium", company_name: "평택도금공업", message: "도금 약품 보일러 가동 데이터 2개월 미수신" },
-  { id: "a008", severity: "low", company_name: "포항특수강", message: "여름철 냉방 전력 급증 → 계절 이상치로 자동 플래그" },
-  { id: "a009", severity: "medium", company_name: "창원금속㈜", message: "공장 용접 가스 전표 분류 오류 의심 — 담당자 검토 2건 연속 반려" },
-  { id: "a010", severity: "low", company_name: "진흥산업개발", message: "가스요금 공급가액 전월 대비 35% 감소 — 계절 조정 또는 공급 중단 여부 확인" },
-];
+export function getAlerts(): Promise<AlertItem[]> {
+  return apiGet<{ alerts: AlertItem[] }>("/admin/alerts").then((r) => r.alerts);
+}
 
+// ── 목업 (예시 · 결선 확장) ────────────────────────────────────────────
 export const MOCK_RATE_CANDIDATES: RateCandidateItem[] = [
   { id: "r001", company_name: "동성금속㈜", current_grade: 5, target_grade: 3, missing: "전기요금 고지서 최근 6개월 + 경유 구매 전표", benefit: "대출금리 0.3%p 인하 (우대금리 적용)" },
   { id: "r002", company_name: "진흥산업개발", current_grade: 3, target_grade: 2, missing: "가스 고지서 2장 추가 연동 시 3등급 → 2등급", benefit: "우대금리 대상 + ESG 인증서 발급" },
