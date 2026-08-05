@@ -255,3 +255,136 @@ class Portfolio(Base):
     )
 
 
+class OrganizationalBoundary(Base):
+    """차주 배출량의 조직범위와 재무정보 연결범위를 비교하는 기준정보 (§7.3)"""
+    __tablename__ = "organizational_boundaries"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    financial_institution_id = Column(Integer, ForeignKey("financial_institutions.id"), nullable=False)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    reporting_year = Column(SmallInteger, nullable=False)
+    boundary_type = Column(String(30), nullable=False)   # operational_control | financial_control | equity_share
+    consolidation_scope = Column(String(20), nullable=False)  # consolidated | separate
+    included_entities_json = Column(JSON)
+    excluded_entities_json = Column(JSON)
+    description = Column(Text)
+    approved_by = Column(String(100))
+    approved_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), default=now)
+
+    __table_args__ = (
+        CheckConstraint(
+            "boundary_type IN ('operational_control', 'financial_control', 'equity_share')",
+            name="ck_org_boundaries_boundary_type"
+        ),
+        CheckConstraint(
+            "consolidation_scope IN ('consolidated', 'separate')",
+            name="ck_org_boundaries_consolidation_scope"
+        ),
+        Index("ix_org_boundaries_company_year", "company_id", "reporting_year"),
+    )
+
+
+class SourceDocument(Base):
+    """원본 증빙 문서 — 동일 문서 중복 적재 방지, 계산 결과 역추적용 (§7.2)"""
+    __tablename__ = "source_documents"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    financial_institution_id = Column(Integer, ForeignKey("financial_institutions.id"), nullable=False)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    document_type = Column(String(50), nullable=False)
+    source_system = Column(String(50))
+    document_date = Column(DateTime(timezone=True))
+    period_start = Column(DateTime(timezone=True))
+    period_end = Column(DateTime(timezone=True))
+    file_hash = Column(String(64))   # SHA256, 중복 적재 방지
+    original_filename = Column(String(255))
+    extracted_json = Column(JSON)
+    verification_status = Column(String(20), default="unverified")
+    created_at = Column(DateTime(timezone=True), default=now)
+
+    __table_args__ = (
+        Index("ix_source_documents_company", "company_id"),
+        Index("ix_source_documents_file_hash", "file_hash"),
+    )
+
+
+class BorrowerEmissionInventory(Base):
+    """차주 연간 Scope별 배출량 인벤토리 (§7.4)
+
+    emission_tco2e 는 nullable — Scope 3 미산정은 0이 아니라 null + scope3_status 로 저장한다
+    (LLM 산수 금지·미산정을 0으로 처리하지 않는다는 정본 원칙, docs/borrower-pcaf-data-plan.md §7.4).
+    """
+    __tablename__ = "borrower_emission_inventories"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    financial_institution_id = Column(Integer, ForeignKey("financial_institutions.id"), nullable=False)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    reporting_year = Column(SmallInteger, nullable=False)
+    organizational_boundary_id = Column(Integer, ForeignKey("organizational_boundaries.id"), nullable=False)
+    scope_group = Column(String(10), nullable=False)   # scope_1 | scope_2 | scope_3
+    scope2_method = Column(String(20))                 # location_based | market_based | null
+    scope3_status = Column(String(20))                 # reported | estimated | not_reported | not_calculated | not_applicable | null
+    emission_tco2e = Column(Float, nullable=True)       # Scope 3 미산정 시 null (0 아님)
+    calculation_method_summary = Column(Text)
+    gwp_version = Column(String(20))
+    verified = Column(Boolean, default=False)
+    verification_level = Column(String(20))
+    completeness_pct = Column(Float)
+    candidate_quality_score = Column(SmallInteger)
+    candidate_quality_rule_id = Column(Integer)   # pcaf_quality_rules FK — 2주차에 테이블 추가 예정
+    limitations_json = Column(JSON)
+    status = Column(String(20), nullable=False, default="draft")  # draft | calculated | reviewed | approved | superseded
+    version = Column(Integer, nullable=False, default=1)
+    supersedes_inventory_id = Column(Integer, ForeignKey("borrower_emission_inventories.id"))
+    input_snapshot_hash = Column(String(64))
+    approved_by = Column(String(100))
+    approved_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), default=now)
+
+    __table_args__ = (
+        CheckConstraint(
+            "scope_group IN ('scope_1', 'scope_2', 'scope_3')",
+            name="ck_inventories_scope_group"
+        ),
+        CheckConstraint(
+            "scope2_method IS NULL OR scope2_method IN ('location_based', 'market_based')",
+            name="ck_inventories_scope2_method"
+        ),
+        CheckConstraint(
+            "scope3_status IS NULL OR scope3_status IN "
+            "('reported', 'estimated', 'not_reported', 'not_calculated', 'not_applicable')",
+            name="ck_inventories_scope3_status"
+        ),
+        CheckConstraint(
+            "status IN ('draft', 'calculated', 'reviewed', 'approved', 'superseded')",
+            name="ck_inventories_status"
+        ),
+        Index("ix_inventories_company_year_scope", "company_id", "reporting_year", "scope_group"),
+    )
+
+
+class InventoryGasEmission(Base):
+    """인벤토리의 가스별 배출량 — 7대 온실가스, 미확인 가스는 0이 아니라 제외 사유를 남긴다 (§7.5)"""
+    __tablename__ = "inventory_gas_emissions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    inventory_id = Column(Integer, ForeignKey("borrower_emission_inventories.id"), nullable=False)
+    gas_type = Column(String(10), nullable=False)   # CO2 | CH4 | N2O | HFCs | PFCs | SF6 | NF3
+    emission_mass = Column(Float)
+    mass_unit = Column(String(20))
+    gwp_value = Column(Float)
+    gwp_version = Column(String(20))
+    emission_co2e = Column(Float)
+    included = Column(Boolean, default=True)
+    exclusion_reason = Column(Text)
+
+    __table_args__ = (
+        CheckConstraint(
+            "gas_type IN ('CO2', 'CH4', 'N2O', 'HFCs', 'PFCs', 'SF6', 'NF3')",
+            name="ck_gas_emissions_gas_type"
+        ),
+        Index("ix_gas_emissions_inventory", "inventory_id"),
+    )
+
+
