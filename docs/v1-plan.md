@@ -267,9 +267,17 @@ pull에서 완료된 다음 세부 구현을 그대로 유지한다.
 
 ```text
 분모 = 총자본 + PCAF 방법론상 total debt
-귀속계수 = 대출잔액 / 분모
-금융배출량 = 귀속계수 × 차주 배출량
+IF 분모 <= 0:
+    계산 중단
+    calculation_status = review_required
+    calculation_status_reason = non_positive_denominator
+    귀속계수·금융배출량 = null
+ELSE:
+    귀속계수 = 대출잔액 / 분모
+    금융배출량 = 귀속계수 × 차주 배출량
 ```
+
+`분모 > 0`은 테스트 항목이 아니라 계산 함수가 직접 강제하는 선행조건이다. 0 또는 음수인 분모를 임의 보정하거나 절댓값으로 바꾸거나 귀속계수를 0으로 저장해서는 안 된다.
 
 ### 개발자 2 - 포트폴리오·API·화면
 

@@ -519,6 +519,7 @@ borrower_emissions_tco2e
 financed_emissions_tco2e
 quality_score
 calculation_status         calculated | review_required | excluded | superseded
+calculation_status_reason
 input_snapshot_json
 input_snapshot_hash
 assumptions_json
@@ -739,9 +740,17 @@ build_quality_evidence(...)
 
 ```text
 분모 = 총자본 + PCAF 방법론상 debt
-귀속계수 = 은행 대출잔액 / 분모
-금융배출량 = 귀속계수 × 차주 배출량
+IF 분모 <= 0:
+    계산 중단
+    calculation_status = review_required
+    calculation_status_reason = non_positive_denominator
+    귀속계수·금융배출량 = null
+ELSE:
+    귀속계수 = 은행 대출잔액 / 분모
+    금융배출량 = 귀속계수 × 차주 배출량
 ```
+
+`분모 > 0`은 계산 함수가 직접 강제하는 불변조건이다. 0 또는 음수인 분모를 임의 보정하거나 절댓값으로 바꾸거나 귀속계수를 0으로 저장해서는 안 된다.
 
 검증 규칙:
 
@@ -795,8 +804,14 @@ build_quality_evidence(...)
 지원 자산군 안에서는 계산구조를 하나로 고정하고 차주별 입력값만 교체한다.
 
 ```text
-귀속계수 = outstanding_amount / denominator
-금융배출량 = 귀속계수 × borrower_emissions
+IF denominator <= 0:
+    계산 중단
+    calculation_status = review_required
+    calculation_status_reason = non_positive_denominator
+    attribution_factor·financed_emissions = null
+ELSE:
+    귀속계수 = outstanding_amount / denominator
+    금융배출량 = 귀속계수 × borrower_emissions
 ```
 
 비상장기업의 분모:
@@ -844,6 +859,7 @@ financed_scope_1_2
 financed_scope_3
 total_financed_emissions
 calculation_status
+calculation_status_reason
 quality_score_scope_1_2
 quality_score_scope_3
 methodology_version
@@ -867,8 +883,19 @@ class BusinessLoanInput:
 
 def calculate_private_business_loan(input: BusinessLoanInput) -> Result:
     denominator = input.total_equity + input.total_debt
+    if denominator <= Decimal("0"):
+        return Result(
+            denominator=denominator,
+            attribution_factor=None,
+            financed_scope_1_2=None,
+            financed_scope_3=None,
+            calculation_status="review_required",
+            calculation_status_reason="non_positive_denominator",
+        )
+
     attribution_factor = input.outstanding_amount / denominator
     return Result(
+        denominator=denominator,
         attribution_factor=attribution_factor,
         financed_scope_1_2=attribution_factor * input.borrower_scope_1_2,
         financed_scope_3=(
@@ -876,10 +903,12 @@ def calculate_private_business_loan(input: BusinessLoanInput) -> Result:
             if input.borrower_scope_3 is not None
             else None
         ),
+        calculation_status="calculated",
+        calculation_status_reason=None,
     )
 ```
 
-통화 변환, 입력 검증, 반올림은 계산 함수 바깥의 전처리·출력 계층에서 명시적으로 수행한다. 내부 계산은 충분한 정밀도의 `Decimal`을 사용한다.
+통화 변환, 일반 입력 검증, 반올림은 계산 함수 바깥의 전처리·출력 계층에서 명시적으로 수행한다. 다만 `denominator > 0`은 0 나눗셈과 잘못된 음수 귀속을 막는 계산 불변조건이므로 계산 함수 안에서도 반드시 재검증한다. 내부 계산은 충분한 정밀도의 `Decimal`을 사용한다.
 
 전처리 계층은 다음을 통과한 입력만 계산 함수에 전달한다.
 
