@@ -388,3 +388,80 @@ class InventoryGasEmission(Base):
     )
 
 
+class BusinessLoanExposure(Base):
+    """포트폴리오의 기업대출 익스포저 — 비상장 중소기업 일반 목적 기업대출만 지원 (§7.13)
+
+    지원 조건: asset_class=business_loans_and_unlisted_equity, company_type=private_company,
+    loan_purpose=general_corporate_purpose. 미충족 시 unsupported_methodology + exclusion_reason 기록.
+    """
+    __tablename__ = "business_loan_exposures"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    portfolio_id = Column(Integer, ForeignKey("portfolios.id"), nullable=False)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    external_exposure_id = Column(String(100), nullable=False)
+    asset_class = Column(String(50), nullable=False)
+    outstanding_amount = Column(Numeric(20, 0), nullable=False)
+    currency = Column(String(3), nullable=False)
+    reporting_date = Column(DateTime(timezone=True), nullable=False)
+    loan_purpose = Column(String(50))
+    company_type = Column(String(30))
+    included = Column(Boolean, default=True)
+    exclusion_reason = Column(Text)
+    source_snapshot_json = Column(JSON)
+    created_at = Column(DateTime(timezone=True), default=now)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "portfolio_id", "external_exposure_id",
+            name="uq_business_loan_exposures_portfolio_external_id"
+        ),
+        Index("ix_business_loan_exposures_company", "company_id"),
+    )
+
+
+class BorrowerFinancial(Base):
+    """차주 재무정보 — PCAF 방법론상 total debt 는 총부채와 혼용하지 않는다 (§7.14)"""
+    __tablename__ = "borrower_financials"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    financial_institution_id = Column(Integer, ForeignKey("financial_institutions.id"), nullable=False)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    financial_year = Column(SmallInteger, nullable=False)
+    as_of_date = Column(DateTime(timezone=True), nullable=False)
+    currency = Column(String(3), nullable=False)
+    total_equity = Column(Numeric(20, 0))
+    total_debt = Column(Numeric(20, 0))
+    debt_definition = Column(Text)   # PCAF 방법론상 debt 정의와 재무제표 계정 출처 고정
+    consolidation_scope = Column(String(20))
+    included_entities_json = Column(JSON)
+    source = Column(String(100))
+    verified = Column(Boolean, default=False)
+    version = Column(Integer, nullable=False, default=1)
+    created_at = Column(DateTime(timezone=True), default=now)
+
+    __table_args__ = (
+        Index("ix_borrower_financials_company_year", "company_id", "financial_year"),
+    )
+
+
+class FxRate(Base):
+    """환율 — 대출잔액·재무정보를 포트폴리오 보고통화로 변환, 결과 스냅숏에 기준일·출처 포함 (§7.15)"""
+    __tablename__ = "fx_rates"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    base_currency = Column(String(3), nullable=False)
+    quote_currency = Column(String(3), nullable=False)
+    rate = Column(Numeric(20, 8), nullable=False)
+    rate_date = Column(DateTime(timezone=True), nullable=False)
+    rate_type = Column(String(20), nullable=False)   # closing | average | policy_defined
+    source = Column(String(100))
+    created_at = Column(DateTime(timezone=True), default=now)
+
+    __table_args__ = (
+        CheckConstraint(
+            "rate_type IN ('closing', 'average', 'policy_defined')",
+            name="ck_fx_rates_rate_type"
+        ),
+        Index("ix_fx_rates_pair_date", "base_currency", "quote_currency", "rate_date"),
+    )
