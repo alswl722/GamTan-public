@@ -1,6 +1,7 @@
 """관리자 API — 은행 ESG·여신 담당자용 대시보드 데이터 소스.
 
 - GET   /admin/portfolio                      포트폴리오 금융배출량 집계 + PCAF 등급 분포
+- GET   /admin/rate-candidates                 등급 상승 역산 후보 (우대금리 자격 안내)
 - GET   /admin/hitl                           전 기업 담당자 검토 큐 (저신뢰 분류 건)
 - PATCH /admin/classifications/{id}/confirm   그대로 확정
 - PATCH /admin/classifications/{id}           분류 수정 후 확정 (담당자 교정)
@@ -25,7 +26,7 @@ from db.alerts import detect_alerts
 from db.calc_engine import CalcDataGap, ClassifiedItemInput, compute_emission, \
     index_emission_factors, index_unit_prices
 from db.models import Classification, Company, TraceLog, Voucher
-from db.pcaf import portfolio_summary
+from db.pcaf import portfolio_summary, rate_upgrade_candidates
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -42,6 +43,15 @@ class ClassificationEdit(BaseModel):
 def portfolio(session: Session = Depends(get_session)):
     """거래 기업 전체의 Scope 1/2 합산 + PCAF 등급 분포 + 기업별 내역."""
     return portfolio_summary(session)
+
+
+@router.get("/rate-candidates")
+def rate_candidates(session: Session = Depends(get_session)):
+    """등급 상승 역산 후보 — 결손월만 채우면 PCAF 등급이 오르는 기업.
+
+    여신 결정은 하지 않는다(CLAUDE.md §9) — 우대금리 자격 '안내'까지만 담당.
+    """
+    return {"candidates": rate_upgrade_candidates(session)}
 
 
 @router.get("/hitl")

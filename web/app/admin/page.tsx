@@ -2,12 +2,18 @@
 
 /**
  * 관리자 대시보드 — 은행 ESG·여신 담당자 화면.
- * 실데이터: 포트폴리오 집계·담당자 검토 큐·실행 이력·이상 신호 알림 (백엔드 실제 응답).
- * 목업(예시): 우대금리·검증 오차율 (결선 확장 — 화면에 '예시' 표식).
+ * 실데이터: 포트폴리오 집계·담당자 검토 큐·실행 이력·이상 신호 알림·등급 상승 후보 (백엔드 실제 응답).
+ * 목업(예시): 검증 오차율 (결선 확장 — 화면에 '예시' 표식).
  */
 import { useCallback, useEffect, useState } from "react";
-import { getAlerts, getHitl, getPortfolio, getTraceRuns } from "@/lib/admin-data";
-import type { AlertItem, HitlItem, PortfolioResponse, TraceRunItem } from "@/lib/admin-types";
+import { getAlerts, getHitl, getPortfolio, getRateCandidates, getTraceRuns } from "@/lib/admin-data";
+import type {
+  AlertItem,
+  HitlItem,
+  PortfolioResponse,
+  RateCandidateItem,
+  TraceRunItem,
+} from "@/lib/admin-types";
 import { DashboardShell } from "@/components/admin/DashboardShell";
 
 type Data = {
@@ -15,6 +21,7 @@ type Data = {
   hitlQueue: HitlItem[];
   traceRuns: TraceRunItem[];
   alerts: AlertItem[];
+  rateCandidates: RateCandidateItem[];
 };
 
 export default function AdminPage() {
@@ -24,9 +31,9 @@ export default function AdminPage() {
   const load = useCallback(() => {
     setError(false);
     setData(null);
-    Promise.all([getPortfolio(), getHitl(), getTraceRuns(), getAlerts()])
-      .then(([portfolio, hitlQueue, traceRuns, alerts]) =>
-        setData({ portfolio, hitlQueue, traceRuns, alerts }),
+    Promise.all([getPortfolio(), getHitl(), getTraceRuns(), getAlerts(), getRateCandidates()])
+      .then(([portfolio, hitlQueue, traceRuns, alerts, rateCandidates]) =>
+        setData({ portfolio, hitlQueue, traceRuns, alerts, rateCandidates }),
       )
       .catch((err) => {
         console.error("대시보드 데이터 조회 실패:", err);
@@ -67,6 +74,7 @@ export default function AdminPage() {
       hitlQueue={data.hitlQueue}
       traceRuns={data.traceRuns}
       alerts={data.alerts}
+      rateCandidates={data.rateCandidates}
     />
   );
 }
