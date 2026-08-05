@@ -10,7 +10,7 @@ import openpyxl
 DEFAULT_XLSX = os.path.join(
     os.path.dirname(os.path.dirname(__file__)),
     "data",
-    "iM-Bridge_데이터준비_샘플.xlsx",
+    "감탄_데이터준비_샘플.xlsx",
 )
 
 # 시트마다 연료 표기가 흔들려 정규화 (계수·단가·분류가 같은 이름을 쓰도록)

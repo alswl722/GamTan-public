@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { apiGet, getCompanyId } from "@/lib/api";
+import type { AlertItem } from "@/lib/admin-types";
 
 /** 장면 ④ — PCAF Before/After + 벤치마킹. /pcaf/{id} 실데이터만 사용.
  *  API 실패 시 목업으로 위장하지 않고 에러 배너 + 재시도를 표시한다(실패 가시성). */
@@ -159,6 +160,7 @@ function DistributionTrack({
 export function ScenePcaf() {
   const [data, setData] = useState<PcafResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [alerts, setAlerts] = useState<AlertItem[]>([]);
 
   async function load() {
     setError(null);
@@ -166,6 +168,12 @@ export function ScenePcaf() {
       const cid = await getCompanyId();
       const res = await apiGet<PcafResponse>(`/pcaf/${cid}`);
       setData(res);
+      // 이상 신호는 은행 담당자와 동일한 판정 로직(GET /admin/alerts와 같은
+      // db/alerts.py::detect_alerts)을 자기 기업분만 조회 — 은행이 먼저 알고
+      // 사장은 모르는 구도를 만들지 않는다(CLAUDE.md §9).
+      apiGet<{ alerts: AlertItem[] }>(`/owner/alerts/${cid}`)
+        .then((r) => setAlerts(r.alerts))
+        .catch((err) => console.error("이상 신호 조회 실패(부가 정보라 화면은 계속 진행):", err));
     } catch (err) {
       // 목업으로 위장하지 않는다 — 실패는 실패로 표시
       console.error("PCAF 조회 실패:", err);
@@ -307,7 +315,25 @@ export function ScenePcaf() {
         )}
       </div>
 
-      <div className="mt-5 rounded-2xl bg-surface p-5 text-center">
+      {alerts.length > 0 && (
+        <div className="mt-3 space-y-2 rounded-2xl bg-surface p-5">
+          <div className="text-[13px] font-semibold text-ink">이상 신호 알림</div>
+          <p className="text-[11.5px] leading-relaxed text-faint">
+            은행 담당자에게도 같은 시점에 안내되는 신호예요. 여신 결정과는 무관하며,
+            참고용 안내입니다.
+          </p>
+          {alerts.map((a) => (
+            <div
+              key={`${a.type}-${a.month}`}
+              className="rounded-xl bg-bg px-3.5 py-2.5 text-[12.5px] leading-relaxed text-muted"
+            >
+              {a.message}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="mt-3 rounded-2xl bg-surface p-5 text-center">
         <div className="text-[13px] font-semibold text-ink">
           우대금리 대상 안내
         </div>

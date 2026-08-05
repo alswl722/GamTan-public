@@ -1,4 +1,4 @@
-# iM-Bridge DB 스키마
+# 감탄 DB 스키마
 
 > Supabase(PostgreSQL) · SQLAlchemy 직접 접속 · 정본: `db/models.py`
 > 표기: **PK** 기본키 · **FK** 외래키 · **UQ** 유니크 · **IX** 인덱스 · NN NOT NULL

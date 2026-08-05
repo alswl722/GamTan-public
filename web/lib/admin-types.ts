@@ -70,14 +70,17 @@ export interface TraceRunItem {
   result_badges: string[];
 }
 
-// ── 목업 전용 (실 엔드포인트 없음 — 화면에 "예시" 표식) ──────────────────
+/** 이상 신호 알림 — GET /admin/alerts 응답 항목. */
 export interface AlertItem {
-  id: string;
-  severity: "high" | "medium" | "low";
+  company_id: number;
   company_name: string;
+  severity: "high" | "medium" | "low";
+  type: "spike" | "drop" | "gap";
+  month: number;
   message: string;
 }
 
+// ── 목업 전용 (실 엔드포인트 없음 — 화면에 "예시" 표식) ──────────────────
 export interface RateCandidateItem {
   id: string;
   company_name: string;
