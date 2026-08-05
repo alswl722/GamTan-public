@@ -46,6 +46,10 @@ class Voucher(Base):
     raw_json = Column(JSON)
     created_at = Column(DateTime(timezone=True), default=now)
 
+    # v1: 어느 금융기관의 동의·수집 경로에서 생성된 전표인지 구분 (nullable — 0006에서 백필)
+    financial_institution_id = Column(Integer, ForeignKey("financial_institutions.id"))
+    institution_borrower_id = Column(Integer, ForeignKey("institution_borrowers.id"))
+
     company = relationship("Company", back_populates="vouchers")
     classification = relationship("Classification", back_populates="voucher", uselist=False)
 
@@ -75,7 +79,30 @@ class Classification(Base):
     classified_at = Column(DateTime(timezone=True), default=now)
     reviewed_at = Column(DateTime(timezone=True))      # 담당자 확정/반려 시각 (review_required 건만)
 
+    # v1 §7.1 보완 — 기존 method(분류방법)와 분리해 활동자료 방법·증빙·계수버전까지 추적
+    classification_method = Column(String(10))    # rule | llm | manual
+    activity_data_method = Column(String(30))      # reported_quantity | invoice_quantity | spend_converted | economic_estimate | industry_estimate
+    source_document_id = Column(Integer, ForeignKey("source_documents.id"))
+    quantity_source = Column(String(20))            # document | calculated | manual
+    factor_id = Column(Integer, ForeignKey("emission_factors.id"))
+    factor_version = Column(String(20))
+    data_period_start = Column(DateTime(timezone=True))
+    data_period_end = Column(DateTime(timezone=True))
+    calculation_warning = Column(JSON)
+
     voucher = relationship("Voucher", back_populates="classification")
+
+    __table_args__ = (
+        CheckConstraint(
+            "classification_method IS NULL OR classification_method IN ('rule', 'llm', 'manual')",
+            name="ck_classifications_classification_method"
+        ),
+        CheckConstraint(
+            "activity_data_method IS NULL OR activity_data_method IN "
+            "('reported_quantity', 'invoice_quantity', 'spend_converted', 'economic_estimate', 'industry_estimate')",
+            name="ck_classifications_activity_data_method"
+        ),
+    )
 
 
 class EmissionFactor(Base):
