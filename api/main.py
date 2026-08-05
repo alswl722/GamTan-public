@@ -1,4 +1,4 @@
-"""iM-Bridge FastAPI 앱.
+"""감탄 FastAPI 앱.
 
 라우터: /mock(마이데이터), /trace(장면②), /classify(장면③), /pcaf(장면④),
 /agent(오케스트레이터), /scenario(데모 전환), /company(시연 기업 조회),
@@ -15,7 +15,7 @@ from sqlalchemy import text
 from api.db import get_engine
 from api.routers import admin, agent, classify, company, mock, pcaf, scenario, trace
 
-app = FastAPI(title="iM-Bridge API", version="0.1.0")
+app = FastAPI(title="감탄 API", version="0.1.0")
 
 # 로컬 dev(3000)/web 컨테이너(3010) + 배포 프론트(Vercel) 호출 허용.
 # 배포 주소는 코드에 박지 않고 ALLOWED_ORIGINS 환경변수(콤마 구분)로 주입한다.

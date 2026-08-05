@@ -53,7 +53,7 @@ trace(session_id)          -> [{step_type, tool_name, message, created_at}]
 
 ---
 
-# iM-Bridge 데모 개발 계획서 (7/20 완성) — v4 최종
+# 감탄 데모 개발 계획서 (7/20 완성) — v4 최종
 
 > 기간: **7/8(월) ~ 7/20(월), 12일**
 > 인력: 개발자 A(백엔드) · 개발자 B(프론트) · 회계/도메인 1명
