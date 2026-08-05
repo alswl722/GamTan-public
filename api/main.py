@@ -2,7 +2,7 @@
 
 라우터: /mock(마이데이터), /trace(장면②), /classify(장면③), /pcaf(장면④),
 /agent(오케스트레이터), /scenario(데모 전환), /company(시연 기업 조회),
-/admin(관리자 대시보드 — 포트폴리오 집계·HITL 큐).
+/admin(관리자 대시보드 — 포트폴리오 집계·HITL 큐), /owner(사장님 전용 — 자기 기업 알림).
 8월 확장 시 라우터를 추가로 꽂기만 한다.
 """
 import os
@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from api.db import get_engine
-from api.routers import admin, agent, classify, company, mock, pcaf, scenario, trace
+from api.routers import admin, agent, classify, company, mock, owner, pcaf, scenario, trace
 
 app = FastAPI(title="감탄 API", version="0.1.0")
 
@@ -42,6 +42,7 @@ app.include_router(agent.router)
 app.include_router(scenario.router)
 app.include_router(company.router)
 app.include_router(admin.router)
+app.include_router(owner.router)
 
 
 @app.get("/health")

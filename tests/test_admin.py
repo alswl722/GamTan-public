@@ -233,6 +233,34 @@ def test_alerts_insufficient_history_is_withheld(db, client):
     assert [a for a in alerts if a["type"] in ("spike", "drop")] == []
 
 
+def test_alerts_calendar_gap_withholds_trend_signal(db, client):
+    """직전 3개월이 결손(예: 3~5월 가스 공백)이면, 존재하는 옛 데이터로 '최근 3개월'을
+    조작해 비교하지 않고 추세 판단을 보류한다 — _gap_signal이 공백은 별도로 잡는다."""
+    session, cid = db
+    # 1~2월만 있고 3~5월 결손, 6월에 큰 값 — 존재하는 값 기준 "최근 3개"는 (1,2,6)이 되어
+    # 버그가 있다면 6월이 (1,2)월 평균 대비 급등으로 오판된다.
+    _add_month_total(session, cid, 1, 100.0)
+    _add_month_total(session, cid, 2, 100.0)
+    _add_month_total(session, cid, 6, 400.0)
+
+    res = client.get("/admin/alerts")
+    alerts = [a for a in res.json()["alerts"] if a["company_id"] == cid]
+    assert [a for a in alerts if a["type"] in ("spike", "drop")] == []
+
+
+def test_alerts_excludes_review_required_from_trend(db, client):
+    """HITL 미확정(review_required) 건은 은행 노출 전이므로 추세 계산에서 제외한다."""
+    session, cid = db
+    for m, e in [(1, 100.0), (2, 100.0), (3, 100.0)]:
+        _add_month_total(session, cid, m, e, status="auto")
+    # 4월은 아직 사람이 확정하지 않은 저신뢰 건 — 급등처럼 보여도 알림에 안 잡혀야 함
+    _add_month_total(session, cid, 4, 400.0, status="review_required")
+
+    res = client.get("/admin/alerts")
+    alerts = [a for a in res.json()["alerts"] if a["company_id"] == cid]
+    assert [a for a in alerts if a["type"] in ("spike", "drop")] == []
+
+
 def test_alerts_flags_trailing_data_gap(db, client):
     """마지막 보고월 이후 3개월 이상 공백이면 데이터 공백 알림이 뜬다."""
     session, cid = db
@@ -247,17 +275,50 @@ def test_alerts_flags_trailing_data_gap(db, client):
     assert gaps[0]["severity"] == "medium"
 
 
-def test_alerts_sorted_by_severity_then_company(db, client):
-    """severity 내림차순(high 먼저), 동률이면 기업명 순."""
+def test_owner_alerts_scoped_to_own_company(db, client):
+    """GET /owner/alerts/{id}는 은행 담당자용(/admin/alerts)과 같은 판정 로직을
+    공유하되 자기 기업분만 반환한다 — 은행이 먼저 알고 사장은 모르는 구도 방지."""
     session, cid = db
-    for m, e in [(1, 100.0), (2, 100.0), (3, 100.0), (4, 400.0)]:  # high
-        _add_month_total(session, cid, m, e)
+    other = Company(
+        name="타사정밀", industry_code="C251", industry_name="구조용 금속제품 제조",
+        employee_count=5, revenue_krw=500_000_000, region="경북 구미시",
+    )
+    session.add(other)
+    session.commit()
+
+    for target in (cid, other.id):
+        for m, e in [(1, 100.0), (2, 100.0), (3, 100.0), (4, 400.0)]:  # 둘 다 급등
+            _add_month_total(session, target, m, e)
+
+    admin_alerts = client.get("/admin/alerts").json()["alerts"]
+    assert len({a["company_id"] for a in admin_alerts if a["type"] == "spike"}) == 2
+
+    owner_alerts = client.get(f"/owner/alerts/{cid}").json()["alerts"]
+    assert owner_alerts, "사장님도 은행과 같은 신호를 봐야 한다"
+    assert all(a["company_id"] == cid for a in owner_alerts)
+
+
+def test_alerts_sorted_by_severity_then_company(db, client):
+    """severity 내림차순(high 먼저), 동률이면 기업명 순 — 두 기업 모두 high로 만들어 검증."""
+    session, cid = db
+    # 기업명이 cid 기업("○○정밀")보다 사전순 뒤에 오도록 별도 기업 추가
+    other = Company(
+        name="후순위정밀", industry_code="C251", industry_name="구조용 금속제품 제조",
+        employee_count=8, revenue_krw=1_000_000_000, region="경북 구미시",
+    )
+    session.add(other)
+    session.commit()
+
+    for target in (cid, other.id):
+        for m, e in [(1, 100.0), (2, 100.0), (3, 100.0), (4, 400.0)]:  # 둘 다 high
+            _add_month_total(session, target, m, e)
 
     res = client.get("/admin/alerts")
-    alerts = res.json()["alerts"]
-    severities = [a["severity"] for a in alerts]
-    order = {"high": 0, "medium": 1, "low": 2}
-    assert severities == sorted(severities, key=lambda s: order[s])
+    alerts = [a for a in res.json()["alerts"] if a["type"] == "spike"]
+    assert len(alerts) == 2
+    assert [a["severity"] for a in alerts] == ["high", "high"]
+    # severity 동률이므로 기업명 오름차순 — "○○정밀" < "후순위정밀"
+    assert [a["company_name"] for a in alerts] == sorted(a["company_name"] for a in alerts)
 
 
 def test_traces_groups_runs_with_badges(db, client):

@@ -24,14 +24,19 @@ GAP_MONTHS_THRESHOLD = 3  # 이 개월 수 이상 연속 공백이면 알림
 
 
 def _monthly_totals(session: Session, company_id: int) -> dict[int, float]:
-    """기업의 월별 Scope 1+2 배출량 합계(kg) — 존재하는 월만."""
+    """기업의 월별 Scope 1+2 배출량 합계(kg) — 확정된(auto/confirmed) 건만, 존재하는 월만.
+
+    review_required(HITL 미확정)는 사람이 아직 판정을 마감하지 않은 값이라
+    제외한다 — 저신뢰 분류 하나가 은행 담당자에게 확정된 "급등"으로 잘못
+    보이면 안 된다(보조수단성 원칙, CLAUDE.md §5-5).
+    """
     rows = session.execute(
         select(Voucher.month, Classification.emission_co2e)
         .join(Classification, Classification.voucher_id == Voucher.id)
         .where(
             Voucher.company_id == company_id,
             Classification.scope.in_((1, 2)),
-            Classification.status != "rejected",
+            Classification.status.in_(("auto", "confirmed")),
         )
     ).all()
     totals: dict[int, float] = {}
@@ -41,13 +46,23 @@ def _monthly_totals(session: Session, company_id: int) -> dict[int, float]:
 
 
 def _trend_signal(totals: dict[int, float]) -> dict | None:
-    """최신월 vs 직전 TREND_WINDOW개월 이동평균 — 급등/급감 하나만 반환(둘 다 걸리지 않음)."""
+    """최신월 vs 직전 TREND_WINDOW개월 이동평균 — 급등/급감 하나만 반환(둘 다 걸리지 않음).
+
+    "직전 3개월"은 존재하는 데이터가 아니라 **달력상 연속된** latest-1~latest-3
+    이어야 한다 — 그렇지 않으면 결손월(예: 3~5월 가스 공백)을 건너뛰고 훨씬
+    이전 달과 비교해놓고 "최근 3개월 평균"이라 잘못 표시하게 된다. 그런
+    경우는 이동평균 기준을 세울 수 없으므로 판단을 보류한다(공백 자체는
+    _gap_signal이 별도로 잡는다).
+    """
     months = sorted(totals)
-    if len(months) < TREND_WINDOW + 1:
-        return None  # 추세를 판단할 이력이 부족하면 판단 보류(오탐 방지)
+    if not months:
+        return None
 
     latest = months[-1]
-    baseline_months = months[-(TREND_WINDOW + 1):-1]
+    baseline_months = [latest - i for i in range(1, TREND_WINDOW + 1)]
+    if not all(m in totals for m in baseline_months):
+        return None  # 직전 3개월이 달력상 연속으로 채워져 있지 않으면 판단 보류
+
     baseline = mean(totals[m] for m in baseline_months)
     if baseline <= 0:
         return None
@@ -96,9 +111,18 @@ def _gap_signal(totals: dict[int, float]) -> dict | None:
     return None
 
 
-def detect_alerts(session: Session) -> list[dict]:
-    """전 기업을 스캔해 이상 신호 알림 목록을 생성 — severity 내림차순, 그다음 기업명."""
-    companies = session.execute(select(Company).order_by(Company.id)).scalars().all()
+def detect_alerts(session: Session, company_id: int | None = None) -> list[dict]:
+    """이상 신호 알림 목록 생성 — severity 내림차순, 그다음 기업명.
+
+    company_id 를 주면 해당 기업만 스캔한다 — 은행 담당자용 전체 포트폴리오
+    조회(GET /admin/alerts)와 사장님용 자기 기업 알림(GET /owner/alerts/{id})이
+    같은 판정 로직을 공유하도록 한다("은행이 먼저 알고 사장은 모른다" 구도 방지,
+    CLAUDE.md §9 — 알림은 항상 사장에게 먼저).
+    """
+    stmt = select(Company).order_by(Company.id)
+    if company_id is not None:
+        stmt = stmt.where(Company.id == company_id)
+    companies = session.execute(stmt).scalars().all()
 
     alerts = []
     for co in companies:
