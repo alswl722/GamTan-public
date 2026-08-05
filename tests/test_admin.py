@@ -177,6 +177,89 @@ def test_reject_excludes_from_aggregation(db, client):
     assert keep is not None
 
 
+# ── 이상 신호 알림 (db/alerts.py, 결정론적 배수 계산) ─────────────────────────
+def _add_month_total(session, cid, month, emission, *, scope=1, status="auto"):
+    """월별 배출량 합계 하나를 만들기 위한 최소 전표+분류 1건."""
+    return _add(session, cid, month, f"{month}월 연료", scope=scope, emission=emission, status=status)
+
+
+def test_alerts_flags_spike_over_recent_average(db, client):
+    """최신월이 직전 3개월 평균의 1.5배 이상이면 급등(high)으로 잡힌다."""
+    session, cid = db
+    for m, e in [(1, 100.0), (2, 100.0), (3, 100.0), (4, 400.0)]:
+        _add_month_total(session, cid, m, e)
+
+    res = client.get("/admin/alerts")
+    assert res.status_code == 200, res.text
+    alerts = [a for a in res.json()["alerts"] if a["company_id"] == cid]
+    spikes = [a for a in alerts if a["type"] == "spike"]
+    assert len(spikes) == 1
+    assert spikes[0]["severity"] == "high"
+    assert spikes[0]["month"] == 4
+
+
+def test_alerts_flags_drop_as_medium(db, client):
+    """최신월이 직전 3개월 평균의 0.5배 이하면 급감(medium) — 가동률 하락 의심."""
+    session, cid = db
+    for m, e in [(1, 200.0), (2, 200.0), (3, 200.0), (4, 50.0)]:
+        _add_month_total(session, cid, m, e)
+
+    res = client.get("/admin/alerts")
+    alerts = [a for a in res.json()["alerts"] if a["company_id"] == cid]
+    drops = [a for a in alerts if a["type"] == "drop"]
+    assert len(drops) == 1
+    assert drops[0]["severity"] == "medium"
+
+
+def test_alerts_no_signal_for_stable_trend(db, client):
+    """평월과 큰 차이 없는 정상 추세는 알림이 없어야 한다(과잉 발화 방지)."""
+    session, cid = db
+    for m, e in [(1, 100.0), (2, 105.0), (3, 98.0), (4, 102.0)]:
+        _add_month_total(session, cid, m, e)
+
+    res = client.get("/admin/alerts")
+    alerts = [a for a in res.json()["alerts"] if a["company_id"] == cid]
+    assert [a for a in alerts if a["type"] in ("spike", "drop")] == []
+
+
+def test_alerts_insufficient_history_is_withheld(db, client):
+    """이력이 TREND_WINDOW+1개월 미만이면 추세 판단을 보류한다(오탐 방지)."""
+    session, cid = db
+    _add_month_total(session, cid, 1, 100.0)
+    _add_month_total(session, cid, 2, 500.0)  # 이력 부족 상태에서 배수만 보면 오탐 소지
+
+    res = client.get("/admin/alerts")
+    alerts = [a for a in res.json()["alerts"] if a["company_id"] == cid]
+    assert [a for a in alerts if a["type"] in ("spike", "drop")] == []
+
+
+def test_alerts_flags_trailing_data_gap(db, client):
+    """마지막 보고월 이후 3개월 이상 공백이면 데이터 공백 알림이 뜬다."""
+    session, cid = db
+    _add_month_total(session, cid, 1, 100.0)
+    _add_month_total(session, cid, 2, 100.0)
+    # 3~12월 미연동 → 마지막 보고월(2) 이후 10개월 공백
+
+    res = client.get("/admin/alerts")
+    alerts = [a for a in res.json()["alerts"] if a["company_id"] == cid]
+    gaps = [a for a in alerts if a["type"] == "gap"]
+    assert len(gaps) == 1
+    assert gaps[0]["severity"] == "medium"
+
+
+def test_alerts_sorted_by_severity_then_company(db, client):
+    """severity 내림차순(high 먼저), 동률이면 기업명 순."""
+    session, cid = db
+    for m, e in [(1, 100.0), (2, 100.0), (3, 100.0), (4, 400.0)]:  # high
+        _add_month_total(session, cid, m, e)
+
+    res = client.get("/admin/alerts")
+    alerts = res.json()["alerts"]
+    severities = [a["severity"] for a in alerts]
+    order = {"high": 0, "medium": 1, "low": 2}
+    assert severities == sorted(severities, key=lambda s: order[s])
+
+
 def test_traces_groups_runs_with_badges(db, client):
     """실행 이력 — session_id로 묶고 메시지에서 결과 배지를 뽑는다."""
     session, cid = db
