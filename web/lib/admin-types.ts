@@ -98,9 +98,9 @@ export interface AlertItem {
   message: string;
 }
 
-// ── 목업 전용 (실 엔드포인트 없음 — 화면에 "예시" 표식) ──────────────────
+/** 등급 상승 역산 후보 — GET /admin/rate-candidates 응답 항목. */
 export interface RateCandidateItem {
-  id: string;
+  company_id: number;
   company_name: string;
   current_grade: number;
   target_grade: number;

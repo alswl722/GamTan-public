@@ -2,14 +2,6 @@
 @import url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css");
 @import "tailwindcss";
 
-/* 마루부리 — 로고("감탄") 전용. 명조 계열의 부드러운 인상을 로고에만 준다. */
-@font-face {
-  font-family: "MaruBuri";
-  src: url("/MaruBuri-Light.otf") format("opentype");
-  font-weight: 300;
-  font-display: swap;
-}
-
 /* ==========================================================================
    iM-Bridge 디자인 토큰 (v0.2 — 토스 스타일 리디자인)
    컬러는 iM뱅크 공식 브랜드 가이드 값 그대로 사용 (Primary/Secondary/로고타입 그레이).
@@ -43,6 +35,16 @@
 
   --shadow-card: 0 1px 2px rgba(23, 24, 28, 0.04), 0 8px 24px -12px rgba(23, 24, 28, 0.08);
   --shadow-float: 0 12px 32px -8px rgba(0, 150, 127, 0.18);
+}
+
+/* 마루부리 — 로고("감탄") 전용. 명조 계열의 부드러운 인상을 로고에만 준다.
+   @theme 블록 앞에 두면 Tailwind v4(Lightning CSS)가 @font-face를 통째로
+   드롭하는 문제가 있어 @theme 뒤, 나머지 일반 규칙보다 앞에 둔다. */
+@font-face {
+  font-family: "MaruBuri";
+  src: url("/MaruBuri-Light.otf") format("opentype");
+  font-weight: 300;
+  font-display: swap;
 }
 
 html {

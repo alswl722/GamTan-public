@@ -11,6 +11,8 @@ from db.models import Base, EmissionFactor, UnitPrice, IndustryDistribution
 load_dotenv()
 
 # 이전에 만든 잉여 테이블 (확정 스키마 외)
+# 주의: "portfolio_summaries"는 과거 잉여 테이블명이며, v1 신규 "portfolios"(정본 §7.11,
+# alembic/versions/0002_*)와는 다른 테이블이다. 이 리스트에 "portfolios"를 추가하지 말 것.
 LEGACY_TABLES = [
     "hitl_queue",
     "portfolio_summaries",
@@ -33,8 +35,9 @@ def create_tables(engine):
 
 
 def migrate_columns(engine):
-    """create_all은 신규 테이블만 만들고 기존 테이블 컬럼 추가는 반영하지 않는다.
-    Alembic 없이 운영하는 소규모 스키마라 멱등 ALTER로 직접 보정."""
+    """DEPRECATED: v1부터 신규 컬럼 추가는 alembic/ (revision 0001~)으로 관리한다.
+    이 함수는 Alembic 도입 이전(reviewed_at) 컬럼 유지 목적으로만 남기며, 새 ALTER 문을
+    추가하지 않는다. 실서비스 배포는 `alembic upgrade head`를 사용한다."""
     with engine.connect() as conn:
         conn.execute(text(
             "ALTER TABLE classifications ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ"

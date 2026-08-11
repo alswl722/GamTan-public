@@ -143,7 +143,7 @@ export function DashboardShell({
               <AlertsPanel alerts={alerts} />
             </div>
             <div className="min-h-0">
-              <RateCandidates candidates={MOCK_RATE_CANDIDATES} />
+              <RateCandidates candidates={rateCandidates} />
             </div>
           </div>
         )}
