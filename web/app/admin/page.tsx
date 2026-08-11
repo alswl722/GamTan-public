@@ -6,11 +6,19 @@
  * 목업(예시): 검증 오차율 (결선 확장 — 화면에 '예시' 표식).
  */
 import { useCallback, useEffect, useState } from "react";
-import { getAlerts, getHitl, getPortfolio, getReviewLog, getTraceRuns } from "@/lib/admin-data";
+import {
+  getAlerts,
+  getHitl,
+  getPortfolio,
+  getRateCandidates,
+  getReviewLog,
+  getTraceRuns,
+} from "@/lib/admin-data";
 import type {
   AlertItem,
   HitlItem,
   PortfolioResponse,
+  RateCandidateItem,
   ReviewLogEntry,
   TraceRunItem,
 } from "@/lib/admin-types";
@@ -32,9 +40,16 @@ export default function AdminPage() {
   const load = useCallback(() => {
     setError(false);
     setData(null);
-    Promise.all([getPortfolio(), getHitl(), getTraceRuns(), getReviewLog(), getAlerts()])
-      .then(([portfolio, hitlQueue, traceRuns, reviewLog, alerts]) =>
-        setData({ portfolio, hitlQueue, traceRuns, reviewLog, alerts }),
+    Promise.all([
+      getPortfolio(),
+      getHitl(),
+      getTraceRuns(),
+      getReviewLog(),
+      getAlerts(),
+      getRateCandidates(),
+    ])
+      .then(([portfolio, hitlQueue, traceRuns, reviewLog, alerts, rateCandidates]) =>
+        setData({ portfolio, hitlQueue, traceRuns, reviewLog, alerts, rateCandidates }),
       )
       .catch((err) => {
         console.error("대시보드 데이터 조회 실패:", err);
@@ -83,6 +98,7 @@ export default function AdminPage() {
       traceRuns={data.traceRuns}
       reviewLog={data.reviewLog}
       alerts={data.alerts}
+      rateCandidates={data.rateCandidates}
       onReviewed={refreshReviewLog}
     />
   );
