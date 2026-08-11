@@ -1,8 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { MOCK_RATE_CANDIDATES } from "@/lib/admin-data";
-import type { AlertItem, HitlItem, PortfolioResponse, TraceRunItem } from "@/lib/admin-types";
+import type {
+  AlertItem,
+  HitlItem,
+  PortfolioResponse,
+  RateCandidateItem,
+  TraceRunItem,
+} from "@/lib/admin-types";
 import { cn } from "@/lib/utils";
 import { AlertsPanel } from "@/components/admin/AlertsPanel";
 import { GradeDonut } from "@/components/admin/GradeDonut";
@@ -25,6 +30,7 @@ export interface DashboardShellProps {
   hitlQueue: HitlItem[];
   traceRuns: TraceRunItem[];
   alerts: AlertItem[];
+  rateCandidates: RateCandidateItem[];
 }
 
 /** 상단 KPI 스트립 — 한 줄, 헤더에 고정. */
@@ -70,7 +76,13 @@ function KpiStripCompact({ data, onReviewClick }: { data: PortfolioResponse; onR
   );
 }
 
-export function DashboardShell({ portfolio, hitlQueue, traceRuns, alerts }: DashboardShellProps) {
+export function DashboardShell({
+  portfolio,
+  hitlQueue,
+  traceRuns,
+  alerts,
+  rateCandidates,
+}: DashboardShellProps) {
   const [activeTab, setActiveTab] = useState<TabId>("hitl");
 
   return (
@@ -125,7 +137,7 @@ export function DashboardShell({ portfolio, hitlQueue, traceRuns, alerts }: Dash
               <AlertsPanel alerts={alerts} />
             </div>
             <div className="min-h-0">
-              <RateCandidates candidates={MOCK_RATE_CANDIDATES} />
+              <RateCandidates candidates={rateCandidates} />
             </div>
           </div>
         )}

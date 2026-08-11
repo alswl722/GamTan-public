@@ -21,7 +21,7 @@ export function SiteHeader() {
           <img src="/im-symbol.png" alt="iM Bank" className="h-6 w-auto" />
           <span
             className="text-[22px] tracking-tight text-ink"
-            style={{ fontFamily: "MaruBuri, var(--font-sans)" }}
+            style={{ fontFamily: "MaruBuri, var(--font-sans)", fontWeight: 300 }}
           >
             감탄
           </span>
