@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { getTraceSteps } from "@/lib/admin-data";
 import type { TraceRunItem, TraceStep } from "@/lib/admin-types";
 import { cn } from "@/lib/utils";
+import { DateText } from "@/lib/use-formatted-date";
 
 const STATUS_MAP: Record<string, string> = {
   완료: "bg-brand-soft text-brand-ink border-brand/30",
@@ -26,25 +27,6 @@ const STEP_COLOR: Record<string, string> = {
   관찰: "text-muted",
   행동: "text-muted",
 };
-
-/** 날짜는 마운트 후에만 포맷 — SSR/hydration 불일치 회피. */
-function useFormattedDate(iso: string | null | undefined, opts: Intl.DateTimeFormatOptions) {
-  const [formatted, setFormatted] = useState<string | null>(null);
-  useEffect(() => {
-    if (iso) setFormatted(new Date(iso).toLocaleString("ko-KR", opts));
-  }, [iso]);
-  return formatted;
-}
-
-function DateText({
-  iso,
-  opts,
-}: {
-  iso: string | null | undefined;
-  opts: Intl.DateTimeFormatOptions;
-}) {
-  return <>{useFormattedDate(iso, opts) ?? "—"}</>;
-}
 
 function detailText(detail: unknown): string | null {
   if (detail == null) return null;

@@ -6,12 +6,20 @@
  * 목업(예시): 검증 오차율 (결선 확장 — 화면에 '예시' 표식).
  */
 import { useCallback, useEffect, useState } from "react";
-import { getAlerts, getHitl, getPortfolio, getRateCandidates, getTraceRuns } from "@/lib/admin-data";
+import {
+  getAlerts,
+  getHitl,
+  getPortfolio,
+  getRateCandidates,
+  getReviewLog,
+  getTraceRuns,
+} from "@/lib/admin-data";
 import type {
   AlertItem,
   HitlItem,
   PortfolioResponse,
   RateCandidateItem,
+  ReviewLogEntry,
   TraceRunItem,
 } from "@/lib/admin-types";
 import { DashboardShell } from "@/components/admin/DashboardShell";
@@ -20,6 +28,7 @@ type Data = {
   portfolio: PortfolioResponse;
   hitlQueue: HitlItem[];
   traceRuns: TraceRunItem[];
+  reviewLog: ReviewLogEntry[];
   alerts: AlertItem[];
   rateCandidates: RateCandidateItem[];
 };
@@ -31,9 +40,16 @@ export default function AdminPage() {
   const load = useCallback(() => {
     setError(false);
     setData(null);
-    Promise.all([getPortfolio(), getHitl(), getTraceRuns(), getAlerts(), getRateCandidates()])
-      .then(([portfolio, hitlQueue, traceRuns, alerts, rateCandidates]) =>
-        setData({ portfolio, hitlQueue, traceRuns, alerts, rateCandidates }),
+    Promise.all([
+      getPortfolio(),
+      getHitl(),
+      getTraceRuns(),
+      getReviewLog(),
+      getAlerts(),
+      getRateCandidates(),
+    ])
+      .then(([portfolio, hitlQueue, traceRuns, reviewLog, alerts, rateCandidates]) =>
+        setData({ portfolio, hitlQueue, traceRuns, reviewLog, alerts, rateCandidates }),
       )
       .catch((err) => {
         console.error("대시보드 데이터 조회 실패:", err);
@@ -42,6 +58,13 @@ export default function AdminPage() {
   }, []);
 
   useEffect(load, [load]);
+
+  /** 검토 조치 후 변경 이력만 조용히 다시 불러온다 — 전체 재로딩(깜빡임) 없이 최신 상태 유지. */
+  const refreshReviewLog = useCallback(() => {
+    getReviewLog()
+      .then((reviewLog) => setData((prev) => (prev ? { ...prev, reviewLog } : prev)))
+      .catch((err) => console.error("변경 이력 갱신 실패:", err));
+  }, []);
 
   if (error) {
     return (
@@ -73,8 +96,10 @@ export default function AdminPage() {
       portfolio={data.portfolio}
       hitlQueue={data.hitlQueue}
       traceRuns={data.traceRuns}
+      reviewLog={data.reviewLog}
       alerts={data.alerts}
       rateCandidates={data.rateCandidates}
+      onReviewed={refreshReviewLog}
     />
   );
 }

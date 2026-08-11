@@ -6,10 +6,12 @@ import type {
   HitlItem,
   PortfolioResponse,
   RateCandidateItem,
+  ReviewLogEntry,
   TraceRunItem,
 } from "@/lib/admin-types";
 import { cn } from "@/lib/utils";
 import { AlertsPanel } from "@/components/admin/AlertsPanel";
+import { AuditLog } from "@/components/admin/AuditLog";
 import { GradeDonut } from "@/components/admin/GradeDonut";
 import { HitlWorkspace } from "@/components/admin/HitlWorkspace";
 import { RateCandidates } from "@/components/admin/RateCandidates";
@@ -21,6 +23,7 @@ const TABS = [
   { id: "grades", label: "등급 분포" },
   { id: "risk", label: "여신 리스크" },
   { id: "trace", label: "실행 이력" },
+  { id: "audit", label: "변경 이력" },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -29,8 +32,11 @@ export interface DashboardShellProps {
   portfolio: PortfolioResponse;
   hitlQueue: HitlItem[];
   traceRuns: TraceRunItem[];
+  reviewLog: ReviewLogEntry[];
   alerts: AlertItem[];
   rateCandidates: RateCandidateItem[];
+  /** 담당자 검토 탭에서 확정/반려가 성공할 때마다 호출 — 변경 이력을 최신으로 다시 불러온다. */
+  onReviewed?: () => void;
 }
 
 /** 상단 KPI 스트립 — 한 줄, 헤더에 고정. */
@@ -80,8 +86,10 @@ export function DashboardShell({
   portfolio,
   hitlQueue,
   traceRuns,
+  reviewLog,
   alerts,
   rateCandidates,
+  onReviewed,
 }: DashboardShellProps) {
   const [activeTab, setActiveTab] = useState<TabId>("hitl");
 
@@ -116,7 +124,7 @@ export function DashboardShell({
       <div className="flex-1 overflow-hidden">
         {activeTab === "hitl" && (
           <div className="h-full p-4">
-            <HitlWorkspace initialQueue={hitlQueue} />
+            <HitlWorkspace initialQueue={hitlQueue} onChanged={onReviewed} />
           </div>
         )}
 
@@ -145,6 +153,12 @@ export function DashboardShell({
         {activeTab === "trace" && (
           <div className="h-full p-4">
             <TraceHistory runs={traceRuns} />
+          </div>
+        )}
+
+        {activeTab === "audit" && (
+          <div className="h-full p-4">
+            <AuditLog entries={reviewLog} />
           </div>
         )}
       </div>

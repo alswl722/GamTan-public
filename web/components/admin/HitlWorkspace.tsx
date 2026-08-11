@@ -4,7 +4,7 @@
 // 실API: PATCH /admin/classifications/{id}/confirm | /{id} (수정) | /{id}/reject
 
 import { useMemo, useState } from "react";
-import { confirmVoucher, editVoucher, rejectVoucher } from "@/lib/admin-data";
+import { bulkConfirm, bulkReject, confirmVoucher, editVoucher, rejectVoucher } from "@/lib/admin-data";
 import type { HitlItem } from "@/lib/admin-types";
 import { cn } from "@/lib/utils";
 
@@ -330,7 +330,14 @@ function CompanyList({
   );
 }
 
-export function HitlWorkspace({ initialQueue }: { initialQueue: HitlItem[] }) {
+export function HitlWorkspace({
+  initialQueue,
+  onChanged,
+}: {
+  initialQueue: HitlItem[];
+  /** 확정/수정/반려(단건·일괄)가 성공할 때마다 호출 — 변경 이력 탭을 최신으로 유지. */
+  onChanged?: () => void;
+}) {
   const [queue, setQueue] = useState<HitlItem[]>(initialQueue);
   const [selectedCompany, setSelectedCompany] = useState<string | null>(
     initialQueue[0]?.company_name ?? null,
@@ -338,8 +345,13 @@ export function HitlWorkspace({ initialQueue }: { initialQueue: HitlItem[] }) {
   const [selectedId, setSelectedId] = useState<number | null>(initialQueue[0]?.voucher_id ?? null);
   const [filterFuel, setFilterFuel] = useState("전체");
   const [filterConfidence, setFilterConfidence] = useState("전체");
+  const [filterMonth, setFilterMonth] = useState("전체");
+  const [filterSearch, setFilterSearch] = useState("");
   const [sortBy, setSortBy] = useState<"confidence" | "month">("confidence");
   const [companyListCollapsed, setCompanyListCollapsed] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
 
   const companies = useMemo<CompanySummary[]>(() => {
     const byCompany = new Map<string, HitlItem[]>();
@@ -362,6 +374,11 @@ export function HitlWorkspace({ initialQueue }: { initialQueue: HitlItem[] }) {
     [initialQueue],
   );
 
+  const months = useMemo(
+    () => Array.from(new Set(initialQueue.map((i) => i.month))).sort((a, b) => a - b),
+    [initialQueue],
+  );
+
   const companyQueue = useMemo(
     () => queue.filter((i) => i.company_name === selectedCompany),
     [queue, selectedCompany],
@@ -374,9 +391,14 @@ export function HitlWorkspace({ initialQueue }: { initialQueue: HitlItem[] }) {
     if (filterConfidence === "0.5–0.65")
       list = list.filter((i) => i.confidence >= 0.5 && i.confidence < 0.65);
     if (filterConfidence === "0.65+") list = list.filter((i) => i.confidence >= 0.65);
+    if (filterMonth !== "전체") list = list.filter((i) => i.month === Number(filterMonth));
+    if (filterSearch.trim()) {
+      const q = filterSearch.trim().toLowerCase();
+      list = list.filter((i) => i.raw.toLowerCase().includes(q));
+    }
     list.sort((a, b) => (sortBy === "confidence" ? a.confidence - b.confidence : a.month - b.month));
     return list;
-  }, [companyQueue, filterFuel, filterConfidence, sortBy]);
+  }, [companyQueue, filterFuel, filterConfidence, filterMonth, filterSearch, sortBy]);
 
   const selected = queue.find((i) => i.voucher_id === selectedId) ?? null;
 
@@ -384,9 +406,54 @@ export function HitlWorkspace({ initialQueue }: { initialQueue: HitlItem[] }) {
     setSelectedCompany(name);
     const first = queue.find((i) => i.company_name === name);
     setSelectedId(first?.voucher_id ?? null);
+    setSelectedIds(new Set());
+    setBulkError(null);
   }
 
+  function toggleSelect(voucherId: number) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(voucherId)) next.delete(voucherId);
+      else next.add(voucherId);
+      return next;
+    });
+  }
+
+  function toggleSelectAllFiltered() {
+    setSelectedIds((prev) => {
+      const allSelected = filtered.length > 0 && filtered.every((i) => prev.has(i.voucher_id));
+      return allSelected ? new Set() : new Set(filtered.map((i) => i.voucher_id));
+    });
+  }
+
+  async function runBulk(action: (ids: number[]) => ReturnType<typeof bulkConfirm>) {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    setBulkBusy(true);
+    setBulkError(null);
+    try {
+      const { results } = await action(ids);
+      const succeeded = results.filter((r) => r.ok).map((r) => r.voucher_id);
+      const failed = results.filter((r) => !r.ok);
+      succeeded.forEach((id) => removeItem(id));
+      setSelectedIds(new Set(failed.map((r) => r.voucher_id)));
+      if (failed.length > 0) {
+        // 부분 실패를 숨기지 않는다 — 실패 건은 선택 상태로 남겨 재시도할 수 있게 한다
+        setBulkError(`${failed.length}건 처리 실패(이미 처리됐거나 상태가 바뀐 건) — 선택은 유지됩니다.`);
+      }
+    } catch (err) {
+      console.error("일괄 처리 실패:", err);
+      setBulkError("일괄 처리 요청이 실패했습니다. 잠시 후 다시 시도해 주세요.");
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  const handleBulkConfirm = () => runBulk(bulkConfirm);
+  const handleBulkReject = () => runBulk(bulkReject);
+
   function removeItem(voucherId: number) {
+    onChanged?.();
     setQueue((prev) => {
       const next = prev.filter((i) => i.voucher_id !== voucherId);
       setSelectedId((cur) => {
@@ -415,6 +482,13 @@ export function HitlWorkspace({ initialQueue }: { initialQueue: HitlItem[] }) {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="text"
+            value={filterSearch}
+            onChange={(e) => setFilterSearch(e.target.value)}
+            placeholder="전표 텍스트 검색"
+            className="w-40 rounded-md border border-line bg-surface px-2.5 py-1.5 text-xs text-ink placeholder:text-faint transition-colors focus:outline-none focus:ring-1 focus:ring-brand"
+          />
           <select className={selectCls} value={filterFuel} onChange={(e) => setFilterFuel(e.target.value)}>
             {fuels.map((f) => (
               <option key={f} value={f}>
@@ -432,6 +506,14 @@ export function HitlWorkspace({ initialQueue }: { initialQueue: HitlItem[] }) {
             <option value="0.5–0.65">0.5 – 0.65 (주의)</option>
             <option value="0.65+">0.65 이상</option>
           </select>
+          <select className={selectCls} value={filterMonth} onChange={(e) => setFilterMonth(e.target.value)}>
+            <option value="전체">월 전체</option>
+            {months.map((m) => (
+              <option key={m} value={m}>
+                {m}월
+              </option>
+            ))}
+          </select>
           <select
             className={selectCls}
             value={sortBy}
@@ -442,6 +524,41 @@ export function HitlWorkspace({ initialQueue }: { initialQueue: HitlItem[] }) {
           </select>
         </div>
       </div>
+
+      {selectedIds.size > 0 && (
+        <div className="flex flex-shrink-0 flex-wrap items-center justify-between gap-3 border-b border-line bg-brand-soft/40 px-6 py-2.5">
+          <div className="flex items-center gap-3">
+            <span className="text-xs font-semibold text-brand-ink">{selectedIds.size}건 선택됨</span>
+            {bulkError && <span className="text-xs text-hitl-ink">{bulkError}</span>}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSelectedIds(new Set())}
+              disabled={bulkBusy}
+              className="rounded-md px-3 py-1.5 text-xs font-medium text-muted transition-colors hover:text-ink disabled:opacity-60"
+            >
+              선택 해제
+            </button>
+            <button
+              type="button"
+              onClick={handleBulkReject}
+              disabled={bulkBusy}
+              className="rounded-md border border-line bg-surface px-3 py-1.5 text-xs font-semibold text-muted transition-colors hover:bg-bg disabled:opacity-60"
+            >
+              일괄 반려
+            </button>
+            <button
+              type="button"
+              onClick={handleBulkConfirm}
+              disabled={bulkBusy}
+              className="rounded-md bg-brand px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-brand-ink disabled:opacity-60"
+            >
+              {bulkBusy ? "처리 중…" : "일괄 확정"}
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="flex min-h-0 flex-1">
         <CompanyList
@@ -458,29 +575,53 @@ export function HitlWorkspace({ initialQueue }: { initialQueue: HitlItem[] }) {
               검토 항목 없음
             </div>
           ) : (
-            filtered.map((item) => (
-              <button
-                key={item.voucher_id}
-                onClick={() => setSelectedId(item.voucher_id)}
-                className={cn(
-                  "w-full border-b border-line px-4 py-3.5 text-left transition-colors",
-                  selectedId === item.voucher_id
-                    ? "border-l-2 border-l-brand bg-brand-soft"
-                    : "hover:bg-bg",
-                )}
-              >
-                <div className="mb-1 flex items-center justify-between gap-2">
-                  <span className="truncate text-sm font-semibold text-ink">{item.raw}</span>
-                  <ConfidenceBadge value={item.confidence} />
+            <>
+              <label className="flex items-center gap-2 border-b border-line bg-surface px-4 py-2 text-xs text-faint">
+                <input
+                  type="checkbox"
+                  className="h-3.5 w-3.5 accent-brand"
+                  checked={filtered.every((i) => selectedIds.has(i.voucher_id))}
+                  onChange={toggleSelectAllFiltered}
+                  aria-label="현재 목록 전체 선택"
+                />
+                전체 선택 ({filtered.length}건)
+              </label>
+              {filtered.map((item) => (
+                <div
+                  key={item.voucher_id}
+                  className={cn(
+                    "flex items-start gap-2 border-b border-line px-3 py-3.5 transition-colors",
+                    selectedId === item.voucher_id
+                      ? "border-l-2 border-l-brand bg-brand-soft"
+                      : "hover:bg-bg",
+                  )}
+                >
+                  <input
+                    type="checkbox"
+                    className="mt-1 h-3.5 w-3.5 flex-shrink-0 accent-brand"
+                    checked={selectedIds.has(item.voucher_id)}
+                    onChange={() => toggleSelect(item.voucher_id)}
+                    aria-label={`${item.raw} 선택`}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setSelectedId(item.voucher_id)}
+                    className="min-w-0 flex-1 text-left"
+                  >
+                    <div className="mb-1 flex items-center justify-between gap-2">
+                      <span className="truncate text-sm font-semibold text-ink">{item.raw}</span>
+                      <ConfidenceBadge value={item.confidence} />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-faint">{item.fuel || "미분류"}</span>
+                      <span className="text-xs text-faint">·</span>
+                      <span className="text-xs text-faint">{item.month}월</span>
+                      <MethodBadge method={item.method} />
+                    </div>
+                  </button>
                 </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-faint">{item.fuel || "미분류"}</span>
-                  <span className="text-xs text-faint">·</span>
-                  <span className="text-xs text-faint">{item.month}월</span>
-                  <MethodBadge method={item.method} />
-                </div>
-              </button>
-            ))
+              ))}
+            </>
           )}
         </div>
 

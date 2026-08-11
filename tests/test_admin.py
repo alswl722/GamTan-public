@@ -177,6 +177,101 @@ def test_reject_excludes_from_aggregation(db, client):
     assert keep is not None
 
 
+# ── 일괄 처리·감사 로그 (bulk-confirm/bulk-reject/review-log) ───────────────────
+def test_bulk_confirm_transitions_all_and_leaves_queue(db, client):
+    """일괄 확정 — 대상 전 건이 confirmed로 바뀌고 큐에서 빠진다."""
+    session, cid = db
+    v1 = _add(session, cid, 1, "유류대금", scope=1, emission=0.0,
+              status="review_required", conf=0.5)
+    v2 = _add(session, cid, 2, "동절기 난방유", scope=1, emission=0.0,
+              status="review_required", conf=0.4)
+
+    res = client.patch("/admin/classifications/bulk-confirm", json={"voucher_ids": [v1, v2]})
+    assert res.status_code == 200, res.text
+    results = res.json()["results"]
+    assert {r["voucher_id"]: r["ok"] for r in results} == {v1: True, v2: True}
+
+    for vid in (v1, v2):
+        obj = session.query(Classification).filter_by(voucher_id=vid).one()
+        assert obj.status == "confirmed"
+        assert "담당자 일괄 확정" in obj.evidence
+    assert get_hitl_queue(session) == []
+
+
+def test_bulk_reject_excludes_from_aggregation(db, client):
+    """일괄 반려 — 대상 전 건이 rejected로 바뀌고 집계에서 빠진다(원본 값 보존)."""
+    session, cid = db
+    keep = _add(session, cid, 1, "도시가스", scope=1, emission=1000.0, status="auto")
+    v1 = _add(session, cid, 2, "정체불명 유류1", scope=1, emission=5000.0,
+              status="review_required", conf=0.3)
+    v2 = _add(session, cid, 3, "정체불명 유류2", scope=1, emission=4000.0,
+              status="review_required", conf=0.3)
+
+    before = portfolio_summary(session)["total"]
+    res = client.patch("/admin/classifications/bulk-reject", json={"voucher_ids": [v1, v2]})
+    assert res.status_code == 200, res.text
+    assert all(r["ok"] for r in res.json()["results"])
+
+    after = portfolio_summary(session)["total"]
+    assert after < before, "반려 건이 여전히 집계에 포함됨"
+    for vid, emission in ((v1, 5000.0), (v2, 4000.0)):
+        obj = session.query(Classification).filter_by(voucher_id=vid).one()
+        assert obj.status == "rejected"
+        assert "담당자 일괄 반려" in obj.evidence
+        assert obj.emission_co2e == emission, "반려는 상태만 바꾸고 원본 값은 보존해야 한다"
+    assert keep is not None
+
+
+def test_bulk_action_reports_partial_failure(db, client):
+    """일부 건이 이미 확정 상태거나 존재하지 않아도, 나머지 건은 계속 처리된다(부분 실패 가시성)."""
+    session, cid = db
+    reviewable = _add(session, cid, 1, "유류대금", scope=1, emission=0.0,
+                       status="review_required", conf=0.5)
+    already_confirmed = _add(session, cid, 2, "도시가스", scope=1, emission=500.0, status="auto")
+    missing_id = already_confirmed + 999
+
+    res = client.patch(
+        "/admin/classifications/bulk-confirm",
+        json={"voucher_ids": [reviewable, already_confirmed, missing_id]},
+    )
+    assert res.status_code == 200, res.text
+    by_id = {r["voucher_id"]: r for r in res.json()["results"]}
+
+    assert by_id[reviewable]["ok"] is True
+    assert by_id[already_confirmed]["ok"] is False
+    assert by_id[missing_id]["ok"] is False
+
+    # 실패 건이 있어도 성공 건은 실제로 반영돼야 한다(한 건 실패가 전체를 롤백하지 않음)
+    obj = session.query(Classification).filter_by(voucher_id=reviewable).one()
+    assert obj.status == "confirmed"
+
+
+def test_review_log_lists_reviewed_entries_most_recent_first(db, client):
+    """감사 로그 — reviewed_at이 있는 건만, 최근 조치순으로 노출."""
+    session, cid = db
+    untouched = _add(session, cid, 1, "도시가스", scope=1, emission=500.0, status="auto")
+    v1 = _add(session, cid, 2, "유류대금", scope=1, emission=0.0,
+              status="review_required", conf=0.5)
+    v2 = _add(session, cid, 3, "동절기 난방유", scope=1, emission=0.0,
+              status="review_required", conf=0.4)
+
+    # v1을 먼저 확정, v2를 나중에 반려 — v2가 더 최근 조치이므로 먼저 나와야 함
+    assert client.patch(f"/admin/classifications/{v1}/confirm").status_code == 200
+    assert client.patch(f"/admin/classifications/{v2}/reject").status_code == 200
+
+    res = client.get("/admin/review-log")
+    assert res.status_code == 200, res.text
+    entries = res.json()["entries"]
+    voucher_ids = [e["voucher_id"] for e in entries]
+
+    assert untouched not in voucher_ids, "조치 이력이 없는 건은 감사 로그에 노출되면 안 된다"
+    assert voucher_ids.index(v2) < voucher_ids.index(v1), "최근 조치(v2)가 먼저 나와야 한다"
+    by_id = {e["voucher_id"]: e for e in entries}
+    assert by_id[v1]["status"] == "confirmed"
+    assert by_id[v2]["status"] == "rejected"
+    assert by_id[v1]["reviewed_at"] is not None
+
+
 # ── 이상 신호 알림 (db/alerts.py, 결정론적 배수 계산) ─────────────────────────
 def _add_month_total(session, cid, month, emission, *, scope=1, status="auto"):
     """월별 배출량 합계 하나를 만들기 위한 최소 전표+분류 1건."""
