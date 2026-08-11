@@ -1,8 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { MOCK_ALERTS, MOCK_RATE_CANDIDATES } from "@/lib/admin-data";
-import type { HitlItem, PortfolioResponse, ReviewLogEntry, TraceRunItem } from "@/lib/admin-types";
+import { MOCK_RATE_CANDIDATES } from "@/lib/admin-data";
+import type {
+  AlertItem,
+  HitlItem,
+  PortfolioResponse,
+  ReviewLogEntry,
+  TraceRunItem,
+} from "@/lib/admin-types";
 import { cn } from "@/lib/utils";
 import { AlertsPanel } from "@/components/admin/AlertsPanel";
 import { AuditLog } from "@/components/admin/AuditLog";
@@ -27,6 +33,7 @@ export interface DashboardShellProps {
   hitlQueue: HitlItem[];
   traceRuns: TraceRunItem[];
   reviewLog: ReviewLogEntry[];
+  alerts: AlertItem[];
   /** 담당자 검토 탭에서 확정/반려가 성공할 때마다 호출 — 변경 이력을 최신으로 다시 불러온다. */
   onReviewed?: () => void;
 }
@@ -79,6 +86,7 @@ export function DashboardShell({
   hitlQueue,
   traceRuns,
   reviewLog,
+  alerts,
   onReviewed,
 }: DashboardShellProps) {
   const [activeTab, setActiveTab] = useState<TabId>("hitl");

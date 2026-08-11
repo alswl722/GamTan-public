@@ -6,8 +6,14 @@
  * 목업(예시): 우대금리·검증 오차율 (결선 확장 — 화면에 '예시' 표식).
  */
 import { useCallback, useEffect, useState } from "react";
-import { getHitl, getPortfolio, getReviewLog, getTraceRuns } from "@/lib/admin-data";
-import type { HitlItem, PortfolioResponse, ReviewLogEntry, TraceRunItem } from "@/lib/admin-types";
+import { getAlerts, getHitl, getPortfolio, getReviewLog, getTraceRuns } from "@/lib/admin-data";
+import type {
+  AlertItem,
+  HitlItem,
+  PortfolioResponse,
+  ReviewLogEntry,
+  TraceRunItem,
+} from "@/lib/admin-types";
 import { DashboardShell } from "@/components/admin/DashboardShell";
 
 type Data = {
@@ -15,6 +21,7 @@ type Data = {
   hitlQueue: HitlItem[];
   traceRuns: TraceRunItem[];
   reviewLog: ReviewLogEntry[];
+  alerts: AlertItem[];
 };
 
 export default function AdminPage() {
@@ -24,9 +31,9 @@ export default function AdminPage() {
   const load = useCallback(() => {
     setError(false);
     setData(null);
-    Promise.all([getPortfolio(), getHitl(), getTraceRuns(), getReviewLog()])
-      .then(([portfolio, hitlQueue, traceRuns, reviewLog]) =>
-        setData({ portfolio, hitlQueue, traceRuns, reviewLog }),
+    Promise.all([getPortfolio(), getHitl(), getTraceRuns(), getReviewLog(), getAlerts()])
+      .then(([portfolio, hitlQueue, traceRuns, reviewLog, alerts]) =>
+        setData({ portfolio, hitlQueue, traceRuns, reviewLog, alerts }),
       )
       .catch((err) => {
         console.error("대시보드 데이터 조회 실패:", err);
@@ -74,6 +81,7 @@ export default function AdminPage() {
       hitlQueue={data.hitlQueue}
       traceRuns={data.traceRuns}
       reviewLog={data.reviewLog}
+      alerts={data.alerts}
       onReviewed={refreshReviewLog}
     />
   );
