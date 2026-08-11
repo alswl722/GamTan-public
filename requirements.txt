@@ -8,3 +8,4 @@ anthropic
 google-genai
 openpyxl
 pytest
+alembic
