@@ -420,9 +420,9 @@ def test_traces_groups_runs_with_badges(db, client):
     """실행 이력 — session_id로 묶고 메시지에서 결과 배지를 뽑는다."""
     session, cid = db
     for i, (sid, msg) in enumerate([
-        ("s-1", "3·4·5월 도시가스 0건, 제조업 특성상 비정상(결손 발견)"),
-        ("s-1", "7월 경유 배출량이 평월 중앙값의 3.2배 — 이상치 의심"),
-        ("s-2", "전표 30건 수집 완료"),
+        ("s-1", "그런데 3·4·5월 도시가스 자료가 비어있네요. 이런 업종에서는 흔치 않은 경우예요."),
+        ("s-1", "7월 경유 사용량이 평소보다 3.2배나 많아요. 왜 그런지 다시 확인해볼게요."),
+        ("s-2", "자료 30건을 확인했어요."),
     ]):
         session.add(TraceLog(company_id=cid, session_id=sid, step_type="관찰",
                              message=msg, tool_name="테스트"))
