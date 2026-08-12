@@ -12,9 +12,15 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from db.models import Company, Voucher
+from db.models import Company, FinancialInstitution, InstitutionBorrower, Voucher
 
 load_dotenv()
+
+# 0006 마이그레이션(alembic/versions/0006_backfill_default_institution.py)과 동일한
+# 데모 금융기관 키 — 이 스크립트가 마이그레이션 이후에 재실행돼도(빈 DB 재시드 등)
+# vouchers.financial_institution_id가 NULL로 남지 않도록 같은 기관에 귀속시킨다.
+_DEMO_TENANT_KEY = "demo-im-bank"
+_DEMO_INSTITUTION_NAME = "감탄 데모 금융기관"
 
 
 DEMO_COMPANY = dict(
@@ -164,6 +170,37 @@ def _quantity_fields(v: dict) -> dict:
     return {"quantity": round(v["supply_amount_krw"] / price), "quantity_unit": unit}
 
 
+def _resolve_demo_institution_borrower(session: Session, company_id: int) -> tuple[int, int]:
+    """0006과 동일한 데모 금융기관에 이 기업을 귀속시킨다(멱등 — 이미 있으면 재사용).
+
+    api/queries.py::resolve_institution_borrower()와 같은 목적이지만, 이 스크립트는
+    방금 만든 Company를 그 즉시 귀속시켜야 해서(0006 백필 대상이 아님 — 마이그레이션은
+    과거 시점에 존재하던 행만 채운다) 여기서 직접 생성까지 담당한다.
+    """
+    institution = session.query(FinancialInstitution).filter_by(tenant_key=_DEMO_TENANT_KEY).first()
+    if institution is None:
+        institution = FinancialInstitution(
+            name=_DEMO_INSTITUTION_NAME, reporting_currency="KRW", tenant_key=_DEMO_TENANT_KEY,
+        )
+        session.add(institution)
+        session.flush()
+
+    borrower = session.query(InstitutionBorrower).filter_by(
+        financial_institution_id=institution.id, company_id=company_id,
+    ).first()
+    if borrower is None:
+        borrower = InstitutionBorrower(
+            financial_institution_id=institution.id,
+            company_id=company_id,
+            external_customer_id=f"demo-company-{company_id}",
+            consent_status="active",
+        )
+        session.add(borrower)
+        session.flush()
+
+    return institution.id, borrower.id
+
+
 def seed(session: Session):
     if session.query(Company).filter_by(name="○○정밀").first():
         print("[SKIP] ○○정밀 목업 이미 존재")
@@ -172,6 +209,8 @@ def seed(session: Session):
     company = Company(**DEMO_COMPANY)
     session.add(company)
     session.flush()
+
+    institution_id, borrower_id = _resolve_demo_institution_borrower(session, company.id)
 
     for v in VOUCHERS:
         raw = {**v, "issue_date": v["issue_date"].isoformat(), **_quantity_fields(v)}
@@ -186,6 +225,8 @@ def seed(session: Session):
             item_description=v["item_description"],
             supply_amount_krw=v["supply_amount_krw"],
             raw_json=raw,
+            financial_institution_id=institution_id,
+            institution_borrower_id=borrower_id,
         ))
 
     session.commit()
