@@ -1,8 +1,9 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { ChevronRight, Search } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { getCompanies, getCompanyId, setCompanyId, type CompanyListItem } from "@/lib/api";
 
 /** 사장님 앱 메인 화면 — 계정(로그인) 개념이 없어 기업을 직접 골라야 한다.
@@ -93,13 +94,19 @@ export default function OwnerHomePage() {
           <ChevronRight size={16} className="shrink-0 text-faint" />
         </span>
 
-        <span className="mt-2.5 flex items-center gap-2">
+        <span className="mt-2.5 flex items-center gap-1">
           <span className="text-[16.5px] font-extrabold leading-snug text-ink">
             우리 기업 탄소 배출량을
             <br />
             확인해보세요
           </span>
-          <Search size={22} strokeWidth={2.2} className="shrink-0 text-brand-ink" />
+          <Image
+            src="/ddockdi_1.png"
+            alt=""
+            width={56}
+            height={56}
+            className="-my-2 shrink-0"
+          />
         </span>
 
         <span className="mt-4 block h-1 overflow-hidden rounded-full bg-line">
