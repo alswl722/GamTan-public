@@ -23,11 +23,11 @@ Scope: 감탄 시연·검증에 필요한 합성 데이터의 제작 현황과 �
 
 ---
 
-## ② 분류 강건성 테스트용 합성전표 — `db/synth_generator.py` → `data/synth_vouchers_300.csv`
+## ② 분류 강건성 테스트용 합성전표 — `db/synth_generator.py` → `data/합성전표_300건.csv`
 
 - 파라미터형 생성기(`--count --gap --anomaly --seed`), `data/감탄_데이터준비_샘플.xlsx`의
   `전표_샘플` 표현을 앵커링 소스로 사용(`--from-excel`)
-- **2026-08-12: 300건 생성 완료** — `python -m db.synth_generator --count 300 --companies 9 --from-excel --seed 42 --out data/synth_vouchers_300.csv`
+- **2026-08-12: 300건 생성 완료** — `python -m db.synth_generator --count 300 --companies 9 --from-excel --seed 42 --out data/합성전표_300건.csv`
   - 9개 기업, 데모 기업(○○정밀)만 결손(3·4·5월 도시가스)·이상치(7월 경유 ×3.2) 시나리오 포함, 나머지 8개 기업은 정상 12개월
   - git 커밋 완료(`신규-대량전표 300건`)
 - **용도가 다름**: DB `vouchers`(시연 33건)와 별개 — 트랙B 분류 정확도 검증용이지 시연 데이터가 아님
@@ -87,7 +87,7 @@ Scope: 감탄 시연·검증에 필요한 합성 데이터의 제작 현황과 �
 ## 결론 — 다음에 할 일
 
 **이번 세션에서 완료됨:**
-- [x] 분류 강건성 테스트 전표 300건 생성 (`data/synth_vouchers_300.csv`)
+- [x] 분류 강건성 테스트 전표 300건 생성 (`data/합성전표_300건.csv`)
 - [x] 회계 마스터 엑셀에 K-택소노미·설비투자·HITL·중복업로드 시나리오 9건 확장
       (`data/감탄_데이터준비_샘플.xlsx`, 원본은 `_원본백업.xlsx`로 보존)
 - [x] 배출계수(5)·월별단가(48)·분류규칙(58)·기대결과(50) 정상 파싱 재확인
@@ -97,6 +97,6 @@ Scope: 감탄 시연·검증에 필요한 합성 데이터의 제작 현황과 �
       이 세션엔 `DATABASE_URL`이 없어 직접 실행 불가, 사용자 환경에서 실행 필요
 - [ ] `db/init_db.py`에 `seed_pcaf_quality_rules()` 함수 신규 구현 (현재 코드에 없음)
 - [ ] `organizational_boundaries` 최소 1건 등록 (PCAF 품질평가 API 409 방지)
-- [ ] `synth_vouchers_300.csv`의 DB 적재 여부는 3단계 검증(8/4~8/10) 착수 시 결정
+- [ ] `합성전표_300건.csv`의 DB 적재 여부는 3단계 검증(8/4~8/10) 착수 시 결정
 - [ ] 신규 8개 참고 시트(`company_master` 등)를 실제 DB에 반영하려면 별도 로더 코드 필요 —
       현재는 순수 참고·발표 자료

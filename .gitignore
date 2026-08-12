@@ -36,4 +36,7 @@ Thumbs.db
 *.db
 
 # 합성 업로드 서류 PDF (scripts/generate_upload_docs.py로 재생성 가능, 바이너리라 git에 안 올림)
-data/uploaded_docs/
+data/업로드서류/
+
+# Excel 임시 잠금 파일
+~$*.xlsx

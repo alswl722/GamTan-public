@@ -35,9 +35,9 @@ FONT_SERIF = "HYSMyeongJo-Medium"
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 DATA_DIR = os.path.join(ROOT, "data")
-DOCS_DIR = os.path.join(DATA_DIR, "uploaded_docs")
+DOCS_DIR = os.path.join(DATA_DIR, "업로드서류")
 DOCS_MD = os.path.join(ROOT, "docs", "upload-scenarios.md")
-MYDATA_CSV = os.path.join(DATA_DIR, "mydata_연동자료_전체기업.csv")
+MYDATA_CSV = os.path.join(DATA_DIR, "마이데이터_연동자료_전체기업.csv")
 
 MONTHS = ["2025-01", "2025-02", "2025-03"]
 DAYS_IN_MONTH = {"2025-01": 31, "2025-02": 28, "2025-03": 31}
@@ -345,10 +345,10 @@ def build_scenario_md(manifest):
         "```text",
         "Status: synthetic-data",
         "Last updated: 2026-08-12",
-        "Scope: data/uploaded_docs/ 의 개별 PDF가 어떤 결측 패턴을 시연하는지 한눈에 보기 위한 문서",
+        "Scope: data/업로드서류/ 의 개별 PDF가 어떤 결측 패턴을 시연하는지 한눈에 보기 위한 문서",
         "```",
         "",
-        "> 마이데이터 연동자료(사업자등록증명 등 5종)는 `data/mydata_연동자료_전체기업.csv`",
+        "> 마이데이터 연동자료(사업자등록증명 등 5종)는 `data/마이데이터_연동자료_전체기업.csv`",
         "> 하나로 전체 기업을 한 번에 담았다 — 자동 연동이라 개별 서류 개념이 없음.",
         "> 아래는 **사장이 직접 업로드하는** 세금계산서·전기고지서·도시가스고지서만 대상.",
         "",
@@ -382,6 +382,9 @@ def build_scenario_md(manifest):
     lines.append("| --- | --- | " + " | ".join(["---"] * len(MONTHS)) + " |")
     for co_id, co in COMPANIES.items():
         for doc, (months, note) in PRESENCE[co_id].items():
+            # manifest의 doc_type과 동일한 키("세금계산서_경유" 등)로 조회해야
+            # counts 딕셔너리와 실제로 매칭된다 — 사람이 읽는 표시용 라벨(괄호 표기)은 별도.
+            doc_type_key = "전기고지서" if doc == "전기" else ("도시가스고지서" if doc == "도시가스" else f"세금계산서_{doc}")
             doc_label = "전기고지서" if doc == "전기" else ("도시가스고지서" if doc == "도시가스" else f"세금계산서({doc})")
             cells = []
             for m in MONTHS:
@@ -390,14 +393,14 @@ def build_scenario_md(manifest):
                 elif (co_id, doc, m) in DEGRADED:
                     cells.append("⚠️ 업로드됨(파싱실패)")
                 else:
-                    n = counts.get((co_id, doc_label, m), 1)
+                    n = counts.get((co_id, doc_type_key, m), 1)
                     cells.append(f"✅ {n}건" if n > 1 else "✅ 있음")
             lines.append(f"| {co['name']} | {doc_label} | " + " | ".join(cells) + " |")
             lines.append(f"| | *({note})* | | | |")
 
     lines += ["", "## 산출물", "", "```text",
-              "data/mydata_연동자료_전체기업.csv         — 마이데이터 5종 × 6개 기업 = 30행",
-              "data/uploaded_docs/<기업ID>_<기업명>/*.pdf — 서류종류_월[_저품질스캔].pdf",
+              "data/마이데이터_연동자료_전체기업.csv       — 마이데이터 5종 × 6개 기업 = 30행",
+              "data/업로드서류/<기업ID>_<기업명>/*.pdf     — 서류종류_월[_저품질스캔].pdf",
               "```", "",
               f"생성 PDF 총 {len(manifest)}건. 재생성: `python -m scripts.generate_upload_docs`",
               "(seed 고정 — 항상 같은 파일이 나옴).", ""]
