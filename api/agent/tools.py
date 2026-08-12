@@ -30,6 +30,7 @@ from db.calc_engine import (
     index_emission_factors,
     index_unit_prices,
 )
+from db.k_taxonomy import k_taxonomy_fields_for_rule
 from db.models import Classification, Voucher
 from db.pcaf import company_pcaf_summary
 
@@ -89,6 +90,9 @@ def _rule_decision(voucher: Voucher) -> tuple[dict | None, dict | None]:
             "method": "rule",
             "mixed_item": rule["mixed_item"],
             "confidence": confidence,
+            # K택소노미 매핑은 rule_id로만 연결된다(LLM 경로는 이 키가 없음 — 아래
+            # _llm_result_to_decision 참고, K택소노미는 룰 매칭 키워드 세트로만 커버됨).
+            "rule_id": rule["rule_id"],
         }
         return decided, rule
     return None, rule
@@ -107,6 +111,10 @@ def _build_classification(
     confidence = decided["confidence"]
     status = "auto" if confidence >= CONFIDENCE_THRESHOLD else "review_required"
 
+    # K택소노미·설비투자 리드 — rule_id(룰 매칭 경로만)가 회계 매핑표(k_taxonomy_mapping)에
+    # 있으면 채워진다. 배출량 계산과 무관, 여신 결정도 아니다(위 db/k_taxonomy.py 참고).
+    k_taxonomy_fields = k_taxonomy_fields_for_rule(decided.get("rule_id"))
+
     classification = Classification(
         voucher_id=voucher.id,
         scope=scope,
@@ -120,6 +128,7 @@ def _build_classification(
         status=status,
         # v1 §7.1 — 업로드/마이데이터 경로로 들어온 전표는 raw_json에 원본 문서 FK가 있다.
         source_document_id=(voucher.raw_json or {}).get("source_document_id"),
+        **k_taxonomy_fields,
     )
 
     # 도구③ 계산 엔진 — 물량·탄소량은 결정론적 코드로만 산출 (db/calc_engine.py)

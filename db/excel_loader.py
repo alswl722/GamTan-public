@@ -188,6 +188,34 @@ def load_classification_rules(path: str = DEFAULT_XLSX) -> list[dict]:
     return out
 
 
+def load_k_taxonomy_mapping(path: str = DEFAULT_XLSX) -> list[dict]:
+    """`k_taxonomy_mapping` 시트 → K택소노미·설비투자 리드 매핑 (v1 §6 2주차).
+
+    linked_rule_id로 load_classification_rules()의 rule_id(R051~R058, R031, R032)와
+    연결된다 — 새 매칭 로직이 아니라, 기존 룰 매칭 결과에 K택소노미 세부 필드를
+    얹기 위한 참조 테이블. db/k_taxonomy.py::attach_k_taxonomy_fields()가 사용.
+    """
+    rows = _rows_as_dicts(_sheet(_load(path), "k_taxonomy_mapping"))
+    out = []
+    for r in rows:
+        linked_rule_id = r.get("linked_rule_id")
+        if not linked_rule_id:
+            continue
+        out.append(
+            dict(
+                kt_rule_id=str(r.get("kt_rule_id") or "").strip(),
+                keyword=r.get("keyword"),
+                candidate_type=r.get("candidate_type"),
+                facility_type=r.get("facility_type"),
+                finance_lead_type=r.get("finance_lead_type"),
+                hitl_required=_truthy(r.get("hitl_required")),
+                linked_rule_id=str(linked_rule_id).strip(),
+                evidence_rule=r.get("evidence_rule"),
+            )
+        )
+    return out
+
+
 def load_expected_results(path: str = DEFAULT_XLSX) -> list[dict]:
     """`기대_결과` 시트 → 계산 엔진 단위테스트 골든셋 (40건, I001~I040).
 
