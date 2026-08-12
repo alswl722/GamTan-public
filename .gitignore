@@ -34,3 +34,6 @@ Thumbs.db
 *.log
 *.sqlite
 *.db
+
+# 합성 업로드 서류 PDF (scripts/generate_upload_docs.py로 재생성 가능, 바이너리라 git에 안 올림)
+data/uploaded_docs/
