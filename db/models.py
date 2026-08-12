@@ -26,9 +26,10 @@ class Company(Base):
     region = Column(String(50))
     created_at = Column(DateTime(timezone=True), default=now)
 
-    # v1 §3 원칙8 — 기업이 직접 체크한 사용 연료 목록. 체크 안 한 연료는 결손
-    # 알림 대상에서 제외한다(예: 도시가스 미사용 기업에게 도시가스 결손 알림 금지).
-    # 예: {"전기": true, "가스": false, "경유/유류": true}
+    # v1 §3 원칙8 — 사장님이 2단계(연료 유형 체크)에서 고른 값. 체크 안 한 연료는
+    # 결손 알림 대상에서 제외한다(예: 도시가스 미사용 기업에게 도시가스 결손 알림 금지).
+    # {"diesel": bool, "gasoline": bool, "city_gas": bool, "lpg": "yes"|"no"|"unsure",
+    #  "electricity": bool} — null이면 아직 미입력(필터 미적용, 기존 결손 감지 그대로 동작).
     fuel_types_json = Column(JSON)
 
     vouchers = relationship("Voucher", back_populates="company")
@@ -338,6 +339,9 @@ class SourceDocument(Base):
     __table_args__ = (
         Index("ix_source_documents_company", "company_id"),
         Index("ix_source_documents_file_hash", "file_hash"),
+        # 코드 레벨 SELECT-then-INSERT 중복 체크만으로는 동시 업로드(더블클릭·재시도)
+        # 레이스를 못 막는다 — DB 제약으로 최종 방어선을 둔다.
+        UniqueConstraint("company_id", "file_hash", name="uq_source_documents_company_file_hash"),
     )
 
 
@@ -518,6 +522,12 @@ class BorrowerFinancial(Base):
 
     __table_args__ = (
         Index("ix_borrower_financials_company_year", "company_id", "financial_year"),
+        # version까지 포함 — 재산정 시 새 버전을 만드는 설계는 유지하되(§8.5 재산정 정책),
+        # 동시 요청이 같은 (기업,연도,버전)에 중복 행을 만드는 레이스는 막는다.
+        UniqueConstraint(
+            "company_id", "financial_year", "version",
+            name="uq_borrower_financials_company_year_version"
+        ),
     )
 
 

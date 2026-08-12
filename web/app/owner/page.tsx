@@ -2,12 +2,18 @@
 
 import { useState } from "react";
 import { SceneConsent } from "@/components/SceneConsent";
+import { SceneUpload, type FuelTypesState } from "@/components/SceneUpload";
 import { SceneTrace, type TraceRunState } from "@/components/SceneTrace";
 import { SceneClassify } from "@/components/SceneClassify";
 import { ScenePcaf } from "@/components/ScenePcaf";
 
+// 스텝별 제목은 각 Scene 컴포넌트 자체의 h2가 담당한다(예: SceneConsent의
+// "먼저 기업 정보부터 확인할게요") — 진행 바 라벨과 내용이 겹치는 페이지 레벨
+// h1은 중복이라 없앤다.
+// 연료 체크 + 자료 업로드는 한 화면(SceneUpload)으로 합쳤다 — 스텝 하나로 줄어듦.
 const STEPS = [
   { key: "consent", label: "연동 동의" },
+  { key: "upload", label: "연료·자료" },
   { key: "trace", label: "결손 감지" },
   { key: "classify", label: "AI 분류" },
   { key: "pcaf", label: "리포트" },
@@ -21,6 +27,9 @@ export default function OwnerPage() {
     allSteps: [],
     finished: false,
   });
+  // fuelState도 traceRunState와 같은 이유로 부모 레벨에 보관 —
+  // 뒤로 갔다 SceneUpload로 돌아와도 연료 선택이 유지되게(Scene은 스텝 전환마다 언마운트됨).
+  const [fuelState, setFuelState] = useState<FuelTypesState | undefined>(undefined);
 
   function goTo(i: number) {
     if (i < 0 || i >= STEPS.length) return;
@@ -58,27 +67,26 @@ export default function OwnerPage() {
             </span>
           ))}
         </div>
-
-        <div className="mt-6 flex items-center justify-between">
-          <div>
-            <h1 className="text-[21px] font-extrabold tracking-tight text-ink">
-              ○○정밀 탄소 측정 여정
-            </h1>
-          </div>
-        </div>
       </div>
 
       <div className="step-enter mt-6 flex-1">
         {active === 0 && <SceneConsent onNext={() => goTo(1)} />}
         {active === 1 && (
-          <SceneTrace
+          <SceneUpload
+            initialFuel={fuelState}
+            onFuelChange={setFuelState}
             onNext={() => goTo(2)}
+          />
+        )}
+        {active === 2 && (
+          <SceneTrace
+            onNext={() => goTo(3)}
             runState={traceRunState}
             onRunStateChange={setTraceRunState}
           />
         )}
-        {active === 2 && <SceneClassify onNext={() => goTo(3)} />}
-        {active === 3 && <ScenePcaf />}
+        {active === 3 && <SceneClassify onNext={() => goTo(4)} />}
+        {active === 4 && <ScenePcaf />}
       </div>
 
       <div className="mt-6 flex items-center justify-between">

@@ -5,7 +5,15 @@
 from sqlalchemy import case, select
 from sqlalchemy.orm import Session
 
-from db.models import Classification, Voucher, IndustryDistribution, EmissionFactor, UnitPrice
+from db.models import (
+    Classification,
+    Company,
+    InstitutionBorrower,
+    Voucher,
+    IndustryDistribution,
+    EmissionFactor,
+    UnitPrice,
+)
 
 
 # 커버리지 매트릭스용 — 품목 텍스트를 연료 대분류로 러프하게 묶는다.
@@ -43,10 +51,30 @@ def get_vouchers(session: Session, company_id: int, source: str | None = None) -
     return [_voucher_dict(v) for v in rows]
 
 
+def _selected_coverage_fuels(fuel_types: dict | None) -> set[str] | None:
+    """companies.fuel_types_json → get_coverage 결손 판정에 쓸 연료 대분류 집합.
+
+    None(연료 체크 전 상태)이면 필터를 걸지 않는다 — 기존 결손 감지 동작을
+    그대로 유지해 데모 시나리오(3~5월 가스 결손)가 회귀되지 않게 한다
+    (v1-plan.md 원칙 #8 — "체크하지 않은 연료의 결손은 알림 대상에서 제외").
+    """
+    if fuel_types is None:
+        return None
+    selected: set[str] = set()
+    if fuel_types.get("electricity", True):
+        selected.add("전기")
+    if fuel_types.get("city_gas"):
+        selected.add("가스")
+    if fuel_types.get("diesel") or fuel_types.get("gasoline") or fuel_types.get("lpg") in ("yes", "unsure"):
+        selected.add("경유/유류")
+    return selected
+
+
 def get_coverage(session: Session, company_id: int) -> dict:
     """월(1~12) × 연료 대분류 존재 여부 매트릭스 + 결손 목록.
 
-    에이전트가 "3~5월 가스가 0건이네?"를 스스로 관찰하는 재료.
+    에이전트가 "3~5월 가스가 0건이네?"를 스스로 관찰하는 재료. matrix는 체크
+    여부와 무관하게 전체를 반환하고(참고용), gaps만 선택된 연료로 필터한다.
     """
     vouchers = get_vouchers(session, company_id)
     fuels = ["전기", "가스", "경유/유류"]
@@ -56,8 +84,13 @@ def get_coverage(session: Session, company_id: int) -> dict:
         if fc in matrix:
             matrix[fc][v["month"]] += 1
 
+    company = session.get(Company, company_id)
+    selected_fuels = _selected_coverage_fuels(company.fuel_types_json if company else None)
+
     gaps = []
     for f in fuels:
+        if selected_fuels is not None and f not in selected_fuels:
+            continue
         missing = [m for m in range(1, 13) if matrix[f][m] == 0]
         if missing:
             gaps.append({"fuel": f, "missing_months": missing})
@@ -113,8 +146,6 @@ def get_hitl_queue(session: Session) -> list[dict]:
     (데모는 시연 기업 1곳이지만 쿼리는 기업 무관 — 결선 포트폴리오로 그대로 확장.)
     정렬: 기업 → 월 → 발행일.
     """
-    from db.models import Company
-
     stmt = (
         select(Classification, Voucher, Company)
         .join(Voucher, Classification.voucher_id == Voucher.id)
@@ -140,6 +171,32 @@ def get_hitl_queue(session: Session) -> list[dict]:
         }
         for c, v, co in rows
     ]
+
+
+def resolve_institution_borrower(session: Session, company_id: int) -> tuple[int, int] | None:
+    """기업의 기본 금융기관 귀속(financial_institution_id, institution_borrower_id)을 찾는다.
+
+    데모는 단일 금융기관 시나리오로 0006 마이그레이션이 모든 기업을 1:1 백필해뒀으므로,
+    가장 먼저 생성된 귀속 레코드를 신뢰한다. v1 하이브리드 입력(마이데이터·업로드·엑셀)이
+    새로 만드는 vouchers/source_documents는 전부 이 헬퍼로 기관 귀속을 채운다.
+    아직 백필되지 않은 기업이면 None — 호출부는 nullable 컬럼이므로 비워둔 채 저장해도 안전하다.
+
+    consent_status='active'인 레코드만 본다 — 동의가 철회(revoked)·만료(expired)된
+    기업의 새 업로드·마이데이터 수집이 여전히 그 기관 귀속으로 계속 쌓이면 동의 기반
+    설계 원칙에 어긋난다.
+    """
+    stmt = (
+        select(InstitutionBorrower)
+        .where(
+            InstitutionBorrower.company_id == company_id,
+            InstitutionBorrower.consent_status == "active",
+        )
+        .order_by(InstitutionBorrower.id)
+    )
+    ib = session.execute(stmt).scalars().first()
+    if ib is None:
+        return None
+    return ib.financial_institution_id, ib.id
 
 
 def get_distribution(session: Session, industry_code: str, scope: int) -> dict | None:

@@ -104,12 +104,20 @@ def test_downgrade_to_base_succeeds():
 
 @requires_database_url
 def test_current_head_matches_latest_revision():
-    """공유 DATABASE_URL의 alembic_version이 최신 head(0009)와 일치하는지 확인한다.
-    (읽기 전용 — 이 테스트는 DB를 변경하지 않는다)"""
+    """공유 DATABASE_URL의 alembic_version이 최신 head와 일치하는지 확인한다.
+    (읽기 전용 — 이 테스트는 DB를 변경하지 않는다)
+
+    하드코딩된 revision 문자열 대신 ScriptDirectory에서 실제 head를 읽어온다 —
+    새 migration을 추가할 때마다 이 테스트 자체를 고치는 걸 잊는 사고를 막는다."""
+    from alembic.script import ScriptDirectory
+
+    cfg = _alembic_config(os.getenv("DATABASE_URL"))
+    latest_head = ScriptDirectory.from_config(cfg).get_current_head()
+
     engine = create_engine(os.getenv("DATABASE_URL"))
     with engine.connect() as conn:
         current = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-    assert current == "0009"
+    assert current == latest_head
 
 
 @requires_database_url
