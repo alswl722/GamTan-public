@@ -134,10 +134,15 @@ def _summarize(name: str, args: dict, result: dict) -> tuple[str, dict | None]:
         cov = result.get("coverage", {})
         gaps = cov.get("gaps", [])
         msg = f"전표 {result.get('count', 0)}건 수집 완료"
-        gas = next((g for g in gaps if g["fuel"] == "가스"), None)
-        if gas:
-            months = "·".join(str(m) for m in gas["missing_months"])
-            msg += f" — {months}월 도시가스 0건, 제조업 특성상 비정상(결손 발견)"
+        # get_coverage()가 실제로 계산한 gaps를 연료 무관하게 그대로 읽는다 — 특정
+        # 연료(과거엔 "가스"만)를 하드코딩하면 다른 연료 결손은 트레이스에 조용히
+        # 묻힌다. 여러 연료가 동시에 비면 첫 번째를 대표로 문장에 넣고 개수만 덧붙인다.
+        if gaps:
+            g = gaps[0]
+            months = "·".join(str(m) for m in g["missing_months"])
+            msg += f" — {months}월 {g['fuel']} 0건, 제조업 특성상 비정상(결손 발견)"
+            if len(gaps) > 1:
+                msg += f" 외 {len(gaps) - 1}개 연료 결손"
         return msg, cov
 
     if name == "classify_vouchers":
@@ -263,11 +268,12 @@ def _run_agent_core(session: Session, company: Company, sid: str) -> int:
 
     collect = _run_tool_and_log(session, company, sid, "collect_vouchers", {})
     gaps = collect.get("coverage", {}).get("gaps", [])
-    gas_gap = next((g for g in gaps if g["fuel"] == "가스"), None)
-    if gas_gap:
-        months = "·".join(str(m) for m in gas_gap["missing_months"])
+    # 특정 연료로 좁히지 않고 get_coverage()가 찾은 결손 전부를 사장에게 알린다 —
+    # 시나리오(가스만 비는 데모)가 아니라 실제 업로드 데이터가 말해주는 대로.
+    for gap in gaps:
+        months = "·".join(str(m) for m in gap["missing_months"])
         _run_tool_and_log(session, company, sid, "notify_owner",
-                          {"message": f"{months}월 가스 고지서 미연동 확인 필요 — 연동 시 등급 상향 가능"})
+                          {"message": f"{months}월 {gap['fuel']} 고지서 미연동 확인 필요 — 연동 시 등급 상향 가능"})
 
     _run_tool_and_log(session, company, sid, "classify_vouchers", {})
     _run_tool_and_log(session, company, sid, "get_industry_distribution", {"scope": 1})
