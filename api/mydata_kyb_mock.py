@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from api.document_ingestion import MissingInstitutionAttributionError
 from api.queries import resolve_institution_borrower
 from db.models import BorrowerFinancial, Company, InstitutionBorrower, SourceDocument
+from db.mydata_csv_source import load_mydata_record
 
 MYDATA_SOURCES = (
     "business-registration",
@@ -91,9 +92,19 @@ def collect_mydata(session: Session, company_id: int, source: str) -> dict:
         )
     financial_institution_id, institution_borrower_id = ib
 
+    # db/seed_mock.py::EXTRA_COMPANIES로 시드된 기업은 external_customer_id가 그대로
+    # "C001"~"C006"이라 회계 CSV(data/마이데이터_연동자료_전체기업.csv) 조회 키로 쓸 수
+    # 있다 — 없으면(기존 ○○정밀처럼 "demo-company-{id}" 패턴) 합성 데이터만 쓴다.
+    ib_row = session.get(InstitutionBorrower, institution_borrower_id)
+    csv_record = (
+        load_mydata_record(ib_row.external_customer_id, source) if ib_row is not None else None
+    )
+
     if source == "financial-statement":
-        return _collect_financial_statement(session, company, financial_institution_id)
-    return _collect_kyb_document(session, company, source, financial_institution_id, institution_borrower_id)
+        return _collect_financial_statement(session, company, financial_institution_id, csv_record)
+    return _collect_kyb_document(
+        session, company, source, financial_institution_id, institution_borrower_id, csv_record
+    )
 
 
 def _collect_kyb_document(
@@ -102,6 +113,7 @@ def _collect_kyb_document(
     source: str,
     financial_institution_id: int,
     institution_borrower_id: int,
+    csv_record: dict | None = None,
 ) -> dict:
     document_type = _SOURCE_TO_DOCUMENT_TYPE[source]
     existing = session.execute(
@@ -113,12 +125,17 @@ def _collect_kyb_document(
     if existing is not None:
         return {"source": source, "already_collected": True, "extracted": existing.extracted_json}
 
+    # CSV엔 사업자등록번호 같은 필드값이 없다(회계가 관리하는 건 "이 문서를 수집했다"는
+    # 메타데이터뿐) — 필드값은 여전히 합성 함수가 채우고, 그 위에 실제 발급기관·용도·
+    # 한계 설명만 얹는다.
     payload = _SYNTH[source](company)
+    if csv_record is not None:
+        payload = {**payload, "_mydata_meta": csv_record}
     doc = SourceDocument(
         financial_institution_id=financial_institution_id,
         company_id=company.id,
         document_type=document_type,
-        source_system=f"mydata:{source}",
+        source_system=f"mydata:{source}" if csv_record is None else f"mydata:{source}:csv",
         # 실제 파일이 없는 mock이라 바이트 해시는 못 만들지만, (기업,문서유형)을
         # 결정론적 문자열로 담아 source_documents의 (company_id, file_hash) 유니크
         # 제약을 그대로 재사용한다 — 동시 수집 요청의 중복 적재 레이스를 막는다.
@@ -154,7 +171,7 @@ def _collect_kyb_document(
 
 
 def _collect_financial_statement(
-    session: Session, company: Company, financial_institution_id: int,
+    session: Session, company: Company, financial_institution_id: int, csv_record: dict | None = None,
 ) -> dict:
     existing = session.execute(
         select(BorrowerFinancial).where(
@@ -181,8 +198,9 @@ def _collect_financial_statement(
         currency="KRW",
         total_equity=payload["total_equity"],
         total_debt=payload["total_debt"],
-        debt_definition="PCAF 방법론상 total_debt — 잠정(회계 확인 전, mock)",
-        source="mydata:financial-statement (mock)",
+        debt_definition="PCAF 방법론상 total_debt — 잠정(회계 확인 전, mock)"
+        + (f" | {csv_record['limitation']}" if csv_record else ""),
+        source="mydata:financial-statement:csv (mock)" if csv_record else "mydata:financial-statement (mock)",
         verified=False,
     )
     session.add(bf)

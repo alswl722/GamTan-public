@@ -11,11 +11,16 @@ from api.db import get_session
 from db.models import Company
 
 router = APIRouter(prefix="/company", tags=["company"])
+companies_router = APIRouter(prefix="/companies", tags=["company"])
 
 
 @router.get("")
 def demo_company(session: Session = Depends(get_session)):
-    """시연 기업 1행 — {id, name, industry_code, industry_name, region}."""
+    """시연 기업 1행 — {id, name, industry_code, industry_name, region}.
+
+    회사 선택 화면 도입 전부터 있던 하위호환 경로 — "첫 번째 기업"만 돌려주므로
+    신규 코드는 GET /companies(목록)로 사용자가 직접 고르게 한다.
+    """
     company = session.execute(
         select(Company).order_by(Company.id).limit(1)
     ).scalar_one_or_none()
@@ -27,4 +32,25 @@ def demo_company(session: Session = Depends(get_session)):
         "industry_code": company.industry_code,
         "industry_name": company.industry_name,
         "region": company.region,
+    }
+
+
+@companies_router.get("")
+def list_companies(session: Session = Depends(get_session)):
+    """기업 목록 — 사장님 앱 메인 화면의 기업 선택기가 쓴다.
+
+    계정 개념이 아직 없어(로그인 미도입) 사용자가 직접 자기 기업을 골라야 한다 —
+    이 응답이 그 선택지 전체다.
+    """
+    companies = session.execute(select(Company).order_by(Company.id)).scalars().all()
+    return {
+        "companies": [
+            {
+                "id": c.id,
+                "name": c.name,
+                "industry_name": c.industry_name,
+                "region": c.region,
+            }
+            for c in companies
+        ]
     }
