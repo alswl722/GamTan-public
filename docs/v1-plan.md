@@ -17,6 +17,8 @@ Scope: 2026년 8월 v1 구현·검증·시연 일정
 > - 1주차 A 항목(하이브리드 데이터 입력: 마이데이터 5종·연료체크·문서업로드) **완료·병합** — PR #26
 >   (`feat/hybrid-data-input-pipeline` → `dev`) `dev` 병합 완료. 상세는 §5-2 참고. 단, 아래 완료조건에
 >   적어둔 대로 `borrower_emission_inventories` 집계는 이번 주 범위 밖으로 남아 있다.
+> - 2주차 B 항목(승인요청 큐 + 원본문서 접근 감사 로그) **구현 완료, 리뷰 대기** — PR #28
+>   (`feat/admin-approval-queue` → `dev`, OPEN). 상세는 §6-1 참고.
 
 > 기준 브랜치: `dev` (병합 대상: `feat/db-alembic-migration`)
 >
@@ -227,11 +229,11 @@ alembic upgrade head                  # 빈 DB에서 마이그레이션 성공 �
 > 기존 HITL 큐와 명확히 분리하는 나머지 작업으로 좁혀졌다 — 처음부터 새로 만드는 것이 아니라
 > 기존 admin 라우터·화면 위에 승인요청 큐를 추가하는 확장 작업이다.
 
-| 담당 | 작업                                                                                                                                  | 검증                                                  |
-| ---- | ------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| A    | K택소노미·설비투자 필드를 classification 테이블에 추가(신규 Alembic revision), LLM 분류 프롬프트 확장. ~~결손 감지에 연료유형 필터 반영~~은 PR #26에서 선행 완료(`api/queries.py::get_coverage()`). 추가로 `ScenePcaf.tsx`를 구 엔진(`db/pcaf.py`)에서 정식 엔진(`db/pcaf_quality.py`)으로 교체 — 1주차 완료조건 §5 노트 참고 | 기존 classification 회귀 테스트 통과 + 신규 필드 검증, `ScenePcaf.tsx` 교체 후 PCAF 화면 수동 확인 |
-| B    | 관리자 대시보드: HITL 큐(분류 신뢰도, 기 구현)와 승인요청 큐(우대금리·설비금융, 비보장 문구 포함, 신규)를 명확히 분리, 원본문서 접근 감사 로그 확장 | 두 큐 혼동 없음, 반려 로그 자동/담당자 구분           |
-| 회계 | 정답지 라벨링, PCAF 품질 규칙 검수                                                                                                    | —                                                     |
+| 담당 | 작업                                                                                                                                  | 검증                                                  | 상태 |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- | ---- |
+| A    | K택소노미·설비투자 필드를 classification 테이블에 추가(신규 Alembic revision), LLM 분류 프롬프트 확장. ~~결손 감지에 연료유형 필터 반영~~은 PR #26에서 선행 완료(`api/queries.py::get_coverage()`). 추가로 `ScenePcaf.tsx`를 구 엔진(`db/pcaf.py`)에서 정식 엔진(`db/pcaf_quality.py`)으로 교체 — 1주차 완료조건 §5 노트 참고 | 기존 classification 회귀 테스트 통과 + 신규 필드 검증, `ScenePcaf.tsx` 교체 후 PCAF 화면 수동 확인 | 진행 예정 |
+| B    | 관리자 대시보드: HITL 큐(분류 신뢰도, 기 구현)와 승인요청 큐(우대금리·설비금융, 비보장 문구 포함, 신규)를 명확히 분리, 원본문서 접근 감사 로그 확장 | 두 큐 혼동 없음, 반려 로그 자동/담당자 구분           | ✅ 구현 완료 — PR #28 리뷰 대기(§6-1). 단 owner 화면 "안내 요청" 버튼 UI는 미착수(아래 노트) |
+| 회계 | 정답지 라벨링, PCAF 품질 규칙 검수                                                                                                    | —                                                     | 진행 예정 |
 
 ### 처리 흐름
 
@@ -245,9 +247,39 @@ alembic upgrade head                  # 빈 DB에서 마이그레이션 성공 �
 
 ### 2주차 완료조건
 
-- K택소노미·설비투자 필드가 기존 계산 로직을 깨지 않는다.
-- 안내 문구에 항상 비보장 고지가 포함된다.
-- HITL 큐와 승인요청 큐가 분리된 데이터·화면으로 존재한다.
+- K택소노미·설비투자 필드가 기존 계산 로직을 깨지 않는다. — A 담당, 진행 예정
+- 안내 문구에 항상 비보장 고지가 포함된다. — ✅ 완료(테스트로 검증, §6-1)
+- HITL 큐와 승인요청 큐가 분리된 데이터·화면으로 존재한다. — ✅ 완료(§6-1)
+
+> **노트**: 위 "처리 흐름"의 "사장님이 우대금리/설비금융 안내 클릭" 단계는 백엔드 API
+> (`POST /owner/{company_id}/rate-requests`)만 준비됐고, `/owner` 화면에 클릭할 버튼 UI는
+> 아직 없다 — 다음 작업으로 남아 있다.
+
+### 6-1. 승인요청 큐 + 원본문서 접근 감사 로그 — 구현 상세 (PR #28)
+
+- **모델 2개 신규**: `RateApprovalRequest`(사장님 요청 → 담당자 승인/반려), `SourceDocumentAccessLog`
+  (원본문서 열람 사실 자체의 기록 — 기존 review-log는 "확정/반려했다"는 조치 기록이라 열람
+  이벤트를 못 담았다). 마이그레이션 `0011_rate_approval_and_access_log.py`.
+- **판정 로직 재사용**: 기존 `db/pcaf.py::rate_upgrade_candidates`(전체 기업 순회, 읽기 전용
+  안내 목록)를 단일 기업 판정 함수 `upgrade_candidate_for_company`로 리팩터링해, 요청 생성
+  시점에 동일 판정 로직으로 등급 스냅샷(`current_grade`/`target_grade`/`missing_summary`)을
+  저장한다 — 로직 중복 없음, 이후 재산정과 무관하게 요청 당시 근거가 감사 가능하게 남는다.
+- **여신 결정 아님(CLAUDE.md §9)**: 승인은 "안내 대상으로 확인했다"는 담당자 수동 확인일
+  뿐이며, 승인/반려 응답에는 항상 비보장 문구(`disclaimer_text`)가 동반된다(원칙6).
+- **API**: `GET/POST /owner/{company_id}/rate-candidate|rate-requests`,
+  `GET/PATCH /admin/rate-requests[...]`, `GET /admin/documents/{id}(조회 시 자동 기록)|access-log`.
+- **관리자 대시보드**: "승인요청" 탭 신규(`ApprovalQueue.tsx`), "변경 이력" 탭에
+  `DocumentAccessLog.tsx` 추가 — 기존 `AuditLog`(분류 확정/반려)와 나란히 배치해 두 감사
+  로그의 성격 차이(조치 vs 열람)를 화면에서도 분리했다.
+- **병행 처리(2주차 B 스코프 밖, 사용자 요청으로 같이 진행)**: Docker 이미지 경량화 —
+  `api.Dockerfile`에서 `data/` COPY 제거(compose가 이미 볼륨 마운트, 이미지 중복 방지),
+  pip/npm 캐시 마운트 추가, 미사용 `anthropic` 패키지 제거. 실측: API 이미지
+  412MB→395MB, 캐시 재빌드 17.6s→0.76s, web 캐시 재빌드 37s→1.25s.
+- 테스트: `tests/test_rate_approval_queue.py` 18건(순수 로직 6 + API 라우터 12, HITL 큐와의
+  데이터 분리 포함). 전체 `pytest` 140 passed, 3 skipped. 프론트 `tsc --noEmit`·`next build` 통과.
+- **미착수로 남은 부분**: `/owner` 화면에 "안내 요청" 버튼 UI — 백엔드 API는 준비됐으나
+  카드 컴포넌트를 아직 붙이지 않았다.
+- PR: https://github.com/noeyish/GamTan/pull/28 (`feat/admin-approval-queue` → `dev`, OPEN)
 
 ---
 
