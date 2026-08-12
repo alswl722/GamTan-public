@@ -198,10 +198,30 @@ def make_electric_bill(path, co_id, co, month, degraded=False):
                 unit="kWh", degraded=degraded, file=os.path.basename(path))
 
 
-def make_fuel_invoice(path, co_id, co, fuel, month):
-    r = _rnd(co_id, fuel, month)
-    size = co["employees"] / 12
-    amount = _amount(FUEL_BASE_AMOUNT[fuel], size, r)
+def _split_amount(total, n, r):
+    """월 총액을 n건으로 불균등 분할 (매번 똑같이 나눈 것처럼 보이지 않게)."""
+    weights = [r.uniform(0.6, 1.4) for _ in range(n)]
+    s = sum(weights)
+    return [max(1, round(total * w / s)) for w in weights]
+
+
+def _purchase_days(month, n, r):
+    """한 달 안에서 n개의 서로 다른 구매일을 고르게 흩어 고른다."""
+    dim = DAYS_IN_MONTH[month]
+    days = set()
+    tries = 0
+    while len(days) < n and tries < 50:
+        base = int((len(days) + 1) * dim / (n + 1))
+        days.add(min(max(base + r.randint(-2, 2), 1), dim))
+        tries += 1
+    d = 1
+    while len(days) < n:
+        days.add(d)
+        d += 1
+    return sorted(days)
+
+
+def make_fuel_invoice(path, co_id, co, fuel, month, day, amount):
     unit_price = FUEL_UNITPRICE[fuel]
     qty = round(amount / unit_price)
     vat = round(amount * 0.1)
@@ -212,7 +232,7 @@ def make_fuel_invoice(path, co_id, co, fuel, month):
     y = 700
     c.setFont(FONT, 11)
     c.drawString(50, y, f"공급받는자: {co['name']}  ({co['biznum']})")
-    c.drawString(50, y - 20, f"작성일자: {month}-15")
+    c.drawString(50, y - 20, f"작성일자: {month}-{day:02d}")
     rows = [
         ["품목명", "규격", "수량", "단가(원)", "공급가액(원)"],
         [fuel, FUEL_UNIT[fuel], f"{qty:,}{FUEL_UNIT[fuel]}", f"{unit_price:,}", f"{amount:,}"],
@@ -223,7 +243,7 @@ def make_fuel_invoice(path, co_id, co, fuel, month):
     _footer_note(c)
     c.save()
     return dict(company_id=co_id, company=co["name"], doc_type=f"세금계산서_{fuel}", month=month,
-                amount_krw=amount, quantity=qty, unit=FUEL_UNIT[fuel], degraded=False,
+                day=day, amount_krw=amount, quantity=qty, unit=FUEL_UNIT[fuel], degraded=False,
                 file=os.path.basename(path))
 
 
@@ -279,6 +299,12 @@ def build_mydata_csv():
 
 
 # ── 사장 직접 업로드 PDF 일괄 생성 ──────────────────────────────────────
+# 연료(경유·휘발유·LPG)는 실제로 한 달에 한 번만 사지 않는다 — 지게차·차량
+# 주유는 주기적으로 여러 번 일어나므로 월 2~4건으로 쪼갠다. 전기·도시가스는
+# 실제로 월 1회 청구되는 고지서라 그대로 월 1건 유지.
+FUEL_PURCHASES_RANGE = (2, 4)
+
+
 def build_upload_docs():
     manifest = []
     for co_id, co in COMPANIES.items():
@@ -291,13 +317,23 @@ def build_upload_docs():
                 if doc == "전기":
                     fname = f"전기고지서_{month}{suffix}.pdf"
                     rec = make_electric_bill(os.path.join(co_dir, fname), co_id, co, month, degraded)
+                    manifest.append(rec)
                 elif doc == "도시가스":
                     fname = f"도시가스고지서_{month}{suffix}.pdf"
                     rec = make_gas_bill(os.path.join(co_dir, fname), co_id, co, month)
+                    manifest.append(rec)
                 else:
-                    fname = f"세금계산서_{doc}_{month}{suffix}.pdf"
-                    rec = make_fuel_invoice(os.path.join(co_dir, fname), co_id, co, doc, month)
-                manifest.append(rec)
+                    r = _rnd(co_id, doc, month)
+                    n = r.randint(*FUEL_PURCHASES_RANGE)
+                    size = co["employees"] / 12
+                    month_total = _amount(FUEL_BASE_AMOUNT[doc], size, r)
+                    amounts = _split_amount(month_total, n, r)
+                    days = _purchase_days(month, n, r)
+                    for day, amt in zip(days, amounts):
+                        fname = f"세금계산서_{doc}_{month}-{day:02d}{suffix}.pdf"
+                        rec = make_fuel_invoice(os.path.join(co_dir, fname), co_id, co, doc,
+                                                 month, day, amt)
+                        manifest.append(rec)
     return manifest
 
 
@@ -333,7 +369,15 @@ def build_scenario_md(manifest):
         label, action = scenario_labels[co_id]
         lines.append(f"| {co['name']}({co_id}) | {label} | {action} |")
 
-    lines += ["", "## 상세 매트릭스 (회사 × 서류종류 × 월)", ""]
+    # 회사×서류종류×월별 실제 생성 건수 (연료 세금계산서는 월 2~4건으로 쪼갰음)
+    counts: dict[tuple, int] = {}
+    for rec in manifest:
+        counts[(rec["company_id"], rec["doc_type"], rec["month"])] = \
+            counts.get((rec["company_id"], rec["doc_type"], rec["month"]), 0) + 1
+
+    lines += ["", "## 상세 매트릭스 (회사 × 서류종류 × 월)", "",
+              "> 세금계산서는 월 1건이 아니라 실제 주유·구매 횟수만큼(2~4건) 나뉘어 있다 —",
+              "> 아래 숫자는 해당 월에 실제로 생성된 PDF 건수.", ""]
     lines.append("| 회사 | 서류종류 | " + " | ".join(MONTHS) + " |")
     lines.append("| --- | --- | " + " | ".join(["---"] * len(MONTHS)) + " |")
     for co_id, co in COMPANIES.items():
@@ -346,7 +390,8 @@ def build_scenario_md(manifest):
                 elif (co_id, doc, m) in DEGRADED:
                     cells.append("⚠️ 업로드됨(파싱실패)")
                 else:
-                    cells.append("✅ 있음")
+                    n = counts.get((co_id, doc_label, m), 1)
+                    cells.append(f"✅ {n}건" if n > 1 else "✅ 있음")
             lines.append(f"| {co['name']} | {doc_label} | " + " | ".join(cells) + " |")
             lines.append(f"| | *({note})* | | | |")
 

@@ -23,6 +23,9 @@ Scope: data/uploaded_docs/ 의 개별 PDF가 어떤 결측 패턴을 시연하�
 
 ## 상세 매트릭스 (회사 × 서류종류 × 월)
 
+> 세금계산서는 월 1건이 아니라 실제 주유·구매 횟수만큼(2~4건) 나뉘어 있다 —
+> 아래 숫자는 해당 월에 실제로 생성된 PDF 건수.
+
 | 회사 | 서류종류 | 2025-01 | 2025-02 | 2025-03 |
 | --- | --- | --- | --- | --- |
 | 구미정밀 | 전기고지서 | ✅ 있음 | ❌ 없음 | ✅ 있음 |
@@ -69,5 +72,5 @@ data/mydata_연동자료_전체기업.csv         — 마이데이터 5종 × 6�
 data/uploaded_docs/<기업ID>_<기업명>/*.pdf — 서류종류_월[_저품질스캔].pdf
 ```
 
-생성 PDF 총 41건. 재생성: `python -m scripts.generate_upload_docs`
+생성 PDF 총 76건. 재생성: `python -m scripts.generate_upload_docs`
 (seed 고정 — 항상 같은 파일이 나옴).
