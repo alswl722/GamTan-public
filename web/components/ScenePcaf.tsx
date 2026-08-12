@@ -7,15 +7,6 @@ import type { AlertItem } from "@/lib/admin-types";
 /** 장면 ④ — PCAF Before/After + 벤치마킹. /pcaf/{id} 실데이터만 사용.
  *  API 실패 시 목업으로 위장하지 않고 에러 배너 + 재시도를 표시한다(실패 가시성). */
 
-// PCAF 등급을 사장님이 바로 이해할 수 있는 한 줄 설명으로 매핑 (1=가장 정확 → 5=가장 부정확)
-const GRADE_DESC: Record<number, string> = {
-  1: "실측 데이터 기반, 가장 정확해요",
-  2: "실측 데이터 기반, 매우 정확해요",
-  3: "전표 기반 실측, 상당히 정확해요",
-  4: "일부 추정이 섞여 있어요",
-  5: "매출액만으로 추정한 값이에요",
-};
-
 type Before = {
   grade: number;
   scope1: number;
@@ -313,9 +304,6 @@ export function ScenePcaf() {
             </div>
           </>
         )}
-        <p className="text-center text-[11.5px] text-faint">
-          {GRADE_DESC[after ? after.grade : before.grade]}
-        </p>
         {after && (
           <div className="space-y-1.5 border-t border-line pt-3 text-[11.5px] text-muted">
             <div className="flex items-center justify-between">
