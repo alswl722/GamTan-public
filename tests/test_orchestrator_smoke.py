@@ -97,6 +97,35 @@ def test_normal_scenario_has_no_anomaly(db, monkeypatch):
     assert "이상치 의심" not in msgs
 
 
+def test_gap_in_non_gas_fuel_is_detected_and_notified(db):
+    """결손 감지는 "가스" 하드코딩이 아니라 get_coverage()가 실제로 찾은 결손이면
+    어떤 연료든 감지·알림돼야 한다(리뷰 지적사항 — 실제 업로드 데이터를 읽어야지
+    가스만 보는 시나리오 전용 로직이면 안 됨). 도시가스 전표는 아예 없는 채로
+    경유만 1·2월분만 넣어 3~12월 경유 결손을 만든다."""
+    from db.models import Voucher
+
+    session, cid = db
+    company = session.get(Company, cid)
+    company.fuel_types_json = {
+        "electricity": False, "diesel": True, "gasoline": False,
+        "city_gas": False, "lpg": "no",
+    }
+    for month in (1, 2):
+        session.add(Voucher(
+            company_id=cid, source="hometax", year=2025, month=month,
+            supplier_name="구미석유", item_description="경유",
+            supply_amount_krw=600_000, raw_json={"quantity": 400},
+        ))
+    session.commit()
+
+    orch.run_agent(session, cid)
+
+    msgs = _messages(session, cid)
+    assert "경유/유류" in msgs and "결손 발견" in msgs, f"경유 결손이 감지 안 됨: {msgs}"
+    assert "가스" not in msgs, f"가스 전표가 아예 없는데 가스 언급이 나옴(하드코딩 잔재 의심): {msgs}"
+    assert "고지서 미연동 확인 필요" in msgs, f"사장 알림(notify_owner)이 안 나감: {msgs}"
+
+
 def test_judge_failure_is_visible_not_hidden(db, monkeypatch):
     """실패 가시성: LLM 판단 불가 시 대체 판정 없이 '재검증 실패'가 트레이스에 남는다."""
     session, cid = db
