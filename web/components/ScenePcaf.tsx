@@ -306,11 +306,9 @@ export function ScenePcaf() {
         )}
         {after && (
           <div className="space-y-1.5 border-t border-line pt-3 text-[11.5px] text-muted">
-            <div className="flex items-center justify-between">
-              <span>매출액 추정 → 전표 기반 실측</span>
-              <span className="font-semibold text-ink">
-                {fmt(before.emission_tco2e)} → {fmt(after.total)} tCO₂e
-              </span>
+            <div>
+              매출액 추정 {fmt(before.emission_tco2e)} → 전표 기반 실측{" "}
+              <span className="font-semibold text-ink">{fmt(after.total)}</span> tCO₂e
             </div>
             <div className="flex items-center justify-between">
               <span>
