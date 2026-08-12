@@ -240,17 +240,15 @@ export function SceneClassify({ onNext }: { onNext: () => void }) {
 
   return (
     <section>
-      {status === "done" && (
-        <span className="inline-block rounded-full bg-brand-soft px-2.5 py-1 text-[11px] font-semibold text-brand-ink">
-          실제 분류 결과
-        </span>
-      )}
-      <h2 className="mt-3 text-[17px] font-bold leading-snug text-ink">
-        전표를 AI가 읽고 분류했어요
+      <h2 className="text-[17px] font-bold leading-snug text-ink">
+        해당 항목들은
+        <br />
+        담당자가 검토할 예정이에요
       </h2>
       <p className="mt-1 text-[13px] leading-relaxed text-muted">
-        신뢰도가 낮으면 스스로 은행 담당자에게 넘겨요. 카드를 눌러 근거를
-        확인하세요.
+        신뢰도가 낮은 항목들은 은행 담당자가 검토해요.
+        <br />
+        카드를 눌러 상세 내용을 확인할 수 있어요.
       </p>
 
       {rows.length === 0 && status === "loading" && (

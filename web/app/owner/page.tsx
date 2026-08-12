@@ -1,113 +1,124 @@
 "use client";
 
-import { useState } from "react";
-import { SceneConsent } from "@/components/SceneConsent";
-import { SceneUpload, type FuelTypesState } from "@/components/SceneUpload";
-import { SceneTrace, type TraceRunState } from "@/components/SceneTrace";
-import { SceneClassify } from "@/components/SceneClassify";
-import { ScenePcaf } from "@/components/ScenePcaf";
+import Link from "next/link";
+import { useEffect, useState } from "react";
+import { ChevronRight, Search } from "lucide-react";
+import { getCompanies, getCompanyId, setCompanyId, type CompanyListItem } from "@/lib/api";
 
-// 스텝별 제목은 각 Scene 컴포넌트 자체의 h2가 담당한다(예: SceneConsent의
-// "먼저 기업 정보부터 확인할게요") — 진행 바 라벨과 내용이 겹치는 페이지 레벨
-// h1은 중복이라 없앤다.
-// 연료 체크 + 자료 업로드는 한 화면(SceneUpload)으로 합쳤다 — 스텝 하나로 줄어듦.
-const STEPS = [
-  { key: "consent", label: "연동 동의" },
-  { key: "upload", label: "연료·자료" },
-  { key: "trace", label: "결손 감지" },
-  { key: "classify", label: "AI 분류" },
-  { key: "pcaf", label: "리포트" },
-] as const;
+/** 사장님 앱 메인 화면 — 계정(로그인) 개념이 없어 기업을 직접 골라야 한다.
+ * 고른 기업은 setCompanyId()로 저장되고, 이후 /owner/measure의 모든 단계가
+ * getCompanyId()로 그 값을 그대로 읽는다(web/lib/api.ts). */
 
-export default function OwnerPage() {
-  const [active, setActive] = useState(0);
-  // SceneTrace는 스텝 전환마다 언마운트되므로, 실행 결과는 여기(owner 페이지)
-  // 레벨에 보관해 뒤로 갔다 돌아와도 유지되게 한다.
-  const [traceRunState, setTraceRunState] = useState<TraceRunState>({
-    allSteps: [],
-    finished: false,
-  });
-  // fuelState도 traceRunState와 같은 이유로 부모 레벨에 보관 —
-  // 뒤로 갔다 SceneUpload로 돌아와도 연료 선택이 유지되게(Scene은 스텝 전환마다 언마운트됨).
-  const [fuelState, setFuelState] = useState<FuelTypesState | undefined>(undefined);
+// /owner/measure의 STEPS와 라벨을 맞춘다(web/app/owner/measure/page.tsx) — 카드의
+// 단계 미리보기가 실제 위저드 순서와 어긋나지 않게.
+const MEASURE_STAGES = ["연동 동의", "데이터 수집", "결손 감지", "AI 분류", "리포트"] as const;
 
-  function goTo(i: number) {
-    if (i < 0 || i >= STEPS.length) return;
-    setActive(i);
+export default function OwnerHomePage() {
+  const [companies, setCompanies] = useState<CompanyListItem[] | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    Promise.all([getCompanies(), getCompanyId()])
+      .then(([list, id]) => {
+        setCompanies(list);
+        setSelectedId(id);
+      })
+      .catch((err) => {
+        console.error("기업 목록 조회 실패:", err);
+        setError("기업 정보를 불러오지 못했습니다. 서버 연결 상태를 확인한 뒤 다시 시도해 주세요.");
+      });
+  }, []);
+
+  function choose(id: number) {
+    setCompanyId(id);
+    setSelectedId(id);
+    setPickerOpen(false);
   }
 
+  const selected = companies?.find((c) => c.id === selectedId) ?? null;
+
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col px-5 pb-16">
-      {/* 진행 바 — mint→lime 단일 트랙 그라디언트를 진행률만큼만 노출 */}
-      <div className="pt-7">
-        <div className="relative h-1 overflow-hidden rounded-full bg-line">
-          <div
-            className="absolute inset-y-0 left-0 rounded-full transition-all duration-500 ease-out"
-            style={{
-              width: `${(active / (STEPS.length - 1)) * 100}%`,
-              minWidth: "6%",
-              background:
-                "linear-gradient(90deg, var(--color-brand), var(--color-lime))",
-            }}
-          />
-        </div>
-        <div className="mt-2 flex items-center justify-between">
-          {STEPS.map((s, i) => (
-            <span
-              key={s.key}
-              className={`text-[11.5px] font-semibold transition-colors ${
-                i === active
-                  ? "text-brand-ink"
-                  : i < active
-                    ? "text-muted"
-                    : "text-faint"
-              }`}
-            >
-              {s.label}
-            </span>
-          ))}
-        </div>
-      </div>
-
-      <div className="step-enter mt-6 flex-1">
-        {active === 0 && <SceneConsent onNext={() => goTo(1)} />}
-        {active === 1 && (
-          <SceneUpload
-            initialFuel={fuelState}
-            onFuelChange={setFuelState}
-            onNext={() => goTo(2)}
-          />
-        )}
-        {active === 2 && (
-          <SceneTrace
-            onNext={() => goTo(3)}
-            runState={traceRunState}
-            onRunStateChange={setTraceRunState}
-          />
-        )}
-        {active === 3 && <SceneClassify onNext={() => goTo(4)} />}
-        {active === 4 && <ScenePcaf />}
-      </div>
-
-      <div className="mt-6 flex items-center justify-between">
+    <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col px-5 pb-6">
+      {/* 기업 선택 — "로그인" 자리에 해당. 계정이 없어 기업명 자체를 눌러 고른다 */}
+      <div className="relative pt-6">
         <button
           type="button"
-          onClick={() => goTo(active - 1)}
-          disabled={active === 0}
-          className="rounded-full px-4 py-2.5 text-[13.5px] font-semibold text-muted transition-colors hover:text-ink disabled:pointer-events-none disabled:opacity-0"
+          onClick={() => setPickerOpen((v) => !v)}
+          disabled={!companies}
+          className="flex items-center gap-1 text-[22px] font-extrabold text-ink disabled:opacity-60"
         >
-          ← 이전
+          {selected ? `${selected.name}님` : companies ? "기업을 선택하세요" : "불러오는 중…"}
+          <ChevronRight size={20} strokeWidth={2.6} className="shrink-0 text-muted" />
         </button>
-        {active < STEPS.length - 1 ? (
-          <span className="text-[12.5px] text-faint">
-            각 화면의 버튼을 눌러 진행하세요
-          </span>
-        ) : (
-          <span className="text-[12.5px] font-semibold text-brand-ink">
-            마지막 단계입니다
-          </span>
+
+        {pickerOpen && companies && (
+          <div className="absolute inset-x-0 top-[calc(100%+8px)] z-10 max-h-72 overflow-y-auto rounded-2xl bg-surface p-1.5 shadow-card">
+            {companies.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => choose(c.id)}
+                className={`flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2.5 text-left text-[13.5px] font-semibold transition-colors ${
+                  c.id === selectedId ? "bg-brand-soft text-brand-ink" : "text-ink hover:bg-bg"
+                }`}
+              >
+                <span className="truncate">{c.name}</span>
+                <span className="shrink-0 text-[11px] font-medium text-faint">
+                  {c.industry_name ?? c.region ?? ""}
+                </span>
+              </button>
+            ))}
+          </div>
         )}
       </div>
+
+      {error && (
+        <div className="mt-4 rounded-xl bg-hitl/25 px-3.5 py-2.5 text-[12.5px] text-hitl-ink">
+          {error}
+        </div>
+      )}
+
+      {/* 프로모 카드 — 종합소득세 환급 카드 참고: 라벨+화살표 → 굵은 CTA 문장 → 진행 단계 미리보기 */}
+      <Link
+        href="/owner/measure"
+        className="btn-cta group mt-5 block rounded-3xl bg-surface px-5 py-5 shadow-card transition-transform"
+      >
+        <span className="flex items-center justify-between gap-2">
+          <span className="flex items-center gap-1.5 text-[13px] font-bold text-muted">
+            탄소 측정
+            <span className="h-1.5 w-1.5 rounded-full bg-brand" />
+          </span>
+          <ChevronRight size={16} className="shrink-0 text-faint" />
+        </span>
+
+        <span className="mt-2.5 flex items-center gap-2">
+          <span className="text-[16.5px] font-extrabold leading-snug text-ink">
+            우리 기업 탄소 배출량을
+            <br />
+            확인해보세요
+          </span>
+          <Search size={22} strokeWidth={2.2} className="shrink-0 text-brand-ink" />
+        </span>
+
+        <span className="mt-4 block h-1 overflow-hidden rounded-full bg-line">
+          <span
+            className="block h-full rounded-full bg-brand"
+            style={{ width: `${100 / MEASURE_STAGES.length}%` }}
+          />
+        </span>
+        <span className="mt-2 flex items-center justify-between">
+          {MEASURE_STAGES.map((stage, i) => (
+            <span
+              key={stage}
+              className={`text-[10.5px] font-semibold ${i === 0 ? "text-ink" : "text-faint"}`}
+            >
+              {stage}
+            </span>
+          ))}
+        </span>
+      </Link>
     </div>
   );
 }

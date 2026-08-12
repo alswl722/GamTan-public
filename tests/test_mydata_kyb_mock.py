@@ -130,3 +130,62 @@ def test_kepco_payment_history_has_no_kwh_field(db_with_institution):
     payments = result["extracted"]["payments"]
     assert len(payments) == 12
     assert all("paid_amount_krw" in p and "kwh" not in p and "quantity" not in p for p in payments)
+
+
+@pytest.fixture()
+def db_with_csv_backed_institution(db):
+    """db/seed_mock.py::EXTRA_COMPANIES 시드 결과와 같은 모양 — external_customer_id가
+    회계 CSV(data/마이데이터_연동자료_전체기업.csv)의 company_id("C001")와 일치."""
+    session, company_id = db
+    inst = FinancialInstitution(name="감탄 데모 금융기관", reporting_currency="KRW", tenant_key="demo-im-bank")
+    session.add(inst)
+    session.commit()
+    ib = InstitutionBorrower(
+        financial_institution_id=inst.id, company_id=company_id,
+        external_customer_id="C001", consent_status="active",
+    )
+    session.add(ib)
+    session.commit()
+    return session, company_id, ib.id
+
+
+def test_csv_backed_company_gets_real_metadata_merged_in(db_with_csv_backed_institution):
+    """external_customer_id가 CSV의 company_id와 일치하면 회계가 관리하는 실제 문서
+    메타데이터(발급기관·한계 설명 등)가 합성 payload 위에 얹힌다."""
+    session, company_id, _ = db_with_csv_backed_institution
+    result = collect_mydata(session, company_id, "business-registration")
+    assert result["already_collected"] is False
+    assert result["extracted"]["_mydata_meta"]["provider"] == "국세청"
+    assert result["extracted"]["_mydata_meta"]["document_name"] == "사업자등록증명"
+
+    doc = session.execute(select(SourceDocument)).scalars().first()
+    assert doc.source_system == "mydata:business-registration:csv"
+
+
+def test_unknown_external_id_falls_back_to_synthetic(db):
+    """CSV에 아예 없는 external_customer_id(예: 회계가 아직 안 다룬 기업)는 조회가
+    항상 미스라 조용히 합성 데이터로 폴백한다."""
+    session, company_id = db
+    inst = FinancialInstitution(name="감탄 데모 금융기관", reporting_currency="KRW", tenant_key="demo-im-bank")
+    session.add(inst)
+    session.commit()
+    session.add(InstitutionBorrower(
+        financial_institution_id=inst.id, company_id=company_id,
+        external_customer_id="C999", consent_status="active",
+    ))
+    session.commit()
+
+    result = collect_mydata(session, company_id, "business-registration")
+    assert result["already_collected"] is False
+    assert "_mydata_meta" not in result["extracted"]
+
+
+def test_non_csv_company_is_unaffected_by_csv_source(db_with_institution):
+    """external_customer_id가 CSV 패턴("C00X")과 무관한 기존 기업(예: ○○정밀)은 CSV
+    조회 자체가 항상 미스라 기존 합성 동작이 그대로 유지된다(회귀 방지)."""
+    session, company_id, _ = db_with_institution
+    result = collect_mydata(session, company_id, "business-registration")
+    assert "_mydata_meta" not in result["extracted"]
+
+    doc = session.execute(select(SourceDocument)).scalars().first()
+    assert doc.source_system == "mydata:business-registration"

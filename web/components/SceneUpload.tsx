@@ -95,7 +95,7 @@ function Pill({
       onClick={onClick}
       disabled={disabled}
       aria-pressed={selected}
-      className={`rounded-full border-2 px-4 py-2.5 text-[13.5px] font-bold transition-colors ${
+      className={`shrink-0 whitespace-nowrap rounded-full border-2 px-3.5 py-2 text-[13px] font-bold transition-colors ${
         selected ? selectedClass : "border-transparent bg-surface text-muted"
       } ${disabled ? "opacity-70" : ""}`}
     >
@@ -403,8 +403,6 @@ export function SceneUpload({
     return entries[d].some((m) => m.status === "done");
   });
 
-  const relevantGaps = (coverage?.gaps ?? []).filter((g) => g.missing_months.length > 0);
-
   return (
     <section className="pt-4">
       <h2 className="text-[21px] font-bold leading-snug text-ink">
@@ -416,7 +414,7 @@ export function SceneUpload({
         선택하신 연료에 맞춰 필요한 자료만 안내해 드려요.
       </p>
 
-      <div className="mt-5 flex flex-wrap gap-2">
+      <div className="mt-5 flex gap-1.5 overflow-x-auto">
         {FUEL_PILLS.map((f) => (
           <Pill key={f.key} label={f.label} selected={fuel[f.key]} onClick={() => toggleFuel(f.key)} />
         ))}
@@ -440,16 +438,6 @@ export function SceneUpload({
         <DocCard docType="electric_bill" />
         <DocCard docType="gas_bill" />
       </div>
-
-      {relevantGaps.length > 0 && (
-        <div className="mt-5 rounded-2xl bg-hitl/20 px-4 py-3.5 text-[12.5px] leading-relaxed text-hitl-ink">
-          {relevantGaps.map((g) => (
-            <div key={g.fuel}>
-              {g.fuel} 자료가 {g.missing_months.join(", ")}월 안 보여요 — 다음 단계에서 자세히 확인할게요
-            </div>
-          ))}
-        </div>
-      )}
 
       <button
         type="button"
