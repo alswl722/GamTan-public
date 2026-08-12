@@ -40,7 +40,7 @@ from db.calc_engine import CalcDataGap, ClassifiedItemInput, compute_emission, \
 from db.document_access_log import access_history, record_access, recent_access_log
 from db.models import Classification, Company, SourceDocument, TraceLog, Voucher
 from db.pcaf import portfolio_summary, rate_upgrade_candidates
-from db.rate_approvals import list_rate_requests, review_rate_request
+from db.rate_approvals import AlreadyProcessedError, list_rate_requests, review_rate_request
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -395,15 +395,20 @@ def approve_rate_request(
 ):
     """승인 — 여신 결정이 아니라 "안내 대상으로 확인했다"는 담당자 수동 확인(CLAUDE.md §9).
     응답에는 항상 disclaimer_text(비보장 문구)가 동반된다(원칙6).
+
+    이미 처리된 요청은 새 decision이 이전과 같아도(예: 이미 승인된 걸 다시 승인) 항상
+    409다 — 원래 처리자 정보를 조용히 덮어쓰지 않고, 두 번째 호출자에게 자기 처리가
+    반영되지 않았음을 명확히 알린다(리뷰 지적사항, PR #28).
     """
-    req = review_rate_request(
-        session, request_id, decision="approved",
-        reviewed_by=decision.reviewed_by, note=decision.note,
-    )
+    try:
+        req = review_rate_request(
+            session, request_id, decision="approved",
+            reviewed_by=decision.reviewed_by, note=decision.note,
+        )
+    except AlreadyProcessedError as e:
+        raise HTTPException(status_code=409, detail=f"이미 {e.request.status} 처리된 요청입니다")
     if req is None:
         raise HTTPException(status_code=404, detail=f"request_id={request_id} 없음")
-    if req.status != "approved":
-        raise HTTPException(status_code=409, detail=f"이미 {req.status} 처리된 요청입니다")
     return _serialize_rate_request(req)
 
 
@@ -411,15 +416,16 @@ def approve_rate_request(
 def reject_rate_request(
     request_id: int, decision: ReviewDecision, session: Session = Depends(get_session)
 ):
-    """반려 — 사유는 review_note에 남긴다."""
-    req = review_rate_request(
-        session, request_id, decision="rejected",
-        reviewed_by=decision.reviewed_by, note=decision.note,
-    )
+    """반려 — 사유는 review_note에 남긴다. 이미 처리된 요청은 항상 409(approve와 동일 규칙)."""
+    try:
+        req = review_rate_request(
+            session, request_id, decision="rejected",
+            reviewed_by=decision.reviewed_by, note=decision.note,
+        )
+    except AlreadyProcessedError as e:
+        raise HTTPException(status_code=409, detail=f"이미 {e.request.status} 처리된 요청입니다")
     if req is None:
         raise HTTPException(status_code=404, detail=f"request_id={request_id} 없음")
-    if req.status != "rejected":
-        raise HTTPException(status_code=409, detail=f"이미 {req.status} 처리된 요청입니다")
     return _serialize_rate_request(req)
 
 

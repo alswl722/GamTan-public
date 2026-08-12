@@ -11,6 +11,8 @@ GET /admin/alerts(은행 담당자용 포트폴리오 전체)와 같은 판정 �
 은행이 먼저 알고 사장은 모르는 구도를 만들지 않기 위함(CLAUDE.md §9,
 "하지 말 것" — 알림은 항상 사장에게 먼저).
 """
+from typing import Literal
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -122,7 +124,10 @@ async def upload_document(
 
 
 class RateRequestIn(BaseModel):
-    request_type: str = "rate_upgrade"  # rate_upgrade | equipment_finance
+    # Literal로 제약 — 잘못된 값은 여기서 422로 막는다. db/models.py의
+    # ck_rate_approval_requests_request_type CHECK 제약까지 도달하면 처리 안 된
+    # IntegrityError가 그대로 새서 500이 된다(리뷰 지적사항, PR #28).
+    request_type: Literal["rate_upgrade", "equipment_finance"] = "rate_upgrade"
 
 
 @router.get("/{company_id}/rate-candidate")
