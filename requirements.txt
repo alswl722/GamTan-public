@@ -7,5 +7,6 @@ pydantic
 anthropic
 google-genai
 openpyxl
+python-multipart
 pytest
 alembic

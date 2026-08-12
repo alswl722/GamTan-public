@@ -56,6 +56,25 @@ export async function apiPatch<T>(
   return res.json() as Promise<T>;
 }
 
+/** multipart 업로드 전용 — Content-Type을 fetch가 boundary 포함해 자동 설정하게 둔다. */
+export async function apiUpload<T>(
+  path: string,
+  form: FormData,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+): Promise<T> {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method: "POST",
+    body: form,
+    cache: "no-store",
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => null);
+    throw new Error(detail?.detail ?? `API ${path} 실패: ${res.status}`);
+  }
+  return res.json() as Promise<T>;
+}
+
 /** 에이전트 실행은 분류(LLM 병렬 호출) 포함이라 더 길게 허용. */
 export const AGENT_RUN_TIMEOUT_MS = 60_000;
 

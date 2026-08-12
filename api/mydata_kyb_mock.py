@@ -1,0 +1,169 @@
+"""마이데이터 5종(사업자등록증명·부가세과표증명·표준재무제표증명·중소기업확인서·
+전기요금납부내역) mock — 기업 식별·재무 프로필용. 배출량 계산과 무관하다.
+
+⚠️ 한전 마이데이터의 실제 항목은 "전기요금 납부내역"(결제기록) 하나뿐이며 kWh가
+없다 — 사용량(kWh)이 필요한 배출량 계산은 db/document_extraction.py의
+electric_bill(고지서 업로드) 경로가 담당한다. 이 둘을 혼동하지 않는다.
+
+호출은 멱등이다 — 이미 수집된 기업은 재호출해도 중복 적재하지 않고 기존 값을
+반환한다. 표준재무제표증명만 이미 존재하는 borrower_financials 스키마에
+정확히 매칭돼 그리로 적재하고, 나머지 4종은 source_documents에만 적재한다
+(KYB/전시용, 계산 파이프라인이 읽지 않음).
+"""
+from datetime import datetime, timezone
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from api.document_ingestion import MissingInstitutionAttributionError
+from api.queries import resolve_institution_borrower
+from db.models import BorrowerFinancial, Company, InstitutionBorrower, SourceDocument
+
+MYDATA_SOURCES = (
+    "business-registration",
+    "vat-tax-base",
+    "financial-statement",
+    "sme-certificate",
+    "kepco-payment-history",
+)
+
+_SOURCE_TO_DOCUMENT_TYPE = {
+    "business-registration": "business_registration",
+    "vat-tax-base": "vat_tax_base",
+    "sme-certificate": "sme_certificate",
+    "kepco-payment-history": "kepco_payment_history",
+}
+
+_FINANCIAL_YEAR = 2025
+
+
+def _synthetic_business_registration(company: Company) -> dict:
+    business_no = f"{200 + company.id:03d}-81-{10000 + company.id:05d}"
+    return {"business_registration_no": business_no, "company_name": company.name, "representative": "○○○"}
+
+
+def _synthetic_vat_tax_base(company: Company) -> dict:
+    base = int(company.revenue_krw or 1_000_000_000)
+    return {"reporting_year": _FINANCIAL_YEAR, "vat_tax_base_krw": base}
+
+
+def _synthetic_sme_certificate(company: Company) -> dict:
+    return {"is_sme": True, "certificate_type": "중소기업 확인서", "valid_until": f"{_FINANCIAL_YEAR + 1}-12-31"}
+
+
+def _synthetic_kepco_payment_history(company: Company) -> dict:
+    # kWh 없음 — 결제금액만(한전 마이데이터 실제 항목 그대로 재현)
+    return {
+        "payments": [
+            {"year": _FINANCIAL_YEAR, "month": m, "paid_amount_krw": 3_000_000 + company.id * 10_000 + m * 50_000}
+            for m in range(1, 13)
+        ],
+    }
+
+
+def _synthetic_financial_statement(company: Company) -> dict:
+    revenue = int(company.revenue_krw or 2_400_000_000)
+    return {"total_equity": round(revenue * 0.35), "total_debt": round(revenue * 0.45)}
+
+
+_SYNTH = {
+    "business-registration": _synthetic_business_registration,
+    "vat-tax-base": _synthetic_vat_tax_base,
+    "sme-certificate": _synthetic_sme_certificate,
+    "kepco-payment-history": _synthetic_kepco_payment_history,
+}
+
+
+def collect_mydata(session: Session, company_id: int, source: str) -> dict:
+    """마이데이터 5종 mock 수집 — 멱등(이미 수집됐으면 기존 값을 그대로 반환)."""
+    if source not in MYDATA_SOURCES:
+        raise ValueError(f"알 수 없는 마이데이터 소스: {source}")
+
+    company = session.get(Company, company_id)
+    if company is None:
+        raise ValueError(f"company {company_id} not found")
+
+    ib = resolve_institution_borrower(session, company_id)
+    if ib is None:
+        raise MissingInstitutionAttributionError(
+            f"company {company_id}는 아직 금융기관에 귀속되지 않았습니다 (institution_borrowers 없음)"
+        )
+    financial_institution_id, institution_borrower_id = ib
+
+    if source == "financial-statement":
+        return _collect_financial_statement(session, company, financial_institution_id)
+    return _collect_kyb_document(session, company, source, financial_institution_id, institution_borrower_id)
+
+
+def _collect_kyb_document(
+    session: Session,
+    company: Company,
+    source: str,
+    financial_institution_id: int,
+    institution_borrower_id: int,
+) -> dict:
+    document_type = _SOURCE_TO_DOCUMENT_TYPE[source]
+    existing = session.execute(
+        select(SourceDocument).where(
+            SourceDocument.company_id == company.id,
+            SourceDocument.document_type == document_type,
+        )
+    ).scalars().first()
+    if existing is not None:
+        return {"source": source, "already_collected": True, "extracted": existing.extracted_json}
+
+    payload = _SYNTH[source](company)
+    doc = SourceDocument(
+        financial_institution_id=financial_institution_id,
+        company_id=company.id,
+        document_type=document_type,
+        source_system=f"mydata:{source}",
+        extracted_json=payload,
+        verification_status="unverified",
+    )
+    session.add(doc)
+
+    if source == "business-registration":
+        ib_row = session.get(InstitutionBorrower, institution_borrower_id)
+        if ib_row is not None and not ib_row.external_customer_id.startswith("biz-"):
+            ib_row.external_customer_id = f"biz-{payload['business_registration_no']}"
+
+    session.commit()
+    return {"source": source, "already_collected": False, "extracted": payload}
+
+
+def _collect_financial_statement(
+    session: Session, company: Company, financial_institution_id: int,
+) -> dict:
+    existing = session.execute(
+        select(BorrowerFinancial).where(
+            BorrowerFinancial.company_id == company.id,
+            BorrowerFinancial.financial_year == _FINANCIAL_YEAR,
+        )
+    ).scalars().first()
+    if existing is not None:
+        return {
+            "source": "financial-statement",
+            "already_collected": True,
+            "extracted": {
+                "total_equity": float(existing.total_equity),
+                "total_debt": float(existing.total_debt),
+            },
+        }
+
+    payload = _synthetic_financial_statement(company)
+    bf = BorrowerFinancial(
+        financial_institution_id=financial_institution_id,
+        company_id=company.id,
+        financial_year=_FINANCIAL_YEAR,
+        as_of_date=datetime(_FINANCIAL_YEAR, 12, 31, tzinfo=timezone.utc),
+        currency="KRW",
+        total_equity=payload["total_equity"],
+        total_debt=payload["total_debt"],
+        debt_definition="PCAF 방법론상 total_debt — 잠정(회계 확인 전, mock)",
+        source="mydata:financial-statement (mock)",
+        verified=False,
+    )
+    session.add(bf)
+    session.commit()
+    return {"source": "financial-statement", "already_collected": False, "extracted": payload}

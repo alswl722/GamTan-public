@@ -118,6 +118,8 @@ def _build_classification(
         method=decided["method"],
         mixed_item=1 if decided["mixed_item"] else 0,
         status=status,
+        # v1 §7.1 — 업로드/마이데이터 경로로 들어온 전표는 raw_json에 원본 문서 FK가 있다.
+        source_document_id=(voucher.raw_json or {}).get("source_document_id"),
     )
 
     # 도구③ 계산 엔진 — 물량·탄소량은 결정론적 코드로만 산출 (db/calc_engine.py)

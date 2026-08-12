@@ -26,6 +26,11 @@ class Company(Base):
     region = Column(String(50))
     created_at = Column(DateTime(timezone=True), default=now)
 
+    # v1 §2주차 이전 착수 — 사장님이 2단계(연료 유형 체크)에서 고른 값.
+    # {"diesel": bool, "gasoline": bool, "city_gas": bool, "lpg": "yes"|"no"|"unsure",
+    #  "electricity": bool} — null이면 아직 미입력(필터 미적용, 기존 결손 감지 그대로 동작).
+    fuel_types_json = Column(JSON)
+
     vouchers = relationship("Voucher", back_populates="company")
     trace_logs = relationship("TraceLog", back_populates="company")
 
