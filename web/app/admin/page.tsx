@@ -8,16 +8,20 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   getAlerts,
+  getDocumentAccessLog,
   getHitl,
   getPortfolio,
   getRateCandidates,
+  getRateRequests,
   getReviewLog,
   getTraceRuns,
 } from "@/lib/admin-data";
 import type {
   AlertItem,
+  DocumentAccessLogEntry,
   HitlItem,
   PortfolioResponse,
+  RateApprovalRequestItem,
   RateCandidateItem,
   ReviewLogEntry,
   TraceRunItem,
@@ -31,6 +35,8 @@ type Data = {
   reviewLog: ReviewLogEntry[];
   alerts: AlertItem[];
   rateCandidates: RateCandidateItem[];
+  rateRequests: RateApprovalRequestItem[];
+  documentAccessLog: DocumentAccessLogEntry[];
 };
 
 export default function AdminPage() {
@@ -47,9 +53,30 @@ export default function AdminPage() {
       getReviewLog(),
       getAlerts(),
       getRateCandidates(),
+      getRateRequests(),
+      getDocumentAccessLog(),
     ])
-      .then(([portfolio, hitlQueue, traceRuns, reviewLog, alerts, rateCandidates]) =>
-        setData({ portfolio, hitlQueue, traceRuns, reviewLog, alerts, rateCandidates }),
+      .then(
+        ([
+          portfolio,
+          hitlQueue,
+          traceRuns,
+          reviewLog,
+          alerts,
+          rateCandidates,
+          rateRequests,
+          documentAccessLog,
+        ]) =>
+          setData({
+            portfolio,
+            hitlQueue,
+            traceRuns,
+            reviewLog,
+            alerts,
+            rateCandidates,
+            rateRequests,
+            documentAccessLog,
+          }),
       )
       .catch((err) => {
         console.error("대시보드 데이터 조회 실패:", err);
@@ -99,6 +126,8 @@ export default function AdminPage() {
       reviewLog={data.reviewLog}
       alerts={data.alerts}
       rateCandidates={data.rateCandidates}
+      rateRequests={data.rateRequests}
+      documentAccessLog={data.documentAccessLog}
       onReviewed={refreshReviewLog}
     />
   );

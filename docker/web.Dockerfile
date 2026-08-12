@@ -4,9 +4,12 @@ FROM node:20-slim
 
 WORKDIR /app
 
-# 의존성 먼저 (레이어 캐시)
+# 의존성 먼저 (레이어 캐시) — package-lock.json 이 안 바뀌면 이 레이어 그대로 재사용.
+# npm ci 는 install 과 달리 lock 파일을 그대로 신뢰해 트리 재계산을 안 하므로 더 빠르고,
+# 캐시 마운트로 반복 빌드 시 다운로드 자체를 건너뛴다.
 COPY web/package.json web/package-lock.json* ./
-RUN npm install
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --no-audit --no-fund
 
 # 앱 코드
 COPY web ./

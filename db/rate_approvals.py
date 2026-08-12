@@ -1,0 +1,107 @@
+"""우대금리·설비금융 승인요청 큐 (v1 §6 2주차).
+
+기존 db/pcaf.py::rate_upgrade_candidates 는 "안내 후보" 목록을 계산만 할 뿐 저장하지
+않는 읽기 전용 함수다. 여기서는 그 계산을 재사용해 사장님의 명시적 요청을
+RateApprovalRequest 행으로 만들고, 은행 담당자의 승인/반려를 기록한다.
+
+승인/반려는 여신 결정이 아니다(CLAUDE.md §9) — "우대금리 안내 대상으로 확인했다"는
+은행 담당자의 수동 확인이며, 금리·여신 자동판정과 무관하다. 그래서 승인 응답에도
+비보장 문구를 그대로 유지한다(원칙6 — 등급 상승·자격 보장 아님).
+"""
+from datetime import datetime, timezone
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from db.models import Company, RateApprovalRequest
+from db.pcaf import upgrade_candidate_for_company
+
+DISCLAIMER_TEXT = (
+    "본 안내는 데이터 완전성 개선을 제안할 뿐 PCAF 등급 상승이나 우대금리·설비금융 "
+    "자격을 보장하지 않습니다. 최종 승인은 은행 담당자가 별도 심사를 거쳐 결정합니다."
+)
+
+
+class CompanyNotFoundError(Exception):
+    """company_id에 해당하는 기업이 없을 때."""
+
+
+class NoUpgradeCandidateError(Exception):
+    """결손을 채워도 등급이 오르지 않거나 결손 자체가 없어 요청 근거가 없을 때."""
+
+
+def create_rate_request(
+    session: Session, company_id: int, *, request_type: str = "rate_upgrade"
+) -> RateApprovalRequest:
+    """사장님이 안내 카드를 보고 "요청" 버튼을 눌렀을 때 승인요청 큐에 항목을 만든다.
+
+    current_grade/target_grade/missing_summary는 생성 시점 스냅샷 — 이후 재산정으로
+    등급이 바뀌어도 요청 당시 근거가 감사 가능하게 그대로 남는다. disclaimer_text도
+    생성 시점에 고정해 문구 정책이 바뀌어도 과거 요청은 요청 당시 그대로 보존된다.
+
+    request_type="equipment_finance"(설비금융)는 K택소노미·설비투자 필드가 아직
+    classification 테이블에 없어(개발자 A 담당, 2주차 병행) 등급 스냅샷 없이도 요청을
+    만들 수 있게 허용한다 — missing_summary는 자유 텍스트로 사장님이 직접 채운다.
+    """
+    company = session.get(Company, company_id)
+    if company is None:
+        raise CompanyNotFoundError(f"company_id={company_id} 없음")
+
+    if request_type == "rate_upgrade":
+        candidate = upgrade_candidate_for_company(session, company_id)
+        if candidate is None:
+            raise NoUpgradeCandidateError(
+                f"company_id={company_id} 등급 상승 후보 아님 — 결손이 없거나 채워도 등급이 안 오름"
+            )
+        req = RateApprovalRequest(
+            company_id=company_id,
+            request_type=request_type,
+            current_grade=candidate["current_grade"],
+            target_grade=candidate["target_grade"],
+            missing_summary=candidate["missing"],
+            disclaimer_text=DISCLAIMER_TEXT,
+        )
+    else:
+        req = RateApprovalRequest(
+            company_id=company_id,
+            request_type=request_type,
+            disclaimer_text=DISCLAIMER_TEXT,
+        )
+
+    session.add(req)
+    session.commit()
+    return req
+
+
+def list_rate_requests(session: Session, *, status: str | None = None) -> list[RateApprovalRequest]:
+    stmt = select(RateApprovalRequest).order_by(RateApprovalRequest.created_at.desc())
+    if status:
+        stmt = stmt.where(RateApprovalRequest.status == status)
+    return list(session.execute(stmt).scalars().all())
+
+
+def review_rate_request(
+    session: Session,
+    request_id: int,
+    *,
+    decision: str,
+    reviewed_by: str,
+    note: str | None = None,
+) -> RateApprovalRequest | None:
+    """승인/반려 처리 — 이미 처리된 요청은 재처리하지 않는다(멱등 조치 방지, 상태 이력 보존).
+
+    decision: "approved" | "rejected". 승인도 여신 결정이 아니라 안내 대상 확정
+    수동 확인일 뿐이라 disclaimer_text는 건드리지 않는다 — 이미 생성 시점에 고정됨.
+    """
+    req = session.get(RateApprovalRequest, request_id)
+    if req is None:
+        return None
+    if req.status != "pending":
+        return req  # 이미 처리됨 — 호출부가 409로 표시
+
+    req.status = decision
+    req.reviewed_by = reviewed_by
+    req.reviewed_at = datetime.now(timezone.utc)
+    req.review_note = note
+    session.commit()
+    return req

@@ -235,6 +235,35 @@ def _benchmark(company, dist1, dist2, after) -> dict:
     return result
 
 
+def upgrade_candidate_for_company(session: Session, company_id: int) -> dict | None:
+    """단일 기업의 등급 상승 후보 판정 — rate_upgrade_candidates와 db/rate_approvals.py
+    (승인요청 큐 생성 시 스냅샷)가 동일 판정 로직을 공유하도록 분리했다.
+
+    결손이 없거나, 결손을 채워도 등급이 안 오르면 None(후보 아님).
+    """
+    company = session.get(Company, company_id)
+    if company is None:
+        return None
+    dist1 = get_distribution(session, company.industry_code, 1)
+    dist2 = get_distribution(session, company.industry_code, 2)
+    after = _after_measured(session, company_id, dist1, dist2)
+    if not after or not after["gap_months"]:
+        return None
+    if after["projected_grade"] >= after["grade"]:
+        return None
+
+    fuels = ", ".join(dict.fromkeys(g["fuel"] for g in after["gap_months"]))
+    missing_month_count = sum(len(g["missing_months"]) for g in after["gap_months"])
+    return {
+        "company_id": company.id,
+        "company_name": company.name,
+        "current_grade": after["grade"],
+        "target_grade": after["projected_grade"],
+        "missing": f"{fuels} 고지서 {missing_month_count}개월분",
+        "benefit": f"PCAF {after['grade']}등급 → {after['projected_grade']}등급 시 우대금리 대상 안내 가능",
+    }
+
+
 def rate_upgrade_candidates(session: Session) -> list[dict]:
     """등급 상승 역산 후보 — 결손월만 채우면 PCAF 등급이 오르는 기업 목록.
 
@@ -244,22 +273,7 @@ def rate_upgrade_candidates(session: Session) -> list[dict]:
     companies = session.execute(select(Company).order_by(Company.id)).scalars().all()
     candidates = []
     for co in companies:
-        dist1 = get_distribution(session, co.industry_code, 1)
-        dist2 = get_distribution(session, co.industry_code, 2)
-        after = _after_measured(session, co.id, dist1, dist2)
-        if not after or not after["gap_months"]:
-            continue
-        if after["projected_grade"] >= after["grade"]:
-            continue  # 결손을 채워도 등급이 안 오르면 후보 아님
-
-        fuels = ", ".join(dict.fromkeys(g["fuel"] for g in after["gap_months"]))
-        missing_month_count = sum(len(g["missing_months"]) for g in after["gap_months"])
-        candidates.append({
-            "company_id": co.id,
-            "company_name": co.name,
-            "current_grade": after["grade"],
-            "target_grade": after["projected_grade"],
-            "missing": f"{fuels} 고지서 {missing_month_count}개월분",
-            "benefit": f"PCAF {after['grade']}등급 → {after['projected_grade']}등급 시 우대금리 대상 안내 가능",
-        })
+        candidate = upgrade_candidate_for_company(session, co.id)
+        if candidate is not None:
+            candidates.append(candidate)
     return candidates

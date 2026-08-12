@@ -3,15 +3,19 @@
 import { useState } from "react";
 import type {
   AlertItem,
+  DocumentAccessLogEntry,
   HitlItem,
   PortfolioResponse,
+  RateApprovalRequestItem,
   RateCandidateItem,
   ReviewLogEntry,
   TraceRunItem,
 } from "@/lib/admin-types";
 import { cn } from "@/lib/utils";
 import { AlertsPanel } from "@/components/admin/AlertsPanel";
+import { ApprovalQueue } from "@/components/admin/ApprovalQueue";
 import { AuditLog } from "@/components/admin/AuditLog";
+import { DocumentAccessLog } from "@/components/admin/DocumentAccessLog";
 import { GradeDonut } from "@/components/admin/GradeDonut";
 import { HitlWorkspace } from "@/components/admin/HitlWorkspace";
 import { RateCandidates } from "@/components/admin/RateCandidates";
@@ -22,6 +26,7 @@ const TABS = [
   { id: "hitl", label: "담당자 검토" },
   { id: "grades", label: "등급 분포" },
   { id: "risk", label: "여신 리스크" },
+  { id: "approvals", label: "승인요청" },
   { id: "trace", label: "실행 이력" },
   { id: "audit", label: "변경 이력" },
 ] as const;
@@ -35,6 +40,8 @@ export interface DashboardShellProps {
   reviewLog: ReviewLogEntry[];
   alerts: AlertItem[];
   rateCandidates: RateCandidateItem[];
+  rateRequests: RateApprovalRequestItem[];
+  documentAccessLog: DocumentAccessLogEntry[];
   /** 담당자 검토 탭에서 확정/반려가 성공할 때마다 호출 — 변경 이력을 최신으로 다시 불러온다. */
   onReviewed?: () => void;
 }
@@ -89,6 +96,8 @@ export function DashboardShell({
   reviewLog,
   alerts,
   rateCandidates,
+  rateRequests,
+  documentAccessLog,
   onReviewed,
 }: DashboardShellProps) {
   const [activeTab, setActiveTab] = useState<TabId>("hitl");
@@ -150,6 +159,12 @@ export function DashboardShell({
           </div>
         )}
 
+        {activeTab === "approvals" && (
+          <div className="h-full p-4">
+            <ApprovalQueue requests={rateRequests} />
+          </div>
+        )}
+
         {activeTab === "trace" && (
           <div className="h-full p-4">
             <TraceHistory runs={traceRuns} />
@@ -157,8 +172,13 @@ export function DashboardShell({
         )}
 
         {activeTab === "audit" && (
-          <div className="h-full p-4">
-            <AuditLog entries={reviewLog} />
+          <div className="grid h-full grid-cols-1 gap-5 overflow-hidden p-5 lg:grid-cols-2">
+            <div className="min-h-0">
+              <AuditLog entries={reviewLog} />
+            </div>
+            <div className="min-h-0">
+              <DocumentAccessLog entries={documentAccessLog} />
+            </div>
           </div>
         )}
       </div>

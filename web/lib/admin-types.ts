@@ -107,3 +107,35 @@ export interface RateCandidateItem {
   missing: string;
   benefit: string;
 }
+
+/**
+ * 승인요청 큐 항목 — GET /admin/rate-requests 응답. HITL 큐(분류 신뢰도, HitlItem)와는
+ * 완전히 다른 데이터: 여기 status는 사장님 요청에 대한 은행 담당자의 승인/반려 상태이고,
+ * 승인도 여신 결정이 아니라 "안내 대상 확인"일 뿐이다(disclaimer_text가 항상 동반).
+ */
+export interface RateApprovalRequestItem {
+  id: number;
+  company_id: number;
+  company_name: string;
+  request_type: "rate_upgrade" | "equipment_finance";
+  current_grade: number | null;
+  target_grade: number | null;
+  missing_summary: string | null;
+  disclaimer_text: string;
+  status: "pending" | "approved" | "rejected";
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  review_note: string | null;
+  created_at: string | null;
+}
+
+/** 원본문서 접근 감사 로그 한 건 — GET /admin/documents/access-log 응답 항목. */
+export interface DocumentAccessLogEntry {
+  log_id: number;
+  source_document_id: number;
+  company_name: string;
+  document_type: string;
+  original_filename: string | null;
+  accessed_by: string;
+  accessed_at: string | null;
+}

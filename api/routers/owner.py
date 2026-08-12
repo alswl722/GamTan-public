@@ -3,6 +3,8 @@
 - GET   /owner/alerts/{company_id}              자기 기업의 이상 신호 알림
 - PATCH /owner/{company_id}/fuel-types          2단계(연료 유형 체크) 저장 + 3단계 필수서류 안내
 - POST  /owner/{company_id}/documents/upload    3~4단계 업로드(세금계산서 OCR|엑셀, 전기·도시가스 OCR)
+- GET   /owner/{company_id}/rate-candidate      우대금리 등급 상승 후보 여부(있으면 요청 버튼 노출)
+- POST  /owner/{company_id}/rate-requests       우대금리·설비금융 안내 요청 생성 → 관리자 승인요청 큐
 
 GET /admin/alerts(은행 담당자용 포트폴리오 전체)와 같은 판정 로직
 (db/alerts.py::detect_alerts)을 재사용하되 자기 기업으로만 필터한다 —
@@ -24,6 +26,13 @@ from db.alerts import detect_alerts
 from db.document_requirements import FuelTypes, required_documents
 from db.hometax_excel_parser import HometaxExcelFormatError
 from db.models import Company
+from db.pcaf import upgrade_candidate_for_company
+from db.rate_approvals import (
+    CompanyNotFoundError,
+    DISCLAIMER_TEXT,
+    NoUpgradeCandidateError,
+    create_rate_request,
+)
 
 router = APIRouter(prefix="/owner", tags=["owner"])
 
@@ -110,3 +119,46 @@ async def upload_document(
     except HometaxExcelFormatError as e:
         # 실패 가시성 원칙 — 파싱 실패를 목업 데이터로 가리지 않고 그대로 안내(CLAUDE.md §6)
         raise HTTPException(status_code=422, detail=str(e))
+
+
+class RateRequestIn(BaseModel):
+    request_type: str = "rate_upgrade"  # rate_upgrade | equipment_finance
+
+
+@router.get("/{company_id}/rate-candidate")
+def rate_candidate(company_id: int, session: Session = Depends(get_session)):
+    """자기 기업이 등급 상승 후보인지 — 후보면 프론트가 "안내 요청" 버튼을 노출한다.
+
+    은행 GET /admin/rate-candidates와 같은 판정(db/pcaf.py::upgrade_candidate_for_company)을
+    자기 기업으로 좁혀 재사용한다. 후보가 아니면 candidate: null.
+    """
+    candidate = upgrade_candidate_for_company(session, company_id)
+    return {"candidate": candidate, "disclaimer_text": DISCLAIMER_TEXT}
+
+
+@router.post("/{company_id}/rate-requests")
+def submit_rate_request(
+    company_id: int, body: RateRequestIn, session: Session = Depends(get_session)
+):
+    """사장님이 안내 카드의 "요청" 버튼을 눌러 승인요청 큐에 항목을 만든다.
+
+    여신 결정이 아니다(CLAUDE.md §9) — 이 요청은 관리자 승인요청 큐(GET /admin/rate-requests)로
+    가서 담당자가 "안내 대상으로 확인"할 뿐, 금리·여신을 자동으로 확정하지 않는다.
+    """
+    try:
+        req = create_rate_request(session, company_id, request_type=body.request_type)
+    except CompanyNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except NoUpgradeCandidateError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return {
+        "id": req.id,
+        "company_id": req.company_id,
+        "request_type": req.request_type,
+        "current_grade": req.current_grade,
+        "target_grade": req.target_grade,
+        "missing_summary": req.missing_summary,
+        "disclaimer_text": req.disclaimer_text,
+        "status": req.status,
+        "created_at": req.created_at.isoformat() if req.created_at else None,
+    }

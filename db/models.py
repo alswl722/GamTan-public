@@ -345,6 +345,71 @@ class SourceDocument(Base):
     )
 
 
+class SourceDocumentAccessLog(Base):
+    """원본문서 열람 감사 로그 (v1 §6 2주차) — "누가 원본을 봤는가"의 기록.
+
+    기존 review-log(Classification.evidence 누적)는 "분류를 확정/반려했다"는 조치
+    기록이지 "문서를 열어봤다"는 열람 기록이 아니다 — 열람은 조치가 아니라 접근이라
+    별도 로그가 필요하다(SourceDocument 자체엔 열람자·열람시각 컬럼이 없음).
+    담당자 식별자는 아직 별도 인증 체계가 없어 문자열로만 받는다(institution_users
+    테이블과의 FK 연결은 인증 붙을 때 확장).
+    """
+    __tablename__ = "source_document_access_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source_document_id = Column(Integer, ForeignKey("source_documents.id"), nullable=False)
+    accessed_by = Column(String(100), nullable=False)
+    accessed_at = Column(DateTime(timezone=True), default=now)
+
+    __table_args__ = (
+        Index("ix_source_document_access_logs_document", "source_document_id"),
+    )
+
+
+class RateApprovalRequest(Base):
+    """우대금리·설비금융 안내 승인요청 큐 (v1 §6 2주차).
+
+    기존 GET /admin/rate-candidates(db/pcaf.py::rate_upgrade_candidates)는 읽기 전용
+    "안내 후보" 목록일 뿐 사장님이 실제로 요청을 만드는 행위가 없었다. 이 테이블은
+    그 요청 자체와 은행 담당자의 승인/반려를 저장한다.
+
+    current_grade/target_grade는 요청 생성 시점 스냅샷 — 이후 재산정으로 등급이
+    바뀌어도 요청 당시 근거가 그대로 남는다(감사 가능성).
+    disclaimer_text는 승인/반려 응답에 항상 동반해야 하는 비보장 문구를 생성 시점에
+    고정해 저장한다 — 문구 정책이 나중에 바뀌어도 과거 요청의 문구는 요청 당시 그대로
+    보존된다.
+    이 테이블의 승인은 여신 결정이 아니다(CLAUDE.md §9) — 은행 담당자가 "우대금리
+    안내 대상으로 확인했다"는 수동 확인이며, 금리·여신 자동판정과는 무관하다.
+    """
+    __tablename__ = "rate_approval_requests"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    request_type = Column(String(20), nullable=False, default="rate_upgrade")  # rate_upgrade | equipment_finance
+    current_grade = Column(SmallInteger)
+    target_grade = Column(SmallInteger)
+    missing_summary = Column(Text)
+    disclaimer_text = Column(Text, nullable=False)
+    status = Column(String(20), nullable=False, default="pending")  # pending | approved | rejected
+    reviewed_by = Column(String(100))
+    reviewed_at = Column(DateTime(timezone=True))
+    review_note = Column(Text)
+    created_at = Column(DateTime(timezone=True), default=now)
+
+    __table_args__ = (
+        CheckConstraint(
+            "request_type IN ('rate_upgrade', 'equipment_finance')",
+            name="ck_rate_approval_requests_request_type"
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'approved', 'rejected')",
+            name="ck_rate_approval_requests_status"
+        ),
+        Index("ix_rate_approval_requests_company", "company_id"),
+        Index("ix_rate_approval_requests_status", "status"),
+    )
+
+
 class PcafQualityRule(Base):
     """PCAF Business Loans and Unlisted Equity 데이터 품질표 (§7.7)
 
