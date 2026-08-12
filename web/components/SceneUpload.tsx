@@ -358,9 +358,6 @@ export function SceneUpload({
                 }}
               />
             </label>
-            <p className="mt-1.5 text-[11px] text-faint">
-              몇 월 자료인지는 안 골라도 돼요 — 문서를 읽어서 자동으로 확인할게요
-            </p>
 
             {fileEntries.length > 0 && (
               <div className="mt-2.5 space-y-1.5">

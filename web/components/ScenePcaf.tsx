@@ -7,33 +7,6 @@ import type { AlertItem } from "@/lib/admin-types";
 /** 장면 ④ — PCAF Before/After + 벤치마킹. /pcaf/{id} 실데이터만 사용.
  *  API 실패 시 목업으로 위장하지 않고 에러 배너 + 재시도를 표시한다(실패 가시성). */
 
-// PCAF 등급을 사장님이 바로 이해할 수 있는 한 줄 설명으로 매핑 (1=가장 정확 → 5=가장 부정확)
-const GRADE_DESC: Record<number, string> = {
-  1: "실측 데이터 기반, 가장 정확해요",
-  2: "실측 데이터 기반, 매우 정확해요",
-  3: "전표 기반 실측, 상당히 정확해요",
-  4: "일부 추정이 섞여 있어요",
-  5: "매출액만으로 추정한 값이에요",
-};
-
-function GradeChip({
-  grade,
-  accent = false,
-}: {
-  grade: number;
-  accent?: boolean;
-}) {
-  return (
-    <span
-      className={`grid h-5 w-5 shrink-0 place-items-center rounded-md text-[11px] font-extrabold ${
-        accent ? "bg-brand text-white" : "bg-line text-muted"
-      }`}
-    >
-      {grade}
-    </span>
-  );
-}
-
 type Before = {
   grade: number;
   scope1: number;
@@ -85,45 +58,79 @@ type RateRequestResponse = {
 
 const fmt = (n: number) => n.toFixed(1);
 
-function EmissionBar({
-  label,
-  grade,
-  value,
-  maxValue,
-  accent,
+// PCAF 등급은 1(최정확)~5(최부정확)의 순서형 데이터라, 배출량 수치 크기가 아니라
+// "5칸 중 어디에 있는지"를 직접 그려야 등급 개선이 왜곡 없이 보인다(과거엔 tCO2e
+// 막대 길이로 표현했는데, 실측치가 추정치보다 큰 경우엔 등급이 좋아져도 막대가
+// 짧아 보이는 모순이 있었다). 왼쪽(5등급, 최하)에서 오른쪽(1등급, 최상)으로 이동한
+// 칸 수를 마커 이동 애니메이션으로 직접 보여준다.
+const GRADE_TICKS = [5, 4, 3, 2, 1] as const;
+const posOfGrade = (g: number) => ((5 - g) / 4) * 100;
+
+function GradeLadder({
+  before,
+  after,
   improvedBy,
 }: {
-  label: string;
-  grade: number;
-  value: number;
-  maxValue: number;
-  accent: boolean;
-  improvedBy?: number;
+  before: number;
+  after: number;
+  improvedBy: number;
 }) {
-  const pct = Math.max(4, Math.round((value / maxValue) * 100));
+  const beforePct = posOfGrade(before);
+  const afterPct = posOfGrade(after);
+
+  const [animPct, setAnimPct] = useState(beforePct);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setAnimPct(afterPct));
+    return () => cancelAnimationFrame(id);
+  }, [afterPct]);
+
+  const fillLeft = Math.min(beforePct, animPct);
+  const fillWidth = Math.abs(animPct - beforePct);
+
   return (
     <div>
-      <div className="flex items-baseline justify-between text-[12px]">
-        <span className="flex items-center gap-1.5 font-semibold text-muted">
-          <GradeChip grade={grade} accent={accent} />
-          {label}
-          {improvedBy && improvedBy > 0 && (
-            <span className="rounded-full bg-brand-soft px-1.5 py-0.5 text-[10.5px] font-bold text-brand-ink">
-              {improvedBy}단계 개선
-            </span>
-          )}
+      <div className="flex items-center justify-center gap-2">
+        <span className="rounded-full bg-line px-2.5 py-1 text-[13px] font-bold text-muted">
+          {before}등급
         </span>
-        <span className="font-bold tabular-nums text-ink">
-          {fmt(value)} <span className="font-normal text-faint">tCO₂e</span>
+        <span className="text-faint">→</span>
+        <span className="rounded-full bg-brand px-2.5 py-1 text-[15px] font-extrabold text-white">
+          {after}등급
         </span>
+        {improvedBy > 0 && (
+          <span className="rounded-full bg-brand-soft px-2 py-1 text-[11px] font-bold text-brand-ink">
+            {improvedBy}단계 개선
+          </span>
+        )}
       </div>
-      <div className="mt-1.5 h-3.5 overflow-hidden rounded-full bg-bg">
+
+      <div className="relative mt-6 h-2 rounded-full bg-bg">
+        {fillWidth > 0 && (
+          <div
+            className="absolute inset-y-0 rounded-full bg-brand-soft transition-all duration-700 ease-out"
+            style={{ left: `${fillLeft}%`, width: `${fillWidth}%` }}
+          />
+        )}
+        <div className="absolute inset-0 flex items-center justify-between">
+          {GRADE_TICKS.map((g) => (
+            <span key={g} className="h-2.5 w-2.5 rounded-full bg-line" />
+          ))}
+        </div>
         <div
-          className={`h-full rounded-full transition-all duration-700 ease-out ${
-            accent ? "bg-brand" : "bg-faint"
-          }`}
-          style={{ width: `${pct}%` }}
+          className="absolute -top-1 h-4 w-4 -translate-x-1/2 rounded-full border-2 border-white bg-faint shadow"
+          style={{ left: `${beforePct}%` }}
         />
+        {afterPct !== beforePct && (
+          <div
+            className="absolute -top-1 h-4 w-4 -translate-x-1/2 rounded-full border-2 border-white bg-brand shadow transition-[left] duration-700 ease-out"
+            style={{ left: `${animPct}%` }}
+          />
+        )}
+      </div>
+      <div className="mt-1.5 flex justify-between text-[10px] font-semibold text-faint">
+        {GRADE_TICKS.map((g) => (
+          <span key={g}>{g}등급</span>
+        ))}
       </div>
     </div>
   );
@@ -265,7 +272,6 @@ export function ScenePcaf() {
   }
 
   const { before, after, benchmark } = data;
-  const maxValue = Math.max(before.emission_tco2e, after?.total ?? 0) * 1.05 || 1;
   const gradeUp = after ? before.grade - after.grade : 0;
   const hasDistribution =
     benchmark.value !== null &&
@@ -282,43 +288,39 @@ export function ScenePcaf() {
         기존 매출 추정 대비 데이터 품질이 얼마나 좋아졌는지 보여드려요.
       </p>
 
-      {/* 배출량 막대 비교 — 등급·개선폭·수치를 한 그래프 안에서 함께 전달 */}
-      <div className="mt-5 space-y-3.5 rounded-2xl bg-surface p-5">
-        <EmissionBar
-          label="Before · 매출액 통계 추정"
-          grade={before.grade}
-          value={before.emission_tco2e}
-          maxValue={maxValue}
-          accent={false}
-        />
+      {/* 등급 사다리 — 배출량 수치가 아니라 "5칸 중 어디로 이동했는지"를 직접 보여준다 */}
+      <div className="mt-5 space-y-4 rounded-2xl bg-surface p-5">
         {after ? (
-          <EmissionBar
-            label="After · 전표 기반 실측"
-            grade={after.grade}
-            value={after.total}
-            maxValue={maxValue}
-            accent
-            improvedBy={gradeUp}
-          />
+          <GradeLadder before={before.grade} after={after.grade} improvedBy={gradeUp} />
         ) : (
-          <div className="rounded-xl border-2 border-dashed border-line p-4 text-center text-[12.5px] text-muted">
-            ③ AI 분류를 먼저 실행하면 실측 배출량이 표시됩니다
-          </div>
-        )}
-        <p className="text-[11.5px] text-faint">
-          {GRADE_DESC[after ? after.grade : before.grade]}
-        </p>
-        {after && (
-          <div className="flex items-center justify-between border-t border-line pt-3 text-[11.5px] text-muted">
-            <span>
-              Scope1 <span className="font-semibold text-ink">{fmt(after.scope1)}</span> · Scope2{" "}
-              <span className="font-semibold text-ink">{fmt(after.scope2)}</span>
-            </span>
-            {after.hitl_count > 0 && (
-              <span className="rounded-md bg-hitl/25 px-2 py-0.5 font-semibold text-hitl-ink">
-                검토 예정 {after.hitl_count}건
+          <>
+            <div className="flex items-center justify-center">
+              <span className="rounded-full bg-line px-2.5 py-1 text-[13px] font-bold text-muted">
+                {before.grade}등급 · 매출액 통계 추정
               </span>
-            )}
+            </div>
+            <div className="rounded-xl border-2 border-dashed border-line p-4 text-center text-[12.5px] text-muted">
+              ③ AI 분류를 먼저 실행하면 실측 배출량이 표시됩니다
+            </div>
+          </>
+        )}
+        {after && (
+          <div className="space-y-1.5 border-t border-line pt-3 text-[11.5px] text-muted">
+            <div>
+              매출액 추정 {fmt(before.emission_tco2e)}tCO₂e → 전표 기반 실측{" "}
+              <span className="font-semibold text-ink">{fmt(after.total)}tCO₂e</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span>
+                Scope1 <span className="font-semibold text-ink">{fmt(after.scope1)}</span> · Scope2{" "}
+                <span className="font-semibold text-ink">{fmt(after.scope2)}</span>
+              </span>
+              {after.hitl_count > 0 && (
+                <span className="rounded-md bg-hitl/25 px-2 py-0.5 font-semibold text-hitl-ink">
+                  검토 예정 {after.hitl_count}건
+                </span>
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -400,7 +402,7 @@ export function ScenePcaf() {
 
           {rateRequest ? (
             <div className="mt-3 rounded-xl bg-brand-soft px-3.5 py-2.5 text-center text-[12.5px] font-semibold text-brand-ink">
-              요청됐어요 — 담당 은행원이 확인 후 안내드려요
+              요청됐어요. 담당 은행원이 확인 후 안내드려요
             </div>
           ) : (
             <>

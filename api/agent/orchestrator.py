@@ -26,7 +26,7 @@ from db.models import Classification, Company, Voucher
 
 MODEL = "gemini-3.5-flash"   # 분류(llm_classify)와 동일 모델로 통일
 
-_OPENER = "최근 12개월 전표 분석 시작 → 결손 검사를 먼저 수행"
+_OPENER = "최근 1년 치 자료를 확인하고 있어요. 빠진 달이 있는지 먼저 살펴볼게요."
 
 _ANOMALY_JUDGE_PROMPT = """너는 중소기업 전표를 검토하는 회계 보조 AI다.
 아래 전표 품목명들을 보고, 이 달의 배출량이 업종 평균보다 훨씬 높은 것이
@@ -133,64 +133,65 @@ def _summarize(name: str, args: dict, result: dict) -> tuple[str, dict | None]:
     if name == "collect_vouchers":
         cov = result.get("coverage", {})
         gaps = cov.get("gaps", [])
-        msg = f"전표 {result.get('count', 0)}건 수집 완료"
+        msg = f"자료 {result.get('count', 0)}건을 확인했어요."
         # get_coverage()가 실제로 계산한 gaps를 연료 무관하게 그대로 읽는다 — 특정
         # 연료(과거엔 "가스"만)를 하드코딩하면 다른 연료 결손은 트레이스에 조용히
         # 묻힌다. 여러 연료가 동시에 비면 첫 번째를 대표로 문장에 넣고 개수만 덧붙인다.
         if gaps:
             g = gaps[0]
             months = "·".join(str(m) for m in g["missing_months"])
-            msg += f" — {months}월 {g['fuel']} 0건, 제조업 특성상 비정상(결손 발견)"
+            msg += f" 그런데 {months}월 {g['fuel']} 자료가 비어있네요. 이런 업종에서는 흔치 않은 경우예요."
             if len(gaps) > 1:
-                msg += f" 외 {len(gaps) - 1}개 연료 결손"
+                msg += f" 이 외에 {len(gaps) - 1}개 연료도 더 비어있어요."
         return msg, cov
 
     if name == "classify_vouchers":
-        bm = result.get("by_method", {})
-        msg = (
-            f"전표 {result.get('processed', 0)}건 분류 "
-            f"(룰 {bm.get('rule', 0)}·LLM {bm.get('llm', 0)}), "
-            f"저신뢰 {result.get('review_required', 0)}건 HITL 회부"
-        )
+        processed = result.get("processed", 0)
+        review = result.get("review_required", 0)
+        msg = f"자료 {processed}건을 종류별로 정리했어요."
+        if review:
+            msg += f" 이 중 {review}건은 AI가 확신하지 못해서 제가 직접 확인해볼게요."
         return msg, result
 
     if name == "calculate_pcaf":
         before, after, bench = result.get("before"), result.get("after"), result.get("benchmark") or {}
         if after:
             msg = (
-                f"매출추정 {before['grade']}등급 → 전표기반 {after['grade']}등급 산정 "
-                f"({after['total']} tCO2e). {bench.get('percentile_text') or ''}".strip()
+                f"매출액만 봤을 때는 {before['grade']}등급이었는데, 실제 자료로 다시 계산해보니 "
+                f"{after['grade']}등급이 나왔어요(총 {after['total']}톤 CO2)."
             )
+            if bench.get("percentile_text"):
+                msg += f" {bench['percentile_text']}예요."
         else:
-            msg = f"기준선 {before['grade']}등급 산정(분류 결과 없음 — 전표 기반 산정 불가)"
+            msg = f"아직 분류된 자료가 없어서 매출액 기준으로만 {before['grade']}등급을 매겼어요."
         return msg, {"before": before, "after": after, "benchmark": bench}
 
     if name == "get_industry_distribution":
         if result:
             msg = (
-                f"동종 {result.get('industry_name', '업종')} Scope{result.get('scope', '')} "
-                f"중앙값 {result.get('median')} tCO2e (min {result.get('min')}~max {result.get('max')}) 참조"
+                f"같은 업종 다른 회사들과 비교해봤어요. 보통 {result.get('median')}톤 정도 "
+                f"배출하시더라고요(적게는 {result.get('min')}톤, 많게는 {result.get('max')}톤)."
             )
         else:
-            msg = "동종 업종 분포 데이터 없음"
+            msg = "비교할 동종 업종 자료가 아직 없어요."
         return msg, result or None
 
     if name == "notify_owner":
-        return f"사장님 알림 발송: {args.get('message', '')}", None
+        return args.get("message", ""), None
 
     if name == "check_anomalies":
         outliers = result.get("outliers", [])
         if outliers:
             o = outliers[0]
-            msg = f"{o['month']}월 {o['fuel']} 배출량이 평월 중앙값의 {o['ratio']}배 — 이상치 의심"
+            msg = f"{o['month']}월 {o['fuel']} 사용량이 평소보다 {o['ratio']}배나 많아요. 왜 그런지 다시 확인해볼게요."
         else:
-            msg = "월별 배출량 모두 평월 대비 정상 범위 — 이상치 없음"
+            msg = "달마다 사용량을 비교해봤는데 특별히 이상한 달은 없었어요."
         return msg, {"outliers": outliers}
 
     if name == "inspect_vouchers":
         vs = result.get("vouchers", [])
-        items = " / ".join(v["item"] for v in vs) if vs else "(해당 전표 없음)"
-        return f"{args.get('month')}월 {args.get('fuel')} 전표 재파싱: '{items}' 확인", {"vouchers": vs}
+        items = " / ".join(v["item"] for v in vs) if vs else "해당 자료 없음"
+        return f"{args.get('month')}월 자료를 다시 열어봤어요. '{items}'라고 적혀있네요.", {"vouchers": vs}
 
     return f"{name} 완료", result
 
@@ -273,7 +274,7 @@ def _run_agent_core(session: Session, company: Company, sid: str) -> int:
     for gap in gaps:
         months = "·".join(str(m) for m in gap["missing_months"])
         _run_tool_and_log(session, company, sid, "notify_owner",
-                          {"message": f"{months}월 {gap['fuel']} 고지서 미연동 확인 필요 — 연동 시 등급 상향 가능"})
+                          {"message": f"{months}월 {gap['fuel']} 고지서가 아직 연동 안 됐어요. 연동하시면 등급이 올라갈 수도 있어요."})
 
     _run_tool_and_log(session, company, sid, "classify_vouchers", {})
     _run_tool_and_log(session, company, sid, "get_industry_distribution", {"scope": 1})
@@ -290,21 +291,21 @@ def _run_agent_core(session: Session, company: Company, sid: str) -> int:
             # 실패를 숨기지 않는다 — 대체 판정 없이 실패 자체를 기록하고 사람에게
             judge_failures += 1
             log_step(session, cid, sid, "관찰",
-                     "이상치 재검증 실패 — LLM 호출 불가. 자동 판정 없이 사장 검토로 이관")
+                     "다시 확인하다가 막혔어요. 제가 판단하지 않고 사장님이 직접 봐주셨으면 해요.")
             _run_tool_and_log(session, company, sid, "notify_owner",
-                              {"message": f"{o['month']}월 {o['fuel']} 이상치({o['ratio']}배) 재검증 실패 — 사장 검토 요청"})
+                              {"message": f"{o['month']}월 {o['fuel']} 사용량이 평소보다 {o['ratio']}배 많은데, 제가 이유를 못 찾았어요. 한 번 확인해주시겠어요?"})
         elif judged[0]:
             reason = judged[1]
             log_step(session, cid, sid, "관찰",
-                     f"'{items}' — {reason} → 오분류 아님, 정상 판정 + 주석 추가")
+                     f"'{items}' 자료를 보니 {reason}. 정상적인 사용이니 걱정 안 하셔도 돼요.")
             _annotate_classifications(session, cid, o["month"], o["fuel"],
-                                      f"평월 대비 {o['ratio']}배이나 {reason} — 정상 판정")
+                                      f"평월 대비 {o['ratio']}배지만 {reason}. 정상 판정.")
         else:
             _run_tool_and_log(session, company, sid, "notify_owner",
-                              {"message": f"{o['month']}월 {o['fuel']} 이상치({o['ratio']}배) 사유 불명 — 사장 검토 요청"})
+                              {"message": f"{o['month']}월 {o['fuel']} 사용량이 평소보다 {o['ratio']}배 많은데, 이유를 특별히 찾지 못했어요. 확인 한번 부탁드려요."})
 
     _run_tool_and_log(session, company, sid, "calculate_pcaf", {})
-    log_step(session, cid, sid, "계획", "리포트 생성 완료 → 부족 데이터는 사장 연동 요청 목록에 반영")
+    log_step(session, cid, sid, "계획", "확인이 끝났어요. 결과는 리포트로 정리했고, 빠진 자료는 요청 목록에 담아뒀어요.")
     return judge_failures
 
 
@@ -331,7 +332,8 @@ def run_agent(session: Session, company_id: int) -> dict:
         session.rollback()
         try:
             log_step(session, company_id, sid, "관찰",
-                     f"실행 중단 — {type(e).__name__}. 리포트 미완성, 원인 확인 필요")
+                     "지금 문제가 생겨서 확인을 끝내지 못했어요. 잠시 후 다시 시도해주세요.",
+                     detail={"error_type": type(e).__name__})
         except Exception:  # noqa: BLE001 — 기록 실패(DB 장애 등)가 원인 예외를 가리면 안 됨
             pass
         raise

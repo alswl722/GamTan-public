@@ -4,7 +4,14 @@ import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { ChevronRight } from "lucide-react";
-import { getCompanies, getCompanyId, setCompanyId, type CompanyListItem } from "@/lib/api";
+import {
+  getCompanies,
+  getCompanyId,
+  getOwnerProgress,
+  setCompanyId,
+  type CompanyListItem,
+  type OwnerProgress,
+} from "@/lib/api";
 
 /** 사장님 앱 메인 화면 — 계정(로그인) 개념이 없어 기업을 직접 골라야 한다.
  * 고른 기업은 setCompanyId()로 저장되고, 이후 /owner/measure의 모든 단계가
@@ -19,6 +26,7 @@ export default function OwnerHomePage() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<OwnerProgress | null>(null);
 
   useEffect(() => {
     Promise.all([getCompanies(), getCompanyId()])
@@ -32,6 +40,22 @@ export default function OwnerHomePage() {
       });
   }, []);
 
+  useEffect(() => {
+    // 기업을 바꿀 때마다 그 기업의 실제 진행 상태를 다시 읽는다 — DB 기준이라
+    // 새로고침해도, 다른 기기에서 열어도 항상 같은 값이 나온다.
+    if (selectedId === null) return;
+    let cancelled = false;
+    setProgress(null);
+    getOwnerProgress(selectedId)
+      .then((p) => {
+        if (!cancelled) setProgress(p);
+      })
+      .catch((err) => console.error("진행 상태 조회 실패:", err));
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId]);
+
   function choose(id: number) {
     setCompanyId(id);
     setSelectedId(id);
@@ -39,6 +63,7 @@ export default function OwnerHomePage() {
   }
 
   const selected = companies?.find((c) => c.id === selectedId) ?? null;
+  const doneCount = progress ? Object.values(progress.steps).filter(Boolean).length : 0;
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col px-5 pb-6">
@@ -81,45 +106,36 @@ export default function OwnerHomePage() {
         </div>
       )}
 
-      {/* 프로모 카드 — 종합소득세 환급 카드 참고: 라벨+화살표 → 굵은 CTA 문장 → 진행 단계 미리보기 */}
+      {/* 프로모 카드 — Figma 시안: 캐릭터를 흐름 안에 크게 두면 행 높이가 캐릭터 키만큼
+          늘어나고, 텍스트·화살표는 그 안에서 자동으로 세로 중앙 정렬된다(절대배치 불필요,
+          진행바와 겹칠 일도 없음). */}
       <Link
         href="/owner/measure"
         className="btn-cta group mt-5 block rounded-3xl bg-surface px-5 py-5 shadow-card transition-transform"
       >
         <span className="flex items-center justify-between gap-2">
-          <span className="flex items-center gap-1.5 text-[13px] font-bold text-muted">
-            탄소 측정
-            <span className="h-1.5 w-1.5 rounded-full bg-brand" />
-          </span>
-          <ChevronRight size={16} className="shrink-0 text-faint" />
-        </span>
-
-        <span className="mt-2.5 flex items-center gap-1">
-          <span className="text-[16.5px] font-extrabold leading-snug text-ink">
+          <span className="max-w-[58%] text-[19px] font-extrabold leading-snug text-ink">
             우리 기업 탄소 배출량을
             <br />
             확인해보세요
           </span>
-          <Image
-            src="/ddockdi_1.png"
-            alt=""
-            width={56}
-            height={56}
-            className="-my-2 shrink-0"
-          />
+          <span className="flex shrink-0 items-center gap-1">
+            <Image src="/ddockdi_1.png" alt="" width={130} height={149} className="shrink-0" />
+            <ChevronRight size={16} className="shrink-0 text-faint" />
+          </span>
         </span>
 
         <span className="mt-4 block h-1 overflow-hidden rounded-full bg-line">
           <span
-            className="block h-full rounded-full bg-brand"
-            style={{ width: `${100 / MEASURE_STAGES.length}%` }}
+            className="block h-full rounded-full bg-brand transition-all duration-300"
+            style={{ width: `${(doneCount / MEASURE_STAGES.length) * 100}%` }}
           />
         </span>
         <span className="mt-2 flex items-center justify-between">
           {MEASURE_STAGES.map((stage, i) => (
             <span
               key={stage}
-              className={`text-[10.5px] font-semibold ${i === 0 ? "text-ink" : "text-faint"}`}
+              className={`text-[10.5px] font-semibold ${i < doneCount ? "text-ink" : "text-faint"}`}
             >
               {stage}
             </span>

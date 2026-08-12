@@ -136,4 +136,21 @@ export function getCompanies(): Promise<CompanyListItem[]> {
   return apiGet<{ companies: CompanyListItem[] }>("/companies").then((r) => r.companies);
 }
 
+export interface OwnerProgress {
+  steps: {
+    consent: boolean;
+    upload: boolean;
+    trace: boolean;
+    classify: boolean;
+    report: boolean;
+  };
+  current_step: number;
+}
+
+/** 5단계 위저드 실제 완료 상태 — DB 기준(세션 아님). 홈 화면 진행바·위저드
+ * 이어하기(어느 단계부터 시작할지)가 이 값을 쓴다. */
+export function getOwnerProgress(companyId: number): Promise<OwnerProgress> {
+  return apiGet<OwnerProgress>(`/owner/${companyId}/progress`);
+}
+
 export { BASE_URL };

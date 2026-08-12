@@ -77,9 +77,9 @@ def test_demo_scenario_shows_gap_and_self_verification(db, monkeypatch):
     result = orch.run_agent(session, cid)
 
     msgs = _messages(session, cid)
-    assert "결손 발견" in msgs, f"결손 감지 스텝 없음: {msgs}"
-    assert "7월 경유" in msgs and "이상치 의심" in msgs, f"이상치 감지 스텝 없음: {msgs}"
-    assert "정상 판정" in msgs, f"자가검증 정상 판정 스텝 없음: {msgs}"
+    assert "비어있네요" in msgs, f"결손 감지 스텝 없음: {msgs}"
+    assert "7월 경유" in msgs and "왜 그런지 다시 확인해볼게요" in msgs, f"이상치 감지 스텝 없음: {msgs}"
+    assert "정상적인 사용이니 걱정 안 하셔도 돼요" in msgs, f"자가검증 정상 판정 스텝 없음: {msgs}"
     assert result["mode"] == "llm"
 
 
@@ -93,8 +93,8 @@ def test_normal_scenario_has_no_anomaly(db, monkeypatch):
     orch.run_agent(session, cid)
 
     msgs = _messages(session, cid)
-    assert "이상치 없음" in msgs, f"정상 시나리오에 이상치: {msgs}"
-    assert "이상치 의심" not in msgs
+    assert "이상한 달은 없었어요" in msgs, f"정상 시나리오에 이상치: {msgs}"
+    assert "왜 그런지 다시 확인해볼게요" not in msgs
 
 
 def test_gap_in_non_gas_fuel_is_detected_and_notified(db):
@@ -121,9 +121,9 @@ def test_gap_in_non_gas_fuel_is_detected_and_notified(db):
     orch.run_agent(session, cid)
 
     msgs = _messages(session, cid)
-    assert "경유/유류" in msgs and "결손 발견" in msgs, f"경유 결손이 감지 안 됨: {msgs}"
+    assert "경유/유류" in msgs and "비어있네요" in msgs, f"경유 결손이 감지 안 됨: {msgs}"
     assert "가스" not in msgs, f"가스 전표가 아예 없는데 가스 언급이 나옴(하드코딩 잔재 의심): {msgs}"
-    assert "고지서 미연동 확인 필요" in msgs, f"사장 알림(notify_owner)이 안 나감: {msgs}"
+    assert "고지서가 아직 연동 안 됐어요" in msgs, f"사장 알림(notify_owner)이 안 나감: {msgs}"
 
 
 def test_judge_failure_is_visible_not_hidden(db, monkeypatch):
@@ -135,6 +135,6 @@ def test_judge_failure_is_visible_not_hidden(db, monkeypatch):
     result = orch.run_agent(session, cid)
 
     msgs = _messages(session, cid)
-    assert "재검증 실패" in msgs, f"판단 실패가 트레이스에 없음: {msgs}"
-    assert "정상 판정" not in msgs  # 판단한 척하지 않는다
+    assert "다시 확인하다가 막혔어요" in msgs, f"판단 실패가 트레이스에 없음: {msgs}"
+    assert "정상적인 사용이니 걱정 안 하셔도 돼요" not in msgs  # 판단한 척하지 않는다
     assert result["mode"] == "judge_failed"

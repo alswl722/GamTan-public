@@ -25,13 +25,13 @@ const STEP_DOT: Record<StepType, string> = {
 type LogLine = { type: StepType; tool: string; message: string };
 
 const SCRIPT: LogLine[] = [
-  { type: "계획", tool: "", message: "12개월 전표 분석 시작 → 결손 검사를 먼저 수행" },
-  { type: "관찰", tool: "마이데이터 수집기", message: "전표 33건 수집 완료 — 3~5월 도시가스 0건 확인" },
-  { type: "행동", tool: "알림 생성기", message: "사장님 알림 발송 + 업종 평균으로 임시 보정" },
-  { type: "행동", tool: "전표 분류기", message: "'지게차 경유 외 1종' → Scope 1·이동연소 (신뢰도 0.93)" },
-  { type: "관찰", tool: "이상치 검증기", message: "7월 경유 사용량이 업종 중앙값의 3.2배 — 이상치 의심" },
-  { type: "행동", tool: "전표 재파싱기", message: "'지게차 2대 증차' 확인 → 정상 판정" },
-  { type: "행동", tool: "계산·PCAF 엔진", message: "매출추정 5등급 → 전표기반 2등급 산정 완료" },
+  { type: "계획", tool: "", message: "최근 1년 치 자료를 확인하고 있어요. 빠진 달이 있는지 먼저 살펴볼게요." },
+  { type: "관찰", tool: "마이데이터 수집기", message: "자료 33건을 확인했어요. 그런데 3~5월 도시가스 자료가 비어있네요." },
+  { type: "행동", tool: "알림 생성기", message: "사장님께 알려드리고, 업종 평균으로 우선 보정해뒀어요." },
+  { type: "행동", tool: "전표 분류기", message: "'지게차 경유 외 1종'은 이동연소(경유)로 분류했어요." },
+  { type: "관찰", tool: "이상치 검증기", message: "7월 경유 사용량이 평소보다 3.2배나 많아요. 왜 그런지 다시 확인해볼게요." },
+  { type: "행동", tool: "전표 재파싱기", message: "확인해보니 지게차를 늘려서 그런 거였어요. 정상적인 사용이에요." },
+  { type: "행동", tool: "계산·PCAF 엔진", message: "매출액만 봤을 때는 5등급이었는데, 실제 자료로 다시 계산해보니 2등급이 나왔어요." },
 ];
 
 const BASE_SECONDS = 9 * 3600 + 41 * 60; // 09:41:00 — 고정 합성 시각(하이드레이션 안전)
