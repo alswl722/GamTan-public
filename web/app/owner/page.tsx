@@ -4,7 +4,14 @@ import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { ChevronRight } from "lucide-react";
-import { getCompanies, getCompanyId, setCompanyId, type CompanyListItem } from "@/lib/api";
+import {
+  getCompanies,
+  getCompanyId,
+  getOwnerProgress,
+  setCompanyId,
+  type CompanyListItem,
+  type OwnerProgress,
+} from "@/lib/api";
 
 /** 사장님 앱 메인 화면 — 계정(로그인) 개념이 없어 기업을 직접 골라야 한다.
  * 고른 기업은 setCompanyId()로 저장되고, 이후 /owner/measure의 모든 단계가
@@ -19,6 +26,7 @@ export default function OwnerHomePage() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<OwnerProgress | null>(null);
 
   useEffect(() => {
     Promise.all([getCompanies(), getCompanyId()])
@@ -32,6 +40,22 @@ export default function OwnerHomePage() {
       });
   }, []);
 
+  useEffect(() => {
+    // 기업을 바꿀 때마다 그 기업의 실제 진행 상태를 다시 읽는다 — DB 기준이라
+    // 새로고침해도, 다른 기기에서 열어도 항상 같은 값이 나온다.
+    if (selectedId === null) return;
+    let cancelled = false;
+    setProgress(null);
+    getOwnerProgress(selectedId)
+      .then((p) => {
+        if (!cancelled) setProgress(p);
+      })
+      .catch((err) => console.error("진행 상태 조회 실패:", err));
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId]);
+
   function choose(id: number) {
     setCompanyId(id);
     setSelectedId(id);
@@ -39,6 +63,7 @@ export default function OwnerHomePage() {
   }
 
   const selected = companies?.find((c) => c.id === selectedId) ?? null;
+  const doneCount = progress ? Object.values(progress.steps).filter(Boolean).length : 0;
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col px-5 pb-6">
@@ -111,15 +136,15 @@ export default function OwnerHomePage() {
 
         <span className="mt-4 block h-1 overflow-hidden rounded-full bg-line">
           <span
-            className="block h-full rounded-full bg-brand"
-            style={{ width: `${100 / MEASURE_STAGES.length}%` }}
+            className="block h-full rounded-full bg-brand transition-all duration-300"
+            style={{ width: `${(doneCount / MEASURE_STAGES.length) * 100}%` }}
           />
         </span>
         <span className="mt-2 flex items-center justify-between">
           {MEASURE_STAGES.map((stage, i) => (
             <span
               key={stage}
-              className={`text-[10.5px] font-semibold ${i === 0 ? "text-ink" : "text-faint"}`}
+              className={`text-[10.5px] font-semibold ${i < doneCount ? "text-ink" : "text-faint"}`}
             >
               {stage}
             </span>

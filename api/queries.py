@@ -2,13 +2,16 @@
 
 여기 모아두면 "전표/분포를 DB에서 꺼내는" 로직이 한 곳에만 존재한다.
 """
-from sqlalchemy import case, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
+from db.document_requirements import required_documents
 from db.models import (
     Classification,
     Company,
     InstitutionBorrower,
+    SourceDocument,
+    TraceLog,
     Voucher,
     IndustryDistribution,
     EmissionFactor,
@@ -197,6 +200,71 @@ def resolve_institution_borrower(session: Session, company_id: int) -> tuple[int
     if ib is None:
         return None
     return ib.financial_institution_id, ib.id
+
+
+_PROGRESS_ORDER = ("consent", "upload", "trace", "classify", "report")
+
+
+def get_owner_progress(session: Session, company_id: int) -> dict:
+    """5단계 위저드(연동 동의·데이터 수집·결손 감지·AI 분류·리포트) 각 단계의 실제
+    완료 여부 — 홈 화면 진행바와 위저드 이어하기가 이 값을 그대로 쓴다. 세션·화면
+    상태가 아니라 DB에 실제로 뭐가 쌓였는지만 본다(새로고침·다른 기기에서도 동일).
+    """
+    company = session.get(Company, company_id)
+    if company is None:
+        raise ValueError(f"company_id={company_id} 없음")
+
+    # 1) 연동 동의 — 마이데이터 소스 문서가 하나라도 있으면 완료(5종을 한 번에 수집)
+    consent_done = session.execute(
+        select(SourceDocument.id)
+        .where(SourceDocument.company_id == company_id, SourceDocument.source_system.like("mydata:%"))
+        .limit(1)
+    ).first() is not None
+
+    # 2) 데이터 수집 — 연료 체크 기준 "필수" 문서 종류가 전부 실제로 업로드됐는지
+    fuel_types = company.fuel_types_json
+    if fuel_types:
+        required = required_documents(fuel_types)
+        uploaded_types = {
+            row[0] for row in session.execute(
+                select(SourceDocument.document_type)
+                .where(SourceDocument.company_id == company_id, SourceDocument.source_system.like("upload:%"))
+                .distinct()
+            )
+        }
+        upload_done = all(
+            doc_type in uploaded_types for doc_type, status in required.items() if status == "required"
+        )
+    else:
+        upload_done = False  # 연료 체크 자체를 아직 안 함 — 판정 기준이 없어 미완료로 본다
+
+    # 3) 결손 감지 — 에이전트 실행 이력(trace_logs)이 있으면 완료
+    trace_done = session.execute(
+        select(TraceLog.id).where(TraceLog.company_id == company_id).limit(1)
+    ).first() is not None
+
+    # 4) AI 분류 — 전표가 있고, 전부 분류됐으면 완료(미분류 잔여 0건)
+    voucher_count = session.execute(
+        select(func.count(Voucher.id)).where(Voucher.company_id == company_id)
+    ).scalar_one()
+    classified_count = session.execute(
+        select(func.count(Classification.id))
+        .join(Voucher, Voucher.id == Classification.voucher_id)
+        .where(Voucher.company_id == company_id)
+    ).scalar_one()
+    classify_done = voucher_count > 0 and voucher_count == classified_count
+
+    # 5) 리포트 — 분류가 끝나면 바로 조회 가능(계산은 항상 그 자리에서 재구성됨)
+    report_done = classify_done
+
+    steps = {
+        "consent": consent_done, "upload": upload_done, "trace": trace_done,
+        "classify": classify_done, "report": report_done,
+    }
+    current_step = next(
+        (i for i, key in enumerate(_PROGRESS_ORDER) if not steps[key]), len(_PROGRESS_ORDER) - 1
+    )
+    return {"steps": steps, "current_step": current_step}
 
 
 def get_distribution(session: Session, industry_code: str, scope: int) -> dict | None:

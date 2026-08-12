@@ -3,6 +3,7 @@
 - GET   /owner/alerts/{company_id}              자기 기업의 이상 신호 알림
 - PATCH /owner/{company_id}/fuel-types          2단계(연료 유형 체크) 저장 + 3단계 필수서류 안내
 - POST  /owner/{company_id}/documents/upload    3~4단계 업로드(세금계산서 OCR|엑셀, 전기·도시가스 OCR)
+- GET   /owner/{company_id}/progress            5단계 위저드 실제 완료 상태 — 홈 화면 진행바·이어하기용
 - GET   /owner/{company_id}/rate-candidate      우대금리 등급 상승 후보 여부(있으면 요청 버튼 노출)
 - POST  /owner/{company_id}/rate-requests       우대금리·설비금융 안내 요청 생성 → 관리자 승인요청 큐
 
@@ -23,7 +24,7 @@ from api.document_ingestion import (
     MissingInstitutionAttributionError,
     ingest_uploaded_document,
 )
-from api.queries import get_coverage
+from api.queries import get_coverage, get_owner_progress
 from db.alerts import detect_alerts
 from db.document_requirements import FuelTypes, required_documents
 from db.document_text_extractor import DocumentParseError
@@ -83,6 +84,18 @@ def owner_coverage(company_id: int, session: Session = Depends(get_session)):
     이건 voucher 존재 여부만 보는 훨씬 이른 신호라 업로드 직후에도 바로 쓸 수 있다.
     """
     return get_coverage(session, company_id)
+
+
+@router.get("/{company_id}/progress")
+def owner_progress(company_id: int, session: Session = Depends(get_session)):
+    """5단계 위저드 각 단계의 실제 완료 여부 — 홈 화면 진행바, 위저드 이어하기(어느
+    단계부터 시작할지)가 이 값을 그대로 쓴다. 브라우저 세션이 아니라 DB 상태 기준
+    이라 새로고침·다른 기기에서 열어도 같은 값이 나온다.
+    """
+    try:
+        return get_owner_progress(session, company_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.post("/{company_id}/documents/upload")

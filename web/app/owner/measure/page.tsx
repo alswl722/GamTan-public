@@ -1,12 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { SceneConsent } from "@/components/SceneConsent";
 import { SceneUpload, type FuelTypesState } from "@/components/SceneUpload";
 import { SceneTrace, type TraceRunState } from "@/components/SceneTrace";
 import { SceneClassify } from "@/components/SceneClassify";
 import { ScenePcaf } from "@/components/ScenePcaf";
+import { getCompanyId, getOwnerProgress } from "@/lib/api";
 
 // 스텝별 제목은 각 Scene 컴포넌트 자체의 h2가 담당한다(예: SceneConsent의
 // "먼저 기업 정보부터 확인할게요") — 진행 바 라벨과 내용이 겹치는 페이지 레벨
@@ -22,6 +23,9 @@ const STEPS = [
 
 export default function OwnerMeasurePage() {
   const [active, setActive] = useState(0);
+  // 이 기업이 실제로 어디까지 끝냈는지 DB에서 확인하기 전엔 위저드를 그리지 않는다
+  // — 항상 1단계부터 시작하는 것처럼 잠깐 보였다가 점프하는 깜빡임을 막는다.
+  const [resuming, setResuming] = useState(true);
   // SceneTrace는 스텝 전환마다 언마운트되므로, 실행 결과는 여기(owner 페이지)
   // 레벨에 보관해 뒤로 갔다 돌아와도 유지되게 한다.
   const [traceRunState, setTraceRunState] = useState<TraceRunState>({
@@ -32,9 +36,37 @@ export default function OwnerMeasurePage() {
   // 뒤로 갔다 SceneUpload로 돌아와도 연료 선택이 유지되게(Scene은 스텝 전환마다 언마운트됨).
   const [fuelState, setFuelState] = useState<FuelTypesState | undefined>(undefined);
 
+  useEffect(() => {
+    // "탄소 측정하러 가기"를 다시 눌러도 매번 1단계부터 시작하지 않는다 — 이미
+    // 끝낸 단계는 건너뛰고, 전부 끝났으면 곧장 리포트를 보여준다(current_step은
+    // STEPS와 위치가 동일한 순서: 연동동의·데이터수집·결손감지·AI분류·리포트).
+    let cancelled = false;
+    getCompanyId()
+      .then((cid) => getOwnerProgress(cid))
+      .then((p) => {
+        if (!cancelled) setActive(p.current_step);
+      })
+      .catch((err) => console.error("진행 상태 조회 실패:", err))
+      .finally(() => {
+        if (!cancelled) setResuming(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 마운트 시 1회만
+  }, []);
+
   function goTo(i: number) {
     if (i < 0 || i >= STEPS.length) return;
     setActive(i);
+  }
+
+  if (resuming) {
+    return (
+      <div className="mx-auto flex w-full max-w-2xl flex-1 items-center justify-center px-5 pb-16">
+        <p className="text-[13px] text-faint">불러오는 중…</p>
+      </div>
+    );
   }
 
   return (
