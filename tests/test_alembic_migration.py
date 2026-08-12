@@ -104,12 +104,12 @@ def test_downgrade_to_base_succeeds():
 
 @requires_database_url
 def test_current_head_matches_latest_revision():
-    """공유 DATABASE_URL의 alembic_version이 최신 head(0006)와 일치하는지 확인한다.
+    """공유 DATABASE_URL의 alembic_version이 최신 head(0009)와 일치하는지 확인한다.
     (읽기 전용 — 이 테스트는 DB를 변경하지 않는다)"""
     engine = create_engine(os.getenv("DATABASE_URL"))
     with engine.connect() as conn:
         current = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-    assert current == "0006"
+    assert current == "0009"
 
 
 @requires_database_url
