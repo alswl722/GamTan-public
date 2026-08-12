@@ -116,7 +116,7 @@ export default function OwnerHomePage() {
           alt=""
           width={112}
           height={112}
-          className="pointer-events-none absolute right-8 top-3 object-contain"
+          className="pointer-events-none absolute right-8 top-3 z-10 object-contain"
         />
 
         <span className="relative flex items-center justify-between gap-2">
