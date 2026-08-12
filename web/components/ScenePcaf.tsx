@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { apiGet, getCompanyId } from "@/lib/api";
+import { apiGet, apiPost, getCompanyId } from "@/lib/api";
 import type { AlertItem } from "@/lib/admin-types";
 
 /** 장면 ④ — PCAF Before/After + 벤치마킹. /pcaf/{id} 실데이터만 사용.
@@ -62,6 +62,26 @@ type Benchmark = {
   percentile_pct: number | null;
 };
 type PcafResponse = { before: Before; after: After | null; benchmark: Benchmark };
+
+// GET /owner/{company_id}/rate-candidate — db/pcaf.py::upgrade_candidate_for_company와
+// 은행 쪽 GET /admin/rate-candidates가 같은 판정 로직을 공유한다(중복 없음).
+type RateCandidate = {
+  company_id: number;
+  company_name: string;
+  current_grade: number;
+  target_grade: number;
+  missing: string;
+  benefit: string;
+};
+type RateCandidateResponse = { candidate: RateCandidate | null; disclaimer_text: string };
+
+// POST /owner/{company_id}/rate-requests 응답 — 여신 결정이 아니다(CLAUDE.md §9).
+// 관리자 승인요청 큐(GET /admin/rate-requests)로 넘어가 담당자가 "안내 대상 확인"만 한다.
+type RateRequestResponse = {
+  id: number;
+  status: "pending" | "approved" | "rejected";
+  disclaimer_text: string;
+};
 
 const fmt = (n: number) => n.toFixed(1);
 
@@ -161,6 +181,27 @@ export function ScenePcaf() {
   const [data, setData] = useState<PcafResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
+  const [rateCandidate, setRateCandidate] = useState<RateCandidateResponse | null>(null);
+  const [rateRequest, setRateRequest] = useState<RateRequestResponse | null>(null);
+  const [requestBusy, setRequestBusy] = useState(false);
+  const [requestError, setRequestError] = useState<string | null>(null);
+
+  async function submitRateRequest() {
+    setRequestBusy(true);
+    setRequestError(null);
+    try {
+      const cid = await getCompanyId();
+      const res = await apiPost<RateRequestResponse>(`/owner/${cid}/rate-requests`, {
+        request_type: "rate_upgrade",
+      });
+      setRateRequest(res);
+    } catch (err) {
+      console.error("우대금리 안내 요청 실패:", err);
+      setRequestError("요청에 실패했습니다. 잠시 후 다시 시도해 주세요.");
+    } finally {
+      setRequestBusy(false);
+    }
+  }
 
   async function load() {
     setError(null);
@@ -174,6 +215,10 @@ export function ScenePcaf() {
       apiGet<{ alerts: AlertItem[] }>(`/owner/alerts/${cid}`)
         .then((r) => setAlerts(r.alerts))
         .catch((err) => console.error("이상 신호 조회 실패(부가 정보라 화면은 계속 진행):", err));
+      // 등급 상승 후보 여부도 부가 정보 — 실패해도 리포트 본문은 그대로 보여준다.
+      apiGet<RateCandidateResponse>(`/owner/${cid}/rate-candidate`)
+        .then((r) => setRateCandidate(r))
+        .catch((err) => console.error("우대금리 후보 조회 실패(부가 정보라 화면은 계속 진행):", err));
     } catch (err) {
       // 목업으로 위장하지 않는다 — 실패는 실패로 표시
       console.error("PCAF 조회 실패:", err);
@@ -333,15 +378,60 @@ export function ScenePcaf() {
         </div>
       )}
 
-      <div className="mt-3 rounded-2xl bg-surface p-5 text-center">
-        <div className="text-[13px] font-semibold text-ink">
-          우대금리 대상 안내
+      {rateCandidate?.candidate ? (
+        <div className="mt-3 rounded-2xl bg-surface p-5">
+          <div className="text-[13px] font-semibold text-ink">우대금리 대상 안내</div>
+          <div className="mt-2 flex items-center gap-1.5 text-[12.5px] text-muted">
+            <span className="rounded-full bg-line px-2 py-0.5 text-[11px] font-bold text-muted">
+              {rateCandidate.candidate.current_grade}등급
+            </span>
+            <span className="text-faint">→</span>
+            <span className="rounded-full bg-brand px-2 py-0.5 text-[11px] font-bold text-white">
+              {rateCandidate.candidate.target_grade}등급
+            </span>
+          </div>
+          <p className="mt-2 text-[12.5px] leading-relaxed text-muted">
+            <span className="font-semibold text-ink">필요 데이터:</span>{" "}
+            {rateCandidate.candidate.missing}
+          </p>
+          <p className="mt-1 text-[12.5px] leading-relaxed text-brand-ink">
+            {rateCandidate.candidate.benefit}
+          </p>
+          <p className="mt-3 text-[11px] leading-relaxed text-faint">
+            {rateCandidate.disclaimer_text}
+          </p>
+
+          {rateRequest ? (
+            <div className="mt-3 rounded-xl bg-brand-soft px-3.5 py-2.5 text-center text-[12.5px] font-semibold text-brand-ink">
+              요청됐어요 — 담당 은행원이 확인 후 안내드려요
+            </div>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => void submitRateRequest()}
+                disabled={requestBusy}
+                className="btn-cta mt-3 w-full rounded-2xl bg-brand py-3.5 text-[14px] font-bold text-white disabled:opacity-60"
+              >
+                {requestBusy ? "요청하는 중…" : "우대금리 안내 요청"}
+              </button>
+              {requestError && (
+                <p className="mt-2 text-[11.5px] text-red-600">{requestError}</p>
+              )}
+            </>
+          )}
         </div>
-        <p className="mt-1 text-[12.5px] text-muted">
-          PCAF {after ? after.grade : before.grade}등급 기준, 담당 은행원과의
-          상담을 통해 우대금리 자격을 확인할 수 있어요.
-        </p>
-      </div>
+      ) : (
+        <div className="mt-3 rounded-2xl bg-surface p-5 text-center">
+          <div className="text-[13px] font-semibold text-ink">
+            우대금리 대상 안내
+          </div>
+          <p className="mt-1 text-[12.5px] text-muted">
+            PCAF {after ? after.grade : before.grade}등급 기준, 담당 은행원과의
+            상담을 통해 우대금리 자격을 확인할 수 있어요.
+          </p>
+        </div>
+      )}
     </section>
   );
 }
