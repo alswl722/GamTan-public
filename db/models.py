@@ -26,6 +26,11 @@ class Company(Base):
     region = Column(String(50))
     created_at = Column(DateTime(timezone=True), default=now)
 
+    # v1 §3 원칙8 — 기업이 직접 체크한 사용 연료 목록. 체크 안 한 연료는 결손
+    # 알림 대상에서 제외한다(예: 도시가스 미사용 기업에게 도시가스 결손 알림 금지).
+    # 예: {"전기": true, "가스": false, "경유/유류": true}
+    fuel_types_json = Column(JSON)
+
     vouchers = relationship("Voucher", back_populates="company")
     trace_logs = relationship("TraceLog", back_populates="company")
 
@@ -336,6 +341,49 @@ class SourceDocument(Base):
     )
 
 
+class PcafQualityRule(Base):
+    """PCAF Business Loans and Unlisted Equity 데이터 품질표 (§7.7)
+
+    PCAF Standard Part A Third Edition, Table 10.1-2(Annex, p.192)의 원문 옵션 체계를
+    그대로 옮긴 것이다 — Option 1a/1b/2a/2b/3a/3b/3c 7종, Score 1(최고)~5(최저).
+    원문은 Scope 1·2와 Scope 3에 별도 품질표를 두지 않고 이 옵션 체계를 공통 적용한다.
+    유일한 예외는 Option 2a(에너지 소비량 기반)로, 원문 각주 208이 "The quality scoring
+    for the Option 2a is only possible for/applicable to scope 1 and scope 2 emissions
+    as scope 3 emissions cannot be estimated by this option"이라 명시해 Scope 3에는
+    적용할 수 없다 — applies_to_scope3 플래그로 이 제약만 표현한다.
+    분류 신뢰도(Classification.confidence)·HITL 상태와는 완전히 분리된 축이다(§6.1, §6.4).
+    """
+    __tablename__ = "pcaf_quality_rules"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    standard_version = Column(String(50), nullable=False)   # "PCAF Part A Third Edition"
+    asset_class = Column(String(50), nullable=False)         # business_loans_and_unlisted_equity
+    option_code = Column(String(10), nullable=False, unique=True)   # 1a | 1b | 2a | 2b | 3a | 3b | 3c
+    quality_score = Column(SmallInteger, nullable=False)   # PCAF Score 1(최고)~5(최저)
+    # 원문 표의 "Emission factor > Emissions data" 열 — 무엇을 근거로 배출량을 산정하는지.
+    activity_data_basis = Column(String(30), nullable=False)
+    # verified_emissions | unverified_emissions | energy_consumption |
+    # production | revenue | assets | asset_turnover_ratio
+    applies_to_scope3 = Column(Boolean, nullable=False, default=True)   # Option 2a만 False
+    description = Column(Text)
+    source_reference = Column(Text, nullable=False)   # "PCAF Standard Part A, Table 10.1-2, Option 2b"
+    valid_from = Column(SmallInteger)
+    valid_to = Column(SmallInteger)
+
+    __table_args__ = (
+        CheckConstraint(
+            "activity_data_basis IN ('verified_emissions', 'unverified_emissions', "
+            "'energy_consumption', 'production', 'revenue', 'assets', 'asset_turnover_ratio')",
+            name="ck_pcaf_quality_rules_activity_data_basis"
+        ),
+        CheckConstraint(
+            "quality_score BETWEEN 1 AND 5",
+            name="ck_pcaf_quality_rules_quality_score"
+        ),
+        Index("ix_pcaf_quality_rules_asset_class", "asset_class"),
+    )
+
+
 class BorrowerEmissionInventory(Base):
     """차주 연간 Scope별 배출량 인벤토리 (§7.4)
 
@@ -359,7 +407,7 @@ class BorrowerEmissionInventory(Base):
     verification_level = Column(String(20))
     completeness_pct = Column(Float)
     candidate_quality_score = Column(SmallInteger)
-    candidate_quality_rule_id = Column(Integer)   # pcaf_quality_rules FK — 2주차에 테이블 추가 예정
+    candidate_quality_rule_id = Column(Integer, ForeignKey("pcaf_quality_rules.id"))
     limitations_json = Column(JSON)
     status = Column(String(20), nullable=False, default="draft")  # draft | calculated | reviewed | approved | superseded
     version = Column(Integer, nullable=False, default=1)
