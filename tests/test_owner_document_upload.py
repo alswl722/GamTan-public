@@ -82,6 +82,22 @@ def test_duplicate_upload_returns_409(db, client):
     assert second.status_code == 409
 
 
+def test_duplicate_upload_is_recorded_as_quality_issue(db, client):
+    """실패한 업로드는 품질 이슈 로그(DocumentIngestionFailure)에 기록된다
+    (v1 Tier 2 — 이전엔 HTTP 응답으로만 실패가 전달되고 DB엔 아무 것도 안 남았다)."""
+    from db.models import DocumentIngestionFailure
+
+    session, company_id = db
+    files = {"file": ("고지서.jpg", b"same-bytes-2", "image/jpeg")}
+    data = {"document_type": "gas_bill", "mode": "ocr", "year": "2025", "month": "6"}
+    client.post(f"/owner/{company_id}/documents/upload", files=files, data=data)
+    client.post(f"/owner/{company_id}/documents/upload", files=files, data=data)
+
+    failures = session.query(DocumentIngestionFailure).filter_by(company_id=company_id).all()
+    assert len(failures) == 1
+    assert failures[0].failure_reason == "duplicate"
+
+
 def test_invalid_document_type_returns_400(db, client):
     _, company_id = db
     res = client.post(

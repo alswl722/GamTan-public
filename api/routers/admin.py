@@ -15,6 +15,8 @@
 - PATCH /admin/rate-requests/{id}/reject      승인요청 반려
 - GET   /admin/documents/{id}                 원본문서 열람 (조회 시 접근 로그 자동 기록)
 - GET   /admin/documents/access-log           원본문서 접근 감사 로그 목록
+- GET   /admin/quality-issues                 품질 이슈 로그 — 업로드 반려·실패 이력 (열람 전용)
+- GET   /admin/audit-package                  감사 대응 근거 패키지 — 기업·기간 지정 시계열 원자료 CSV
 
 여신 결정·스코어링은 하지 않는다(CLAUDE.md §9). AI가 1차 스크리닝한 저신뢰 건을
 사람이 최종 확정하는 HITL 마감만 담당 — 금융분야 AI 가이드라인의 보조수단성 구현.
@@ -25,9 +27,12 @@ HITL 큐(분류 신뢰도 기준 — /admin/hitl)와 승인요청 큐(우대금�
 여신 결정이 아니라 "안내 대상으로 확인했다"는 은행 담당자의 수동 확인일 뿐이며,
 응답에는 항상 비보장 문구(disclaimer_text)가 동반된다(원칙6).
 """
+import csv
+import io
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -37,9 +42,11 @@ from api.queries import get_emission_factors, get_hitl_queue, get_unit_prices
 from db.alerts import detect_alerts
 from db.calc_engine import CalcDataGap, ClassifiedItemInput, compute_emission, \
     index_emission_factors, index_unit_prices
+from db.audit_package import build_audit_package
 from db.document_access_log import access_history, record_access, recent_access_log
 from db.models import Classification, Company, SourceDocument, TraceLog, Voucher
 from db.pcaf import portfolio_summary, rate_upgrade_candidates
+from db.quality_issues import list_ingestion_failures
 from db.rate_approvals import AlreadyProcessedError, list_rate_requests, review_rate_request
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -468,3 +475,58 @@ def view_document(
             for a in access_history(session, document_id)
         ],
     }
+
+
+# ── 품질 이슈 로그 (v1 Tier 2, owner-admin-flow-spec.md §7) ────────────────────
+
+@router.get("/quality-issues")
+def quality_issues(session: Session = Depends(get_session)):
+    """업로드 반려·실패 이력 — 열람 전용. 성공한 업로드는 여기 안 남는다
+    (SourceDocument로 이미 남으므로). 실패만 원인별로 모아 보여준다."""
+    return {"issues": list_ingestion_failures(session)}
+
+
+# ── 감사 대응 근거 패키지 (v1 Tier 2, owner-admin-flow-spec.md §8) ──────────────
+
+@router.get("/audit-package")
+def audit_package(
+    company_id: int,
+    year: int,
+    month_from: int = 1,
+    month_to: int = 12,
+    format: str = "json",
+    session: Session = Depends(get_session),
+):
+    """기업·기간을 지정하면 trace_logs + classifications.evidence + 원본 전표를
+    시계열로 묶어 반환한다. format=csv면 원자료 재검증용 CSV로 내려준다
+    (서술형 PDF 감사보고서는 별도 범위, 이번엔 미구현).
+    """
+    company = session.get(Company, company_id)
+    if company is None:
+        raise HTTPException(status_code=404, detail=f"company_id={company_id} 없음")
+
+    package = build_audit_package(session, company_id, year, month_from, month_to)
+
+    if format == "csv":
+        buffer = io.StringIO()
+        writer = csv.DictWriter(
+            buffer,
+            fieldnames=[
+                "entry_type", "occurred_at", "voucher_id", "year", "month",
+                "item_description", "supply_amount_krw", "scope", "fuel_type",
+                "emission_co2e", "status", "evidence", "session_id", "step_type",
+                "tool_name", "message",
+            ],
+        )
+        writer.writeheader()
+        for entry in package["entries"]:
+            writer.writerow({k: entry.get(k, "") for k in writer.fieldnames})
+        buffer.seek(0)
+        filename = f"audit-package-{company_id}-{year}.csv"
+        return StreamingResponse(
+            iter([buffer.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    return package

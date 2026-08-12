@@ -11,6 +11,7 @@ import {
   getDocumentAccessLog,
   getHitl,
   getPortfolio,
+  getQualityIssues,
   getRateCandidates,
   getRateRequests,
   getReviewLog,
@@ -21,6 +22,7 @@ import type {
   DocumentAccessLogEntry,
   HitlItem,
   PortfolioResponse,
+  QualityIssueEntry,
   RateApprovalRequestItem,
   RateCandidateItem,
   ReviewLogEntry,
@@ -37,6 +39,7 @@ type Data = {
   rateCandidates: RateCandidateItem[];
   rateRequests: RateApprovalRequestItem[];
   documentAccessLog: DocumentAccessLogEntry[];
+  qualityIssues: QualityIssueEntry[];
 };
 
 export default function AdminPage() {
@@ -55,6 +58,7 @@ export default function AdminPage() {
       getRateCandidates(),
       getRateRequests(),
       getDocumentAccessLog(),
+      getQualityIssues(),
     ])
       .then(
         ([
@@ -66,6 +70,7 @@ export default function AdminPage() {
           rateCandidates,
           rateRequests,
           documentAccessLog,
+          qualityIssues,
         ]) =>
           setData({
             portfolio,
@@ -76,6 +81,7 @@ export default function AdminPage() {
             rateCandidates,
             rateRequests,
             documentAccessLog,
+            qualityIssues,
           }),
       )
       .catch((err) => {
@@ -128,6 +134,7 @@ export default function AdminPage() {
       rateCandidates={data.rateCandidates}
       rateRequests={data.rateRequests}
       documentAccessLog={data.documentAccessLog}
+      qualityIssues={data.qualityIssues}
       onReviewed={refreshReviewLog}
     />
   );
