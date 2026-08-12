@@ -22,6 +22,7 @@ type After = {
   estimated_gap_tco2e: number;
   hitl_count: number;
   gap_months: { fuel: string; missing_months: number[] }[];
+  by_fuel: { fuel: string; measured_tco2e: number; estimated_tco2e: number; total_tco2e: number }[];
 };
 type Benchmark = {
   industry_code: string;
@@ -130,6 +131,63 @@ function GradeLadder({
       <div className="mt-1.5 flex justify-between text-[10px] font-semibold text-faint">
         {GRADE_TICKS.map((g) => (
           <span key={g}>{g}등급</span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// 리포트가 "이 숫자 어떻게 나온 거야?"에 답하는 부분 — 총량 중 실측 대 추정
+// 보정 비율, 연료별 내역까지 보여준다. db/pcaf.py::_after_measured가 이미
+// 계산해 둔 measured_tco2e/estimated_gap_tco2e/by_fuel을 그대로 쓴다.
+function FuelBreakdown({ after }: { after: After }) {
+  const measuredPct = after.total > 0 ? Math.round((after.measured_tco2e / after.total) * 100) : 0;
+  const estimatedPct = Math.max(0, 100 - measuredPct);
+
+  return (
+    <div className="mt-3 rounded-2xl bg-surface p-5">
+      <div className="text-[13px] font-semibold text-ink">항목별 상세</div>
+      <p className="mt-1 text-[11.5px] leading-relaxed text-muted">
+        {after.estimated_gap_tco2e > 0 ? (
+          <>
+            전체 {fmt(after.total)}tCO₂e 중 {fmt(after.measured_tco2e)}tCO₂e는 실제 자료로
+            확인했고, {fmt(after.estimated_gap_tco2e)}tCO₂e는 자료가 없는 달을 업종 평균으로
+            채운 추정치예요.
+          </>
+        ) : (
+          <>전체 {fmt(after.total)}tCO₂e 모두 실제 자료로 확인했어요.</>
+        )}
+      </p>
+
+      <div className="mt-3 flex h-2.5 overflow-hidden rounded-full bg-bg">
+        <div className="h-full bg-brand" style={{ width: `${measuredPct}%` }} />
+        {estimatedPct > 0 && <div className="h-full bg-line" style={{ width: `${estimatedPct}%` }} />}
+      </div>
+      <div className="mt-1.5 flex items-center justify-between text-[10.5px] text-faint">
+        <span className="flex items-center gap-1">
+          <span className="h-1.5 w-1.5 rounded-full bg-brand" /> 실측 {fmt(after.measured_tco2e)}
+        </span>
+        {after.estimated_gap_tco2e > 0 && (
+          <span className="flex items-center gap-1">
+            <span className="h-1.5 w-1.5 rounded-full bg-line" /> 추정 보정{" "}
+            {fmt(after.estimated_gap_tco2e)}
+          </span>
+        )}
+      </div>
+
+      <div className="mt-4 space-y-2 border-t border-line pt-3">
+        {after.by_fuel.map((row) => (
+          <div key={row.fuel} className="flex items-center justify-between text-[12.5px]">
+            <span className="text-muted">{row.fuel}</span>
+            <span className="flex items-center gap-1.5">
+              <span className="font-semibold text-ink">{fmt(row.total_tco2e)}tCO₂e</span>
+              {row.estimated_tco2e > 0 && (
+                <span className="rounded-md bg-line px-1.5 py-0.5 text-[10px] font-semibold text-muted">
+                  추정 포함
+                </span>
+              )}
+            </span>
+          </div>
         ))}
       </div>
     </div>
@@ -324,6 +382,8 @@ export function ScenePcaf() {
           </div>
         )}
       </div>
+
+      {after && <FuelBreakdown after={after} />}
 
       <div className="mt-3 rounded-2xl bg-surface p-5">
         {hasDistribution ? (
