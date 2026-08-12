@@ -43,11 +43,11 @@ function previewRequiredDocuments(fuel: FuelTypesState): RequiredDocuments {
 
 type DocType = "tax_invoice" | "electric_bill" | "gas_bill";
 type DocStatus = "required" | "optional" | "not_applicable";
-type UploadStatus = "idle" | "uploading" | "done" | "error";
-// id로 개별 업로드 시도를 구분한다 — month만으로 키를 잡으면 같은 달에 파일을 여러 개
-// 동시에 올릴 때(예: 재시도, 실수로 중복 선택) 나중 응답이 앞선 결과를 덮어써서 실제로는
-// 서버에 여러 건이 생성됐는데 화면엔 하나만 보이는 버그가 생긴다.
-type MonthEntry = { id: string; month: number; status: UploadStatus; error?: string };
+type UploadStatus = "uploading" | "done" | "error";
+// id로 개별 업로드 시도를 구분한다 — 이제 월은 업로드 전에 사용자가 지정하지 않고
+// 서버가 문서 내용에서 읽어 응답으로 알려준다(db/document_text_extractor.py) — 그래서
+// 파일명 대신 시도 단위 id로 항목을 구분해야 여러 파일을 한 번에 올려도 안 섞인다.
+type FileEntry = { id: string; fileName: string; status: UploadStatus; month?: number; error?: string };
 
 const DOC_LABELS: Record<DocType, { title: string; hint: string }> = {
   tax_invoice: { title: "세금계산서", hint: "경유·휘발유·LPG 등 연료 구매 전표" },
@@ -60,8 +60,6 @@ const STATUS_BADGE: Record<DocStatus, { label: string; className: string }> = {
   optional: { label: "선택", className: "bg-brand-soft text-brand-ink" },
   not_applicable: { label: "해당없음", className: "bg-line text-faint" },
 };
-
-const MONTHS = Array.from({ length: 12 }, (_, i) => i + 1);
 
 type Coverage = {
   matrix: Record<string, Record<string, number>>;
@@ -119,13 +117,13 @@ export function SceneUpload({
   const required = useMemo(() => previewRequiredDocuments(fuel), [fuel]);
 
   const [taxMode, setTaxMode] = useState<"ocr" | "excel">("ocr");
-  const [entries, setEntries] = useState<Record<DocType, MonthEntry[]>>({
+  const [entries, setEntries] = useState<Record<DocType, FileEntry[]>>({
     tax_invoice: [],
     electric_bill: [],
     gas_bill: [],
   });
   const [excelResult, setExcelResult] = useState<{
-    status: UploadStatus;
+    status: "idle" | UploadStatus;
     count?: number;
     skipped?: number;
     error?: string;
@@ -202,12 +200,13 @@ export function SceneUpload({
     saveFuel({ ...fuel, lpg: nextStatus });
   }
 
-  async function uploadOcr(docType: DocType, month: number, file: File, entryId: string) {
-    // id로 upsert — month로 필터링하면 같은 달에 동시에 올라가는 다른 파일의 항목까지
-    // 지워버린다(리뷰 지적사항: 동일월 동시 업로드 시 상태 덮어쓰기).
+  async function uploadOcr(docType: DocType, file: File, entryId: string) {
     setEntries((e) => ({
       ...e,
-      [docType]: [...e[docType].filter((m) => m.id !== entryId), { id: entryId, month, status: "uploading" }],
+      [docType]: [
+        ...e[docType].filter((m) => m.id !== entryId),
+        { id: entryId, fileName: file.name, status: "uploading" },
+      ],
     }));
     try {
       const cid = await getCompanyId();
@@ -215,12 +214,15 @@ export function SceneUpload({
       form.append("file", file);
       form.append("document_type", docType);
       form.append("mode", "ocr");
-      form.append("year", "2025");
-      form.append("month", String(month));
-      await apiUpload(`/owner/${cid}/documents/upload`, form);
+      // year/month는 안 보낸다 — 서버가 문서 내용에서 직접 읽어낸다
+      // (db/document_text_extractor.py). 응답에 실려오는 month를 그대로 배지에 쓴다.
+      const res = await apiUpload<{ month?: number }>(`/owner/${cid}/documents/upload`, form);
       setEntries((e) => ({
         ...e,
-        [docType]: [...e[docType].filter((m) => m.id !== entryId), { id: entryId, month, status: "done" }],
+        [docType]: [
+          ...e[docType].filter((m) => m.id !== entryId),
+          { id: entryId, fileName: file.name, status: "done", month: res.month },
+        ],
       }));
       refreshCoverage();
     } catch (err) {
@@ -229,7 +231,12 @@ export function SceneUpload({
         ...e,
         [docType]: [
           ...e[docType].filter((m) => m.id !== entryId),
-          { id: entryId, month, status: "error", error: err instanceof Error ? err.message : "업로드 실패" },
+          {
+            id: entryId,
+            fileName: file.name,
+            status: "error",
+            error: err instanceof Error ? err.message : "업로드 실패",
+          },
         ],
       }));
     }
@@ -262,7 +269,7 @@ export function SceneUpload({
     const status = required[docType];
     const label = DOC_LABELS[docType];
     const badge = STATUS_BADGE[status];
-    const monthEntries = entries[docType];
+    const fileEntries = entries[docType];
 
     if (status === "not_applicable") {
       return (
@@ -334,60 +341,50 @@ export function SceneUpload({
           </div>
         ) : (
           <>
-            <div className="mt-3 flex items-center gap-2">
-              <select
-                id={`${docType}-month`}
-                className="rounded-lg border border-line bg-surface px-2.5 py-2 text-[13px] text-ink"
-                defaultValue={1}
-              >
-                {MONTHS.map((m) => (
-                  <option key={m} value={m}>
-                    {m}월
-                  </option>
-                ))}
-              </select>
-              <label className="btn-cta flex flex-1 cursor-pointer items-center justify-center rounded-xl bg-brand py-2.5 text-[13px] font-bold text-white">
-                사진·PDF 선택
-                <input
-                  type="file"
-                  accept="image/*,.pdf"
-                  multiple
-                  className="hidden"
-                  onChange={(e) => {
-                    const files = Array.from(e.target.files ?? []);
-                    const monthSelect = document.getElementById(
-                      `${docType}-month`,
-                    ) as HTMLSelectElement | null;
-                    const month = Number(monthSelect?.value ?? 1);
-                    files.forEach((f, i) => {
-                      const entryId = `${Date.now()}-${i}-${f.name}`;
-                      uploadOcr(docType, month, f, entryId);
-                    });
-                    e.target.value = "";
-                  }}
-                />
-              </label>
-            </div>
+            <label className="btn-cta mt-3 flex cursor-pointer items-center justify-center rounded-xl bg-brand py-2.5 text-[13px] font-bold text-white">
+              사진·PDF 여러 장 한 번에 올리기
+              <input
+                type="file"
+                accept="image/*,.pdf"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  const files = Array.from(e.target.files ?? []);
+                  files.forEach((f, i) => {
+                    const entryId = `${Date.now()}-${i}-${f.name}`;
+                    uploadOcr(docType, f, entryId);
+                  });
+                  e.target.value = "";
+                }}
+              />
+            </label>
+            <p className="mt-1.5 text-[11px] text-faint">
+              몇 월 자료인지는 안 골라도 돼요 — 문서를 읽어서 자동으로 확인할게요
+            </p>
 
-            {monthEntries.length > 0 && (
-              <div className="mt-2.5 flex flex-wrap gap-1.5">
-                {monthEntries
-                  .sort((a, b) => a.month - b.month)
-                  .map((m) => (
+            {fileEntries.length > 0 && (
+              <div className="mt-2.5 space-y-1.5">
+                {fileEntries.map((entry) =>
+                  entry.status === "error" ? (
+                    <div
+                      key={entry.id}
+                      className="rounded-lg bg-hitl/25 px-2.5 py-2 text-[11.5px] text-hitl-ink"
+                    >
+                      <span className="font-semibold">{entry.fileName}</span> — {entry.error}
+                    </div>
+                  ) : (
                     <span
-                      key={m.id}
-                      className={`rounded-full px-2.5 py-1 text-[11.5px] font-semibold ${
-                        m.status === "done"
-                          ? "bg-brand-soft text-brand-ink"
-                          : m.status === "error"
-                            ? "bg-hitl/25 text-hitl-ink"
-                            : "bg-line text-muted"
+                      key={entry.id}
+                      className={`mr-1.5 inline-block rounded-full px-2.5 py-1 text-[11.5px] font-semibold ${
+                        entry.status === "done" ? "bg-brand-soft text-brand-ink" : "bg-line text-muted"
                       }`}
                     >
-                      {m.month}월{" "}
-                      {m.status === "uploading" ? "업로드 중…" : m.status === "error" ? "실패" : "완료"}
+                      {entry.status === "uploading"
+                        ? `${entry.fileName} 업로드 중…`
+                        : `${entry.month}월 접수 완료`}
                     </span>
-                  ))}
+                  ),
+                )}
               </div>
             )}
           </>
@@ -414,7 +411,7 @@ export function SceneUpload({
         선택하신 연료에 맞춰 필요한 자료만 안내해 드려요.
       </p>
 
-      <div className="mt-5 flex gap-1.5 overflow-x-auto">
+      <div className="mt-5 flex justify-between gap-1.5 overflow-x-auto">
         {FUEL_PILLS.map((f) => (
           <Pill key={f.key} label={f.label} selected={fuel[f.key]} onClick={() => toggleFuel(f.key)} />
         ))}

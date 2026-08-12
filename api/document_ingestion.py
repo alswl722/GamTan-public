@@ -90,8 +90,8 @@ def ingest_uploaded_document(
         extracted: dict = {"rows": rows, "skipped_rows": skipped_rows}
         source_system = "upload:excel"
     else:
-        if year is None or month is None:
-            raise ValueError("OCR 업로드는 year/month가 필요합니다")
+        # year/month는 이제 선택값이다 — 문서 자체(PDF 텍스트)에서 날짜를 읽어낸다.
+        # 실 추출이 안 되는 파일에서만 폴백용으로 쓰인다(db/document_extraction.py).
         row = extract_document(file_bytes, document_type, year=year, month=month)
         rows = [row]
         extracted = row
@@ -141,8 +141,14 @@ def ingest_uploaded_document(
         session.rollback()
         raise DuplicateDocumentError("이미 업로드된 파일입니다") from e
 
-    return {
+    result = {
         "source_document_id": doc.id,
         "vouchers_created": len(created),
         "skipped_rows": skipped_rows,
     }
+    if mode == "ocr":
+        # 프론트가 더 이상 업로드 전에 월을 묻지 않으므로, 문서에서 실제로 읽어낸
+        # year/month를 응답에 실어 보내 업로드 완료 후 "1월 접수됨" 같은 표시를 만든다.
+        result["year"] = rows[0]["year"]
+        result["month"] = rows[0]["month"]
+    return result

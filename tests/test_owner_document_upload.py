@@ -102,11 +102,24 @@ def test_excel_mode_rejected_for_non_tax_invoice(db, client):
     assert res.status_code == 400
 
 
-def test_ocr_without_year_month_returns_400(db, client):
+def test_ocr_non_pdf_without_year_month_returns_422(db, client):
+    """year/month는 더 이상 필수가 아니다(문서 자체에서 날짜를 읽는다) — 대신
+    PDF가 아니라 실 추출도 안 되고 폴백용 year/month도 없으면 422로 명확히 실패한다."""
     _, company_id = db
     res = client.post(
         f"/owner/{company_id}/documents/upload",
         files={"file": ("x.jpg", b"x", "image/jpeg")},
         data={"document_type": "electric_bill", "mode": "ocr"},
     )
-    assert res.status_code == 400
+    assert res.status_code == 422
+
+
+def test_ocr_non_pdf_with_year_month_falls_back_to_synthetic(db, client):
+    """year/month가 주어지면(개발 편의) 임의 파일도 여전히 합성 mock으로 통과한다."""
+    _, company_id = db
+    res = client.post(
+        f"/owner/{company_id}/documents/upload",
+        files={"file": ("x.jpg", b"x", "image/jpeg")},
+        data={"document_type": "electric_bill", "mode": "ocr", "year": "2025", "month": "5"},
+    )
+    assert res.status_code == 200, res.text

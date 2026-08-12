@@ -26,6 +26,7 @@ from api.document_ingestion import (
 from api.queries import get_coverage
 from db.alerts import detect_alerts
 from db.document_requirements import FuelTypes, required_documents
+from db.document_text_extractor import DocumentParseError
 from db.hometax_excel_parser import HometaxExcelFormatError
 from db.models import Company
 from db.pcaf import upgrade_candidate_for_company
@@ -105,8 +106,8 @@ async def upload_document(
         raise HTTPException(status_code=400, detail=f"invalid mode: {mode}")
     if mode == "excel" and document_type != "tax_invoice":
         raise HTTPException(status_code=400, detail="엑셀 업로드는 세금계산서만 지원합니다")
-    if mode == "ocr" and (year is None or month is None):
-        raise HTTPException(status_code=400, detail="OCR 업로드는 year/month가 필요합니다")
+    # year/month는 더 이상 필수가 아니다 — 문서 자체(PDF 텍스트)에서 날짜를 읽어낸다
+    # (db/document_text_extractor.py). 못 읽으면 422로 명확히 실패한다.
 
     file_bytes = await file.read()
     try:
@@ -120,6 +121,10 @@ async def upload_document(
         raise HTTPException(status_code=422, detail=str(e))
     except HometaxExcelFormatError as e:
         # 실패 가시성 원칙 — 파싱 실패를 목업 데이터로 가리지 않고 그대로 안내(CLAUDE.md §6)
+        raise HTTPException(status_code=422, detail=str(e))
+    except DocumentParseError as e:
+        # 문서에서 날짜·금액을 못 읽었거나(화질 불량 등) 엉뚱한 칸에 업로드된 경우 —
+        # 같은 실패 가시성 원칙, 값을 지어내지 않고 사유를 그대로 보여준다.
         raise HTTPException(status_code=422, detail=str(e))
 
 

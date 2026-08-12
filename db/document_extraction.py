@@ -1,14 +1,20 @@
-"""문서 추출(OCR) — 이번 주는 합성 mock, 함수 경계만 고정.
+"""문서 추출(OCR) — 실제 텍스트 추출 우선, 안 되면 합성 mock으로 폴백.
 
-`extract_document()`가 이 파이프라인의 유일한 진입점이다. 지금은 실제 OCR을
-부르지 않고 파일 내용 해시로 결정론적인 합성 값을 만들어 반환한다 — 마이데이터
-mock과 같은 전략(CLAUDE.md "실패 가시성 원칙"과 별개로, 아직 붙이지 않은 실
-연동을 붙인 것처럼 위장하지 않되, 데모 재현성은 유지). 실제 OCR이든 로컬 모델
-(Qwen 등)이든 이 함수 내부만 교체하면 나머지 파이프라인(source_documents 적재→
-voucher 생성)은 그대로 재사용된다 — 로컬 모델 전환은 별도 팀 합의 필요(CLAUDE.md
-§3 LLM 스택 확정·변경 금지).
+`extract_document()`가 이 파이프라인의 유일한 진입점이다. 회계 담당이 만든
+업로드 서류(`data/업로드서류/`, `scripts/generate_upload_docs.py`)는 스캔 이미지가
+아니라 텍스트 레이어가 있는 PDF라, `db/document_text_extractor.py`가 실제 내용을
+그대로 읽는다(OCR·비전 모델 불필요 — 실 사진·스캔본 OCR은 별도 범위, 그때 가서
+`db/document_text_extractor.py::extract_pdf_text()` 내부만 교체하면 된다).
+
+실 추출이 안 되는 파일(PDF가 아님·형식이 다름)은 year/month가 주어졌을 때만
+과거처럼 해시 기반 합성값으로 폴백한다(임의 파일로 개발·테스트하는 용도).
+year/month 없이 실추출도 실패하면 값을 지어내지 않고 DocumentParseError를 그대로
+던진다(실패 가시성 원칙, CLAUDE.md §6) — 호출부(api/document_ingestion.py)가
+422로 안내한다.
 """
 import hashlib
+
+from db.document_text_extractor import DocumentParseError, extract_pdf_text, parse_document_text
 
 DocumentType = str  # "tax_invoice" | "electric_bill" | "gas_bill"
 
@@ -41,10 +47,8 @@ def _seed(file_bytes: bytes) -> int:
     return int(hashlib.sha256(file_bytes).hexdigest()[:8], 16)
 
 
-def extract_document(file_bytes: bytes, document_type: DocumentType, *, year: int, month: int) -> dict:
-    """문서유형별 합성 추출 결과. year/month는 업로드 화면에서 사용자가 지정한
-    "몇 월 자료인지"를 그대로 신뢰한다 — 실제 OCR이 붙기 전까진 이미지에서
-    날짜를 읽어내는 것처럼 위장하지 않는다."""
+def _synthetic_extract(file_bytes: bytes, document_type: DocumentType, *, year: int, month: int) -> dict:
+    """실 추출이 안 될 때의 폴백 — 파일 내용을 무시하고 결정론적 합성값을 만든다."""
     seed = _seed(file_bytes)
 
     if document_type == "electric_bill":
@@ -83,3 +87,31 @@ def extract_document(file_bytes: bytes, document_type: DocumentType, *, year: in
         "year": year,
         "month": month,
     }
+
+
+def extract_document(
+    file_bytes: bytes, document_type: DocumentType, *, year: int | None = None, month: int | None = None,
+) -> dict:
+    """문서에서 실제로 날짜·금액을 읽어낸다 — year/month는 더 이상 사용자가 미리
+    지정하지 않아도 된다(문서 자체가 몇 월 자료인지 알려준다).
+
+    1. PDF 텍스트 추출 시도 → 성공하면 그 값을 그대로 신뢰한다(문서가 실제로
+       말하는 날짜·금액이 사용자가 우연히 고른 달보다 항상 더 정확하다).
+    2. 실패하면(PDF가 아니거나 알려진 형식이 아님) year/month가 주어졌을
+       때만 과거 합성 mock으로 폴백한다.
+    3. year/month도 없이 실패하면 DocumentParseError를 그대로 던진다 —
+       값을 지어내지 않는다.
+    """
+    text = extract_pdf_text(file_bytes)
+    if text is not None:
+        try:
+            return parse_document_text(text, document_type)
+        except DocumentParseError:
+            if year is None or month is None:
+                raise
+
+    if year is None or month is None:
+        raise DocumentParseError(
+            "문서에서 날짜를 읽어내지 못했어요 — PDF 형식의 자료를 올려 주세요"
+        )
+    return _synthetic_extract(file_bytes, document_type, year=year, month=month)
