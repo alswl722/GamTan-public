@@ -338,6 +338,9 @@ class SourceDocument(Base):
     __table_args__ = (
         Index("ix_source_documents_company", "company_id"),
         Index("ix_source_documents_file_hash", "file_hash"),
+        # 코드 레벨 SELECT-then-INSERT 중복 체크만으로는 동시 업로드(더블클릭·재시도)
+        # 레이스를 못 막는다 — DB 제약으로 최종 방어선을 둔다.
+        UniqueConstraint("company_id", "file_hash", name="uq_source_documents_company_file_hash"),
     )
 
 
@@ -474,6 +477,12 @@ class BorrowerFinancial(Base):
 
     __table_args__ = (
         Index("ix_borrower_financials_company_year", "company_id", "financial_year"),
+        # version까지 포함 — 재산정 시 새 버전을 만드는 설계는 유지하되(§8.5 재산정 정책),
+        # 동시 요청이 같은 (기업,연도,버전)에 중복 행을 만드는 레이스는 막는다.
+        UniqueConstraint(
+            "company_id", "financial_year", "version",
+            name="uq_borrower_financials_company_year_version"
+        ),
     )
 
 

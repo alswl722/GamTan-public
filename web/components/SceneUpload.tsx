@@ -44,7 +44,10 @@ function previewRequiredDocuments(fuel: FuelTypesState): RequiredDocuments {
 type DocType = "tax_invoice" | "electric_bill" | "gas_bill";
 type DocStatus = "required" | "optional" | "not_applicable";
 type UploadStatus = "idle" | "uploading" | "done" | "error";
-type MonthEntry = { month: number; status: UploadStatus; error?: string };
+// id로 개별 업로드 시도를 구분한다 — month만으로 키를 잡으면 같은 달에 파일을 여러 개
+// 동시에 올릴 때(예: 재시도, 실수로 중복 선택) 나중 응답이 앞선 결과를 덮어써서 실제로는
+// 서버에 여러 건이 생성됐는데 화면엔 하나만 보이는 버그가 생긴다.
+type MonthEntry = { id: string; month: number; status: UploadStatus; error?: string };
 
 const DOC_LABELS: Record<DocType, { title: string; hint: string }> = {
   tax_invoice: { title: "세금계산서", hint: "경유·휘발유·LPG 등 연료 구매 전표" },
@@ -121,9 +124,12 @@ export function SceneUpload({
     electric_bill: [],
     gas_bill: [],
   });
-  const [excelResult, setExcelResult] = useState<{ status: UploadStatus; count?: number; error?: string }>({
-    status: "idle",
-  });
+  const [excelResult, setExcelResult] = useState<{
+    status: UploadStatus;
+    count?: number;
+    skipped?: number;
+    error?: string;
+  }>({ status: "idle" });
   const [coverage, setCoverage] = useState<Coverage | null>(null);
 
   async function refreshCoverage() {
@@ -131,13 +137,40 @@ export function SceneUpload({
       const cid = await getCompanyId();
       const cov = await apiGet<Coverage>(`/owner/${cid}/coverage`);
       setCoverage(cov);
+      return cov;
     } catch (err) {
       console.error("결손 조회 실패:", err);
+      return null;
     }
   }
 
   useEffect(() => {
-    refreshCoverage();
+    // 리뷰 지적사항 — fuel_types_json이 저장 안 된 채(null) "다음"으로 넘어가면 필터가 안
+    // 걸려 안전하지만, 사용자가 도시가스 pill을 실수로 안 누르고 다른 연료만 저장하면
+    // city_gas:false가 박혀 3~5월 도시가스 결손 킬러씬이 조용히 꺼진다. 이걸 막기 위해
+    // 이미 쌓여있는 과거 전표(coverage)를 근거로 첫 진입 시 연료 pill 기본값을 추론해
+    // 저장해둔다 — "이 회사는 실제로 이 연료를 써왔다"는 사실이 사람의 클릭보다 우선한다.
+    // initialFuel이 있으면(뒤로가기 등으로 이미 선택된 적 있음) 건드리지 않는다.
+    if (initialFuel !== undefined) return;
+    let cancelled = false;
+    refreshCoverage().then((cov) => {
+      if (cancelled || !cov) return;
+      const hasData = (bucket: string) =>
+        Object.values(cov.matrix[bucket] ?? {}).some((v) => v > 0);
+      const inferred: FuelTypesState = {
+        diesel: hasData("경유/유류"),
+        gasoline: false,
+        cityGas: hasData("가스"),
+        lpg: "no",
+      };
+      if (inferred.diesel || inferred.cityGas) {
+        saveFuel(inferred);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 마운트 시 1회만, initialFuel 변화엔 반응 안 함
   }, []);
 
   async function saveFuel(next: FuelTypesState) {
@@ -169,10 +202,12 @@ export function SceneUpload({
     saveFuel({ ...fuel, lpg: nextStatus });
   }
 
-  async function uploadOcr(docType: DocType, month: number, file: File) {
+  async function uploadOcr(docType: DocType, month: number, file: File, entryId: string) {
+    // id로 upsert — month로 필터링하면 같은 달에 동시에 올라가는 다른 파일의 항목까지
+    // 지워버린다(리뷰 지적사항: 동일월 동시 업로드 시 상태 덮어쓰기).
     setEntries((e) => ({
       ...e,
-      [docType]: [...e[docType].filter((m) => m.month !== month), { month, status: "uploading" }],
+      [docType]: [...e[docType].filter((m) => m.id !== entryId), { id: entryId, month, status: "uploading" }],
     }));
     try {
       const cid = await getCompanyId();
@@ -185,7 +220,7 @@ export function SceneUpload({
       await apiUpload(`/owner/${cid}/documents/upload`, form);
       setEntries((e) => ({
         ...e,
-        [docType]: [...e[docType].filter((m) => m.month !== month), { month, status: "done" }],
+        [docType]: [...e[docType].filter((m) => m.id !== entryId), { id: entryId, month, status: "done" }],
       }));
       refreshCoverage();
     } catch (err) {
@@ -193,8 +228,8 @@ export function SceneUpload({
       setEntries((e) => ({
         ...e,
         [docType]: [
-          ...e[docType].filter((m) => m.month !== month),
-          { month, status: "error", error: err instanceof Error ? err.message : "업로드 실패" },
+          ...e[docType].filter((m) => m.id !== entryId),
+          { id: entryId, month, status: "error", error: err instanceof Error ? err.message : "업로드 실패" },
         ],
       }));
     }
@@ -208,8 +243,11 @@ export function SceneUpload({
       form.append("file", file);
       form.append("document_type", "tax_invoice");
       form.append("mode", "excel");
-      const res = await apiUpload<{ vouchers_created: number }>(`/owner/${cid}/documents/upload`, form);
-      setExcelResult({ status: "done", count: res.vouchers_created });
+      const res = await apiUpload<{ vouchers_created: number; skipped_rows: number }>(
+        `/owner/${cid}/documents/upload`,
+        form,
+      );
+      setExcelResult({ status: "done", count: res.vouchers_created, skipped: res.skipped_rows });
       refreshCoverage();
     } catch (err) {
       console.error("엑셀 업로드 실패:", err);
@@ -275,7 +313,7 @@ export function SceneUpload({
               {excelResult.status === "uploading" ? "업로드 중…" : "엑셀 파일 선택"}
               <input
                 type="file"
-                accept=".xlsx,.xls"
+                accept=".xlsx"
                 className="hidden"
                 onChange={(e) => {
                   const f = e.target.files?.[0];
@@ -287,6 +325,7 @@ export function SceneUpload({
             {excelResult.status === "done" && (
               <div className="mt-2 text-[12px] font-semibold text-brand-ink">
                 {excelResult.count}건 업로드 완료
+                {!!excelResult.skipped && ` · ${excelResult.skipped}건은 날짜·금액이 비어 있어 건너뜀`}
               </div>
             )}
             {excelResult.status === "error" && (
@@ -320,7 +359,10 @@ export function SceneUpload({
                       `${docType}-month`,
                     ) as HTMLSelectElement | null;
                     const month = Number(monthSelect?.value ?? 1);
-                    files.forEach((f) => uploadOcr(docType, month, f));
+                    files.forEach((f, i) => {
+                      const entryId = `${Date.now()}-${i}-${f.name}`;
+                      uploadOcr(docType, month, f, entryId);
+                    });
                     e.target.value = "";
                   }}
                 />
@@ -333,7 +375,7 @@ export function SceneUpload({
                   .sort((a, b) => a.month - b.month)
                   .map((m) => (
                     <span
-                      key={m.month}
+                      key={m.id}
                       className={`rounded-full px-2.5 py-1 text-[11.5px] font-semibold ${
                         m.status === "done"
                           ? "bg-brand-soft text-brand-ink"

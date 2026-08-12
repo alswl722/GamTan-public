@@ -107,6 +107,31 @@ def test_duplicate_file_upload_is_rejected(db_with_institution):
         ingest_uploaded_document(session, company_id, content, "a.jpg", "gas_bill", mode="ocr", year=2025, month=4)
 
 
+def test_db_constraint_blocks_duplicate_even_if_app_check_is_bypassed(db_with_institution):
+    """앱 레벨 SELECT-then-INSERT 체크(_existing_document)는 동시 업로드 레이스를
+    못 막는다 — 그 체크를 완전히 우회해 직접 INSERT해도 DB 유니크 제약(0008)이
+    최종적으로 막아야 한다. IntegrityError → DuplicateDocumentError로 변환되는지도 확인."""
+    from sqlalchemy.exc import IntegrityError
+
+    from db.models import SourceDocument
+
+    session, company_id, inst_id, _ib_id = db_with_institution
+    session.add(SourceDocument(
+        financial_institution_id=inst_id, company_id=company_id,
+        document_type="gas_bill", file_hash="race-condition-hash",
+    ))
+    session.commit()
+
+    # 앱 함수가 아니라 모델 레벨에서 직접 같은 (company_id, file_hash)를 다시 넣어도 막힌다.
+    session.add(SourceDocument(
+        financial_institution_id=inst_id, company_id=company_id,
+        document_type="gas_bill", file_hash="race-condition-hash",
+    ))
+    with pytest.raises(IntegrityError):
+        session.commit()
+    session.rollback()
+
+
 def test_institution_attribution_is_filled_when_backfilled(db_with_institution):
     session, company_id, inst_id, ib_id = db_with_institution
     ingest_uploaded_document(

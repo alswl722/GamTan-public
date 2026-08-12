@@ -180,10 +180,17 @@ def resolve_institution_borrower(session: Session, company_id: int) -> tuple[int
     가장 먼저 생성된 귀속 레코드를 신뢰한다. v1 하이브리드 입력(마이데이터·업로드·엑셀)이
     새로 만드는 vouchers/source_documents는 전부 이 헬퍼로 기관 귀속을 채운다.
     아직 백필되지 않은 기업이면 None — 호출부는 nullable 컬럼이므로 비워둔 채 저장해도 안전하다.
+
+    consent_status='active'인 레코드만 본다 — 동의가 철회(revoked)·만료(expired)된
+    기업의 새 업로드·마이데이터 수집이 여전히 그 기관 귀속으로 계속 쌓이면 동의 기반
+    설계 원칙에 어긋난다.
     """
     stmt = (
         select(InstitutionBorrower)
-        .where(InstitutionBorrower.company_id == company_id)
+        .where(
+            InstitutionBorrower.company_id == company_id,
+            InstitutionBorrower.consent_status == "active",
+        )
         .order_by(InstitutionBorrower.id)
     )
     ib = session.execute(stmt).scalars().first()

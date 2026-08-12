@@ -144,14 +144,20 @@ export function SceneConsent({ onNext }: { onNext: () => void }) {
   async function connect() {
     setPhase("collecting");
     setError(null);
-    setSourceStatus(Object.fromEntries(SOURCES.map((s) => [s.key, "waiting" as SourceStatus])));
+    setSourceStatus(Object.fromEntries(SOURCES.map((s) => [s.key, "loading" as SourceStatus])));
     try {
       const cid = await getCompanyId();
-      for (const s of SOURCES) {
-        setSourceStatus((st) => ({ ...st, [s.key]: "loading" }));
-        await apiPost<CollectResult>(`/mock/${s.key}/${cid}`);
-        setSourceStatus((st) => ({ ...st, [s.key]: "done" }));
-      }
+      // 5종을 순차 await하면 매번 왕복 지연이 누적된다 — 서로 독립적인 호출이라
+      // 병렬로 쏘고, 완료되는 대로 각자 상태만 개별 업데이트한다("클릭 1회, 즉시 반응").
+      const results = await Promise.allSettled(
+        SOURCES.map((s) =>
+          apiPost<CollectResult>(`/mock/${s.key}/${cid}`).then(() => {
+            setSourceStatus((st) => ({ ...st, [s.key]: "done" }));
+          }),
+        ),
+      );
+      const failed = results.some((r) => r.status === "rejected");
+      if (failed) throw new Error("일부 항목 수집 실패");
       setPhase("done");
     } catch (err) {
       console.error("마이데이터 수집 실패:", err);

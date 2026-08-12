@@ -99,6 +99,30 @@ def test_financial_statement_collection_is_idempotent(db_with_institution):
     assert len(rows) == 1
 
 
+def test_kyb_collect_recovers_gracefully_from_db_level_race(db_with_institution):
+    """앱 레벨 (company_id, document_type) 체크가 못 잡는 경우(레이스로 SELECT는
+    통과했지만 file_hash 유니크 제약엔 걸리는 상황)를 시뮬레이션 — 예외가 그대로
+    새지 않고 already_collected로 정상 복구되는지 확인."""
+    session, company_id, ib_id = db_with_institution
+    inst_id = session.get(InstitutionBorrower, ib_id).financial_institution_id
+    # collect_mydata가 만들 file_hash("mydata:{id}:business_registration")를 미리
+    # 선점해둔다 — document_type은 다르게 둬서 앱 레벨 SELECT 체크는 통과하게 만든다.
+    session.add(SourceDocument(
+        financial_institution_id=inst_id, company_id=company_id,
+        document_type="already_taken_by_someone_else",
+        file_hash=f"mydata:{company_id}:business_registration",
+    ))
+    session.commit()
+
+    result = collect_mydata(session, company_id, "business-registration")
+    assert result["already_collected"] is True
+
+    docs = session.execute(
+        select(SourceDocument).where(SourceDocument.document_type == "business_registration")
+    ).scalars().all()
+    assert len(docs) == 0  # race 시 새 행을 만들지 않고 물러남
+
+
 def test_kepco_payment_history_has_no_kwh_field(db_with_institution):
     """검토 섹션 정정사항 회귀 방지 — 마이데이터 전기납부내역엔 kWh가 없어야 한다."""
     session, company_id, _ = db_with_institution

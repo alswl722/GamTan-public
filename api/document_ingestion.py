@@ -8,6 +8,7 @@ import hashlib
 from datetime import datetime, timezone
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from api.queries import resolve_institution_borrower
@@ -83,9 +84,10 @@ def ingest_uploaded_document(
         )
     financial_institution_id, institution_borrower_id = ib
 
+    skipped_rows = 0
     if document_type == "tax_invoice" and mode == "excel":
-        rows = parse_hometax_excel(file_bytes)
-        extracted: dict = {"rows": rows}
+        rows, skipped_rows = parse_hometax_excel(file_bytes)
+        extracted: dict = {"rows": rows, "skipped_rows": skipped_rows}
         source_system = "upload:excel"
     else:
         if year is None or month is None:
@@ -105,28 +107,42 @@ def ingest_uploaded_document(
         extracted_json=extracted,
         verification_status="unverified",
     )
-    session.add(doc)
-    session.flush()  # doc.id 확보
-
     voucher_source = DOCUMENT_TYPE_TO_VOUCHER_SOURCE[document_type]
     created: list[Voucher] = []
-    for row in rows:
-        raw = {**row, "source_document_id": doc.id}
-        v = Voucher(
-            company_id=company_id,
-            source=voucher_source,
-            year=row["year"],
-            month=row["month"],
-            issue_date=_parse_issue_date(row.get("issue_date")),
-            supplier_name=row.get("supplier_name"),
-            item_description=row.get("item_description"),
-            supply_amount_krw=row.get("supply_amount_krw"),
-            raw_json=raw,
-            financial_institution_id=financial_institution_id,
-            institution_borrower_id=institution_borrower_id,
-        )
-        session.add(v)
-        created.append(v)
+    try:
+        # doc 추가부터 commit까지 통째로 감싼다 — 중간의 session.flush()가 doc의
+        # file_hash 유니크 제약 위반을 이 시점에 먼저 던질 수 있어(레이스), try
+        # 블록을 마지막 commit()에만 좁게 걸면 그 순간의 IntegrityError를 놓친다.
+        session.add(doc)
+        session.flush()  # doc.id 확보 — voucher들의 source_document_id로 필요
 
-    session.commit()
-    return {"source_document_id": doc.id, "vouchers_created": len(created)}
+        for row in rows:
+            raw = {**row, "source_document_id": doc.id}
+            v = Voucher(
+                company_id=company_id,
+                source=voucher_source,
+                year=row["year"],
+                month=row["month"],
+                issue_date=_parse_issue_date(row.get("issue_date")),
+                supplier_name=row.get("supplier_name"),
+                item_description=row.get("item_description"),
+                supply_amount_krw=row.get("supply_amount_krw"),
+                raw_json=raw,
+                financial_institution_id=financial_institution_id,
+                institution_borrower_id=institution_borrower_id,
+            )
+            session.add(v)
+            created.append(v)
+
+        session.commit()
+    except IntegrityError as e:
+        # 앞의 _existing_document() 체크는 SELECT-then-INSERT라 동시 업로드(더블클릭·
+        # 재시도)가 둘 다 체크를 통과할 수 있다 — DB 유니크 제약(0008)이 최종 방어선.
+        session.rollback()
+        raise DuplicateDocumentError("이미 업로드된 파일입니다") from e
+
+    return {
+        "source_document_id": doc.id,
+        "vouchers_created": len(created),
+        "skipped_rows": skipped_rows,
+    }

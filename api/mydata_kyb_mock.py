@@ -13,6 +13,7 @@ electric_bill(고지서 업로드) 경로가 담당한다. 이 둘을 혼동하�
 from datetime import datetime, timezone
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from api.document_ingestion import MissingInstitutionAttributionError
@@ -118,17 +119,37 @@ def _collect_kyb_document(
         company_id=company.id,
         document_type=document_type,
         source_system=f"mydata:{source}",
+        # 실제 파일이 없는 mock이라 바이트 해시는 못 만들지만, (기업,문서유형)을
+        # 결정론적 문자열로 담아 source_documents의 (company_id, file_hash) 유니크
+        # 제약을 그대로 재사용한다 — 동시 수집 요청의 중복 적재 레이스를 막는다.
+        file_hash=f"mydata:{company.id}:{document_type}",
         extracted_json=payload,
         verification_status="unverified",
     )
-    session.add(doc)
 
-    if source == "business-registration":
-        ib_row = session.get(InstitutionBorrower, institution_borrower_id)
-        if ib_row is not None and not ib_row.external_customer_id.startswith("biz-"):
-            ib_row.external_customer_id = f"biz-{payload['business_registration_no']}"
-
-    session.commit()
+    try:
+        # add부터 commit까지 통째로 감싼다 — 중간의 session.get() 등 어떤 쿼리든
+        # autoflush로 doc의 pending INSERT를 먼저 내보낼 수 있어, try 블록을
+        # commit()에만 좁게 걸면 그 autoflush 시점의 IntegrityError를 놓친다.
+        session.add(doc)
+        if source == "business-registration":
+            ib_row = session.get(InstitutionBorrower, institution_borrower_id)
+            if ib_row is not None and not ib_row.external_customer_id.startswith("biz-"):
+                ib_row.external_customer_id = f"biz-{payload['business_registration_no']}"
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        existing_after_race = session.execute(
+            select(SourceDocument).where(
+                SourceDocument.company_id == company.id,
+                SourceDocument.document_type == document_type,
+            )
+        ).scalars().first()
+        return {
+            "source": source,
+            "already_collected": True,
+            "extracted": existing_after_race.extracted_json if existing_after_race else payload,
+        }
     return {"source": source, "already_collected": False, "extracted": payload}
 
 
@@ -165,5 +186,24 @@ def _collect_financial_statement(
         verified=False,
     )
     session.add(bf)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError:
+        # (company_id, financial_year, version) 유니크 제약(0008)에 걸림 — 동시 수집
+        # 요청 레이스. 이미 있는 값을 그대로 반환(멱등 계약 유지).
+        session.rollback()
+        existing_after_race = session.execute(
+            select(BorrowerFinancial).where(
+                BorrowerFinancial.company_id == company.id,
+                BorrowerFinancial.financial_year == _FINANCIAL_YEAR,
+            )
+        ).scalars().first()
+        return {
+            "source": "financial-statement",
+            "already_collected": True,
+            "extracted": {
+                "total_equity": float(existing_after_race.total_equity),
+                "total_debt": float(existing_after_race.total_debt),
+            } if existing_after_race else payload,
+        }
     return {"source": "financial-statement", "already_collected": False, "extracted": payload}
