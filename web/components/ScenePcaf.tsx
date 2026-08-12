@@ -275,10 +275,7 @@ export function ScenePcaf() {
 
   return (
     <section>
-      <span className="inline-block rounded-full bg-brand-soft px-2.5 py-1 text-[11px] font-semibold text-brand-ink">
-        실측 산정
-      </span>
-      <h2 className="mt-3 text-[17px] font-bold leading-snug text-ink">
+      <h2 className="text-[17px] font-bold leading-snug text-ink">
         측정이 끝났어요
       </h2>
       <p className="mt-1 text-[13px] leading-relaxed text-muted">

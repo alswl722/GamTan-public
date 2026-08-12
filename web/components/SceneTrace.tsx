@@ -204,7 +204,9 @@ export function SceneTrace({
   return (
     <section>
       <h2 className="text-[17px] font-bold leading-snug text-ink">
-        에이전트가 스스로 결손을 발견하고 있어요
+        감탄 AI 에이전트가
+        <br />
+        데이터를 확인 중이에요
       </h2>
       <p className="mt-1 text-[13px] leading-relaxed text-muted">
         모든 판단에는 근거가 남습니다.
