@@ -141,6 +141,41 @@ def _before_baseline(company, dist1, dist2) -> dict:
     }
 
 
+def _monthly_by_fuel(session: Session, company_id: int) -> list[dict]:
+    """월(1~12) × 연료 대분류 실측 배출량 그리드 — 리포트 월별 추이 차트 재료.
+
+    결손 보정치는 섞지 않는다. 자료가 없는 달은 그대로 0으로 비워서 결손 자체가
+    차트에 드러나게 한다(업종평균 추정을 실측인 것처럼 섞어 보여주지 않음 —
+    §5-1 LLM 산수 금지와 같은 결의 "숫자를 지어내지 않는다" 원칙).
+    """
+    rows = session.execute(
+        select(Voucher.month, Classification.fuel_type, Classification.emission_co2e)
+        .join(Classification, Classification.voucher_id == Voucher.id)
+        .where(
+            Voucher.company_id == company_id,
+            Classification.scope.in_((1, 2)),
+            Classification.status != "rejected",
+        )
+    ).all()
+
+    by_month_bucket_kg: dict[int, dict[str, float]] = {m: {} for m in range(1, 13)}
+    for month, fuel_type, emission in rows:
+        if emission is None:
+            continue
+        bucket = _fuel_bucket(fuel_type)
+        bucket_totals = by_month_bucket_kg[int(month)]
+        bucket_totals[bucket] = bucket_totals.get(bucket, 0.0) + float(emission)
+
+    return [
+        {
+            "month": m,
+            "total_tco2e": round(sum(by_month_bucket_kg[m].values()) / 1000.0, 2),
+            "by_fuel": {k: round(v / 1000.0, 2) for k, v in by_month_bucket_kg[m].items()},
+        }
+        for m in range(1, 13)
+    ]
+
+
 def _after_measured(session, company_id, dist1, dist2) -> dict | None:
     """전표 기반 실측 — 저장된 Classification 집계 + 결손월 업종 평균 보정.
 
@@ -238,6 +273,7 @@ def _after_measured(session, company_id, dist1, dist2) -> dict | None:
         "gap_months": gap_detail,
         "projected_grade": projected_grade,
         "by_fuel": by_fuel,
+        "monthly": _monthly_by_fuel(session, company_id),
     }
 
 

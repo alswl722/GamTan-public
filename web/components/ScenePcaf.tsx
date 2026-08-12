@@ -23,6 +23,7 @@ type After = {
   hitl_count: number;
   gap_months: { fuel: string; missing_months: number[] }[];
   by_fuel: { fuel: string; measured_tco2e: number; estimated_tco2e: number; total_tco2e: number }[];
+  monthly: { month: number; total_tco2e: number; by_fuel: Record<string, number> }[];
 };
 type Benchmark = {
   industry_code: string;
@@ -190,6 +191,74 @@ function FuelBreakdown({ after }: { after: After }) {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// 연료 대분류(db/pcaf.py::_fuel_bucket과 동일 어휘) → 막대 색. scope1/scope2는
+// 이미 "직접배출(연소)/간접배출(전기)" 의미로 쓰이는 색을 그대로 재사용하고,
+// 경유/유류만 3번째 색(lime)을 새로 씀 — 하나의 색을 두 버킷이 나눠 쓰면
+// 스택 막대에서 구분이 안 된다.
+const FUEL_BAR_COLOR: Record<string, string> = {
+  전기: "bg-scope2",
+  가스: "bg-scope1",
+  "경유/유류": "bg-lime",
+  기타: "bg-faint",
+};
+const FUEL_ORDER = ["전기", "가스", "경유/유류", "기타"];
+const CHART_HEIGHT_PX = 96;
+
+function MonthlyTrendChart({ monthly }: { monthly: After["monthly"] }) {
+  const maxTotal = Math.max(...monthly.map((m) => m.total_tco2e), 0.001);
+  const fuelsPresent = new Set(monthly.flatMap((m) => Object.keys(m.by_fuel)));
+  const fuels = FUEL_ORDER.filter((f) => fuelsPresent.has(f));
+
+  return (
+    <div className="mt-3 rounded-2xl bg-surface p-5">
+      <div className="text-[13px] font-semibold text-ink">월별 배출 추이</div>
+      <p className="mt-1 text-[11.5px] leading-relaxed text-muted">
+        자료가 있는 달만 실측치로 그려요. 빈 칸은 아직 연동 안 된 달이에요.
+      </p>
+
+      <div
+        className="mt-4 flex items-end justify-between gap-1"
+        style={{ height: CHART_HEIGHT_PX }}
+      >
+        {monthly.map((m) => {
+          const barHeight = Math.max(2, Math.round((m.total_tco2e / maxTotal) * CHART_HEIGHT_PX));
+          return (
+            <div key={m.month} className="flex flex-1 flex-col items-center justify-end">
+              <div
+                className="flex w-full flex-col-reverse overflow-hidden rounded-[3px] bg-line"
+                style={{ height: barHeight }}
+              >
+                {fuels.map((f) => {
+                  const v = m.by_fuel[f] || 0;
+                  if (v <= 0) return null;
+                  return <div key={f} className={FUEL_BAR_COLOR[f]} style={{ flexGrow: v }} />;
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="mt-1 flex justify-between text-[9px] text-faint">
+        {monthly.map((m) => (
+          <span key={m.month} className="flex-1 text-center">
+            {m.month}
+          </span>
+        ))}
+      </div>
+
+      {fuels.length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 border-t border-line pt-3 text-[10.5px] text-muted">
+          {fuels.map((f) => (
+            <span key={f} className="flex items-center gap-1">
+              <span className={`h-1.5 w-1.5 rounded-full ${FUEL_BAR_COLOR[f]}`} /> {f}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -384,6 +453,7 @@ export function ScenePcaf() {
       </div>
 
       {after && <FuelBreakdown after={after} />}
+      {after && <MonthlyTrendChart monthly={after.monthly} />}
 
       <div className="mt-3 rounded-2xl bg-surface p-5">
         {hasDistribution ? (

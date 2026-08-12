@@ -125,6 +125,48 @@ def test_by_fuel_breaks_down_measured_emissions_by_fuel_bucket(db):
     assert after["by_fuel"][0]["fuel"] == "전기"
 
 
+def test_monthly_grid_has_all_12_months_and_excludes_rejected(db):
+    """리포트 월별 추이 차트 재료 — 자료 없는 달은 0으로 비어있고, 반려된 분류는
+    집계에서 빠져야 한다(담당자가 신뢰 못 한다고 판단한 값이니까)."""
+    session, cid = db
+    company = session.get(Company, cid)
+    company.fuel_types_json = {
+        "electricity": False, "diesel": False, "gasoline": False,
+        "city_gas": False, "lpg": "no",
+    }
+    session.commit()
+
+    _add(session, cid, 1, "도시가스 요금", scope=1, emission=1000.0, status="auto",
+         fuel_type="도시가스")
+    _add(session, cid, 1, "전기요금", scope=2, emission=500.0, status="auto",
+         fuel_type="전기")
+    _add(session, cid, 7, "경유 구매 급증분", scope=1, emission=9000.0, status="auto",
+         fuel_type="경유")
+    _add(session, cid, 9, "반려된 건", scope=1, emission=5000.0, status="rejected",
+         fuel_type="경유")
+
+    monthly = company_pcaf_summary(session, cid)["after"]["monthly"]
+    assert len(monthly) == 12
+    assert [row["month"] for row in monthly] == list(range(1, 13))
+
+    jan = next(r for r in monthly if r["month"] == 1)
+    assert jan["total_tco2e"] == pytest.approx(1.5, abs=0.01)
+    assert jan["by_fuel"]["가스"] == pytest.approx(1.0, abs=0.01)
+    assert jan["by_fuel"]["전기"] == pytest.approx(0.5, abs=0.01)
+
+    jul = next(r for r in monthly if r["month"] == 7)
+    assert jul["total_tco2e"] == pytest.approx(9.0, abs=0.01)
+
+    # 반려 건이 들어간 9월은 집계에서 제외돼 0이어야 한다
+    sep = next(r for r in monthly if r["month"] == 9)
+    assert sep["total_tco2e"] == 0.0
+    assert sep["by_fuel"] == {}
+
+    # 자료 자체가 없는 달(예: 3월)은 0
+    mar = next(r for r in monthly if r["month"] == 3)
+    assert mar["total_tco2e"] == 0.0
+
+
 def test_by_fuel_includes_gap_estimated_bucket_even_without_measured_data(db):
     """결손월만 있고 실측이 아예 없는 연료도 by_fuel에 추정치로 잡혀야 한다
     (연료 체크는 됐는데 서류가 아예 없는 "전면 미제출" 케이스, C004 시나리오와 동일)."""
