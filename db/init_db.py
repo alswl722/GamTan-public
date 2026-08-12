@@ -6,7 +6,7 @@ from sqlalchemy import create_engine, delete, text
 from sqlalchemy.orm import Session
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from db.models import Base, EmissionFactor, UnitPrice, IndustryDistribution
+from db.models import Base, EmissionFactor, UnitPrice, IndustryDistribution, PcafQualityRule
 
 load_dotenv()
 
@@ -180,6 +180,57 @@ def seed_industry_distributions(session: Session):
     print(f"[OK] 업종분포 {len(rows)}건 적재")
 
 
+def seed_pcaf_quality_rules(session: Session):
+    """PCAF Business Loans and Unlisted Equity 데이터 품질표 — PCAF Standard Part A
+    Third Edition, Table 10.1-2(Annex, p.192) 원문을 옵션 단위 그대로 옮긴 것
+    (하드코딩이 원 소스, Excel 아님). 원문은 Scope 1·2와 Scope 3에 별도 표를 두지
+    않고 이 옵션 체계를 공통 적용하며, Option 2a만 각주 208에 의해 Scope 3에 적용
+    불가하다("The quality scoring for the Option 2a is only possible for/applicable
+    to scope 1 and scope 2 emissions as scope 3 emissions cannot be estimated by
+    this option").
+
+    이미 데이터가 있으면 건드리지 않는다(업종분포 시더와 동일 정책) — 회계가 원문과
+    재대조해 valid_from/valid_to 등을 조정하면 그 값이 유지된다.
+    """
+    if session.query(PcafQualityRule).count() > 0:
+        print("[SKIP] PCAF 품질규칙 이미 존재")
+        return
+
+    src = "PCAF Standard Part A, Third Edition (Dec 2025), Table 10.1-2, Option {opt}"
+    rules = [
+        dict(option_code="1a", quality_score=1, activity_data_basis="verified_emissions",
+             description="검증된(verified) 배출량 — 차주가 GHG Protocol에 따라 보고하고 제3자 검증을 받은 배출량",
+             applies_to_scope3=True, source_reference=src.format(opt="1a")),
+        dict(option_code="1b", quality_score=2, activity_data_basis="unverified_emissions",
+             description="미검증(unverified) 배출량 — 차주가 GHG Protocol에 따라 계산했으나 제3자 검증은 받지 않은 배출량",
+             applies_to_scope3=True, source_reference=src.format(opt="1b")),
+        dict(option_code="2a", quality_score=2, activity_data_basis="energy_consumption",
+             description="1차 활동자료(에너지원별 에너지 소비량, 예: MWh 전력)에 해당 배출원 특정 배출계수를 적용한 계산값 — Scope 1·2만 적용 가능",
+             applies_to_scope3=False, source_reference=src.format(opt="2a")),
+        dict(option_code="2b", quality_score=3, activity_data_basis="production",
+             description="1차 활동자료(생산량, 예: 톤당 쌀 생산량)에 해당 생산 특정 배출계수를 적용한 계산값",
+             applies_to_scope3=True, source_reference=src.format(opt="2b")),
+        dict(option_code="3a", quality_score=4, activity_data_basis="revenue",
+             description="차주 매출액에 부문별 매출당 배출량(GHG emissions/Revenue) 계수를 적용한 추정값",
+             applies_to_scope3=True, source_reference=src.format(opt="3a")),
+        dict(option_code="3b", quality_score=5, activity_data_basis="assets",
+             description="차주 자산에 부문별 자산당 배출량(GHG emissions/Assets) 계수를 적용한 추정값 (매출 미확보 시)",
+             applies_to_scope3=True, source_reference=src.format(opt="3b")),
+        dict(option_code="3c", quality_score=5, activity_data_basis="asset_turnover_ratio",
+             description="부문별 자산회전율(asset turnover ratio)과 부문별 매출당 배출량 계수를 결합한 추정값",
+             applies_to_scope3=True, source_reference=src.format(opt="3c")),
+    ]
+    for r in rules:
+        session.add(PcafQualityRule(
+            standard_version="PCAF Part A Third Edition",
+            asset_class="business_loans_and_unlisted_equity",
+            valid_from=2025,
+            **r,
+        ))
+    session.commit()
+    print(f"[OK] PCAF 품질규칙 {len(rules)}건 적재 (Table 10.1-2 원문)")
+
+
 def main():
     engine = create_engine(os.getenv("DATABASE_URL"))
     drop_legacy_tables(engine)
@@ -196,6 +247,9 @@ def main():
             seed_industry_distributions(session)
         else:
             print("[SKIP] 업종분포 이미 존재")
+
+        # PCAF 품질규칙: 회계 검수 전 초안 → 존재하면 그대로 유지(seed_pcaf_quality_rules 내부에서 skip 처리)
+        seed_pcaf_quality_rules(session)
 
     print("\n[완료] DB 초기화 성공")
 
