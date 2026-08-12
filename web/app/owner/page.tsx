@@ -106,34 +106,26 @@ export default function OwnerHomePage() {
         </div>
       )}
 
-      {/* 프로모 카드 — 종합소득세 환급 카드 참고: 라벨+화살표 → 굵은 CTA 문장 → 진행 단계 미리보기 */}
+      {/* 프로모 카드 — Figma 시안: 캐릭터를 흐름 안에 크게 두면 행 높이가 캐릭터 키만큼
+          늘어나고, 텍스트·화살표는 그 안에서 자동으로 세로 중앙 정렬된다(절대배치 불필요,
+          진행바와 겹칠 일도 없음). */}
       <Link
         href="/owner/measure"
-        className="btn-cta group relative mt-5 block overflow-hidden rounded-3xl bg-surface px-5 py-5 shadow-card transition-transform"
+        className="btn-cta group mt-5 block rounded-3xl bg-surface px-5 py-5 shadow-card transition-transform"
       >
-        <Image
-          src="/ddockdi_1.png"
-          alt=""
-          width={104}
-          height={104}
-          className="pointer-events-none absolute right-12 top-0 z-10 object-contain"
-        />
-
-        <span className="relative flex items-center justify-between gap-2">
-          <span className="flex items-center gap-1.5 text-[13px] font-bold text-muted">
-            탄소 측정
-            <span className="h-1.5 w-1.5 rounded-full bg-brand" />
+        <span className="flex items-center justify-between gap-2">
+          <span className="max-w-[50%] text-[16.5px] font-extrabold leading-snug text-ink">
+            우리 기업 탄소 배출량을
+            <br />
+            확인해보세요
           </span>
-          <ChevronRight size={16} className="shrink-0 text-faint" />
+          <span className="flex shrink-0 items-center gap-1">
+            <Image src="/ddockdi_1.png" alt="" width={130} height={149} className="shrink-0" />
+            <ChevronRight size={16} className="shrink-0 text-faint" />
+          </span>
         </span>
 
-        <span className="relative mt-2.5 block max-w-[60%] text-[16.5px] font-extrabold leading-snug text-ink">
-          우리 기업 탄소 배출량을
-          <br />
-          확인해보세요
-        </span>
-
-        <span className="relative mt-4 block h-1 overflow-hidden rounded-full bg-line">
+        <span className="mt-4 block h-1 overflow-hidden rounded-full bg-line">
           <span
             className="block h-full rounded-full bg-brand transition-all duration-300"
             style={{ width: `${(doneCount / MEASURE_STAGES.length) * 100}%` }}
