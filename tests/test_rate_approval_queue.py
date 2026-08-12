@@ -18,6 +18,7 @@ from api.main import app
 from db.init_db import seed_emission_factors, seed_industry_distributions, seed_unit_prices
 from db.models import Base, Classification, Company, FinancialInstitution, SourceDocument, Voucher
 from db.rate_approvals import (
+    AlreadyProcessedError,
     CompanyNotFoundError,
     NoUpgradeCandidateError,
     create_rate_request,
@@ -132,16 +133,35 @@ def test_review_rate_request_approve_sets_reviewer_and_timestamp(db):
     assert approved.reviewed_at is not None
 
 
-def test_review_rate_request_already_processed_is_not_overwritten(db):
-    """이미 처리된 요청은 재처리해도 상태가 바뀌지 않는다(멱등 조치 방지)."""
+def test_review_rate_request_already_processed_raises_and_is_not_overwritten(db):
+    """이미 처리된 요청은 재처리 시 예외를 던지고, 원래 처리 정보는 바뀌지 않는다(멱등 조치 방지)."""
     session, cid = db
     _make_upgrade_candidate(session, cid)
     req = create_rate_request(session, cid)
     review_rate_request(session, req.id, decision="approved", reviewed_by="officer-1")
 
-    second = review_rate_request(session, req.id, decision="rejected", reviewed_by="officer-2")
-    assert second.status == "approved"  # 두 번째 시도(반려)가 첫 승인을 덮어쓰지 않음
-    assert second.reviewed_by == "officer-1"
+    with pytest.raises(AlreadyProcessedError):
+        review_rate_request(session, req.id, decision="rejected", reviewed_by="officer-2")
+
+    session.refresh(req)
+    assert req.status == "approved"  # 두 번째 시도(반려)가 첫 승인을 덮어쓰지 않음
+    assert req.reviewed_by == "officer-1"
+
+
+def test_review_rate_request_same_decision_twice_also_raises(db):
+    """이미 승인된 요청을 다른 담당자가 또 "승인"해도 조용히 성공하지 않고 예외를 던진다 —
+    이전엔 이 케이스만 통과돼서 두 번째 담당자가 자기 처리가 반영된 줄 착각할 수 있었다
+    (리뷰 지적사항, PR #28)."""
+    session, cid = db
+    _make_upgrade_candidate(session, cid)
+    req = create_rate_request(session, cid)
+    review_rate_request(session, req.id, decision="approved", reviewed_by="officer-1")
+
+    with pytest.raises(AlreadyProcessedError):
+        review_rate_request(session, req.id, decision="approved", reviewed_by="officer-2-imposter")
+
+    session.refresh(req)
+    assert req.reviewed_by == "officer-1"
 
 
 def test_list_rate_requests_filters_by_status(db):
@@ -218,6 +238,17 @@ def test_owner_submit_request_fails_clearly_when_no_gap(db, client):
     assert res.status_code == 422
 
 
+def test_owner_submit_request_rejects_unknown_request_type_with_422(db, client):
+    """request_type이 rate_upgrade/equipment_finance가 아니면 Pydantic 단계에서 422로
+    막혀야 한다 — 이전엔 문자열 그대로 받아 DB CHECK 제약에서 처리 안 된 IntegrityError로
+    새면서 500이 됐다(리뷰 지적사항, PR #28)."""
+    session, cid = db
+    _make_upgrade_candidate(session, cid)
+
+    res = client.post(f"/owner/{cid}/rate-requests", json={"request_type": "bogus"})
+    assert res.status_code == 422
+
+
 def test_admin_approve_endpoint_always_includes_disclaimer(db, client):
     """승인 응답에 항상 비보장 문구가 포함된다(원칙6) — 여신 결정처럼 보이지 않게."""
     session, cid = db
@@ -260,6 +291,26 @@ def test_admin_approve_already_processed_request_returns_409(db, client):
         json={"reviewed_by": "officer-2"},
     )
     assert res.status_code == 409
+
+
+def test_admin_approve_already_approved_request_by_different_officer_returns_409(db, client):
+    """이미 승인된 요청을 다른 담당자가 또 승인해도 조용히 200이 아니라 409여야 한다 —
+    이전엔 같은 decision끼리는 통과돼서 두 번째 담당자가 자기 처리가 반영된 줄 착각할 수
+    있었다(리뷰 지적사항, PR #28). 원래 승인자 정보도 그대로 유지돼야 한다."""
+    session, cid = db
+    _make_upgrade_candidate(session, cid)
+    request_id = client.post(f"/owner/{cid}/rate-requests", json={"request_type": "rate_upgrade"}).json()["id"]
+    client.patch(f"/admin/rate-requests/{request_id}/approve", json={"reviewed_by": "officer-1"})
+
+    res = client.patch(
+        f"/admin/rate-requests/{request_id}/approve",
+        json={"reviewed_by": "officer-2-imposter"},
+    )
+    assert res.status_code == 409
+
+    unchanged = client.get("/admin/rate-requests").json()["requests"]
+    entry = next(r for r in unchanged if r["id"] == request_id)
+    assert entry["reviewed_by"] == "officer-1"
 
 
 def test_admin_rate_requests_queue_is_separate_from_hitl_queue(db, client):

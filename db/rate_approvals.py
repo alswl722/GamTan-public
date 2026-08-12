@@ -30,6 +30,18 @@ class NoUpgradeCandidateError(Exception):
     """결손을 채워도 등급이 오르지 않거나 결손 자체가 없어 요청 근거가 없을 때."""
 
 
+class AlreadyProcessedError(Exception):
+    """이미 처리된 요청을 다시 처리하려 할 때 — 새 decision이 이전과 같아도 예외다.
+
+    이전엔 이미 처리된 요청에 같은 decision을 다시 보내면(예: A가 승인한 걸 B가 또
+    승인) 조용히 200을 반환하며 req.reviewed_by가 A로 남아, B는 자기 처리가 반영된
+    줄 착각할 수 있었다(리뷰 지적사항, PR #28). 항상 예외로 명확히 실패시킨다."""
+
+    def __init__(self, request: "RateApprovalRequest"):
+        self.request = request
+        super().__init__(f"request_id={request.id}는 이미 {request.status} 처리됨")
+
+
 def create_rate_request(
     session: Session, company_id: int, *, request_type: str = "rate_upgrade"
 ) -> RateApprovalRequest:
@@ -92,12 +104,16 @@ def review_rate_request(
 
     decision: "approved" | "rejected". 승인도 여신 결정이 아니라 안내 대상 확정
     수동 확인일 뿐이라 disclaimer_text는 건드리지 않는다 — 이미 생성 시점에 고정됨.
+
+    이미 처리된 요청이면 새 decision이 이전과 같든 다르든 항상 AlreadyProcessedError를
+    던진다 — 원래 처리자(reviewed_by)를 그대로 보존하고, 두 번째 호출자에게는 자기
+    처리가 반영되지 않았음을 명확히 알린다.
     """
     req = session.get(RateApprovalRequest, request_id)
     if req is None:
         return None
     if req.status != "pending":
-        return req  # 이미 처리됨 — 호출부가 409로 표시
+        raise AlreadyProcessedError(req)
 
     req.status = decision
     req.reviewed_by = reviewed_by
