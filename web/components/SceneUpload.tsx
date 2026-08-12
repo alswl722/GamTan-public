@@ -403,8 +403,6 @@ export function SceneUpload({
     return entries[d].some((m) => m.status === "done");
   });
 
-  const relevantGaps = (coverage?.gaps ?? []).filter((g) => g.missing_months.length > 0);
-
   return (
     <section className="pt-4">
       <h2 className="text-[21px] font-bold leading-snug text-ink">
@@ -440,16 +438,6 @@ export function SceneUpload({
         <DocCard docType="electric_bill" />
         <DocCard docType="gas_bill" />
       </div>
-
-      {relevantGaps.length > 0 && (
-        <div className="mt-5 rounded-2xl bg-hitl/20 px-4 py-3.5 text-[12.5px] leading-relaxed text-hitl-ink">
-          {relevantGaps.map((g) => (
-            <div key={g.fuel}>
-              {g.fuel} 자료가 {g.missing_months.join(", ")}월 안 보여요 — 다음 단계에서 자세히 확인할게요
-            </div>
-          ))}
-        </div>
-      )}
 
       <button
         type="button"
