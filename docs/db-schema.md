@@ -304,7 +304,7 @@ PCAF Standard Part A Third Edition, Table 10.1-2(Annex, p.192)의 Option 1a/1b/2
 
 **IX** `ix_inventories_company_year_scope` (company_id, reporting_year, scope_group) · **CK** `ck_inventories_scope_group`, `ck_inventories_scope2_method`, `ck_inventories_scope3_status`, `ck_inventories_status`
 
-> ⚠️ 이 테이블을 채우는 집계 로직(전표별 `classifications` → 연간 Scope 합산)은 아직 없다 — PCAF 품질 엔진 담당 몫으로 남아 있음. 현재 `GET /borrowers/{company_id}/quality-assessments/{year}`는 이 테이블 없이 직접 계산한다.
+> `emission_tco2e`는 `db/pcaf_quality.py::aggregate_scope_emissions`(전표별 `classifications` → 연간 Scope 합산, kg→t)가 채운다 — `POST /borrowers/{company_id}/quality-assessments/{year}/evaluate`가 `candidate_quality_score`와 함께 매번 계산해 저장한다(v1 §4 "인벤토리 완전성 집계", 2주차 반영). 기존 `db/pcaf.py::_after_measured`(v0.1 사장님 리포트 `/pcaf/{id}`용, 연도 필터 없이 Scope 1·2 통합)와는 별개 계산 경로 — 후자는 재사용하지 않고 이 파일이 이미 하던 연도·Scope 분리 집계(§16 `assess_inventory_completeness`)와 같은 방식으로 새로 집계한다. Scope 3는 이 프로젝트가 데이터를 만들지 않아 항상 `emission_tco2e=null`, `scope3_status='not_calculated'`.
 
 ## 18. `inventory_gas_emissions` — 인벤토리의 가스별 배출량
 | 컬럼 | 타입 | 키/제약 | 설명 |
@@ -411,6 +411,7 @@ PCAF Standard Part A Third Edition, Table 10.1-2(Annex, p.192)의 Option 1a/1b/2
 - `db/pcaf.py::rate_upgrade_candidates`(전체 기업 순회, 읽기 전용 안내 목록)는 단일 기업 판정 함수 `upgrade_candidate_for_company`로 리팩터링됐다 — `rate_approval_requests` 생성 시(§22) 동일 판정 로직을 재사용해 등급 스냅샷을 저장하기 위함(로직 중복 없음).
 
 ## 변경 이력
+- 2026-08(2주차): §17 `borrower_emission_inventories.emission_tco2e`를 채우는 집계 로직(`aggregate_scope_emissions`) 추가 — 스키마 변경 없음, 계산 경로만 신규(§4 역할분담 "인벤토리 완전성 집계" 해소).
 - 2026-08(2주차): `source_document_access_logs`(§15), `rate_approval_requests`(§22) 추가 — 승인요청 큐(HITL 큐와 분리)와 원본문서 열람 감사 로그(PR #28). `0011_rate_approval_and_access_log.py` 마이그레이션.
 - 2026-08: v1 기관/PCAF 레이어(§9~21) 전면 추가, Alembic 도입 반영, PCAF 이원화 현황 명시.
 - 2026-07: `classifications.reviewed_at` 추가 — 관리자 대시보드 "검토 대기" 집계(오늘 확정/반려 건수)를 위해 담당자 확정/반려 시각을 기록. `PATCH /admin/classifications/{id}/confirm|reject`, `edit_classification`에서 기록.
