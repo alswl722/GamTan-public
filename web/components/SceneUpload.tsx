@@ -308,7 +308,7 @@ export function SceneUpload({
                   taxMode === m ? "bg-brand text-white" : "text-muted"
                 }`}
               >
-                {m === "ocr" ? "사진으로 올리기" : "홈택스 엑셀로 올리기"}
+                {m === "ocr" ? "사진·PDF" : "홈택스 엑셀"}
               </button>
             ))}
           </div>
