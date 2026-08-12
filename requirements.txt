@@ -4,7 +4,6 @@ sqlalchemy
 psycopg2-binary
 python-dotenv
 pydantic
-anthropic
 google-genai
 openpyxl
 python-multipart

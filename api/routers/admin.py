@@ -10,10 +10,20 @@
 - PATCH /admin/classifications/bulk-confirm   여러 건 일괄 확정 (건별 성공/실패 반환)
 - PATCH /admin/classifications/bulk-reject    여러 건 일괄 반려 (건별 성공/실패 반환)
 - GET   /admin/review-log                     담당자 조치 이력(감사 로그) — evidence 누적 기록을 노출
+- GET   /admin/rate-requests                  승인요청 큐 (우대금리·설비금융 — HITL과 분리된 별도 큐)
+- PATCH /admin/rate-requests/{id}/approve     승인요청 승인 (여신 결정 아님 — 안내 대상 확정)
+- PATCH /admin/rate-requests/{id}/reject      승인요청 반려
+- GET   /admin/documents/{id}                 원본문서 열람 (조회 시 접근 로그 자동 기록)
+- GET   /admin/documents/access-log           원본문서 접근 감사 로그 목록
 
 여신 결정·스코어링은 하지 않는다(CLAUDE.md §9). AI가 1차 스크리닝한 저신뢰 건을
 사람이 최종 확정하는 HITL 마감만 담당 — 금융분야 AI 가이드라인의 보조수단성 구현.
 모든 담당자 조치는 evidence 에 감사 로그로 남긴다(설명가능성 원칙).
+
+HITL 큐(분류 신뢰도 기준 — /admin/hitl)와 승인요청 큐(우대금리·설비금융 안내 —
+/admin/rate-requests)는 서로 다른 데이터·화면이다(v1 §6 2주차). 승인요청의 "승인"도
+여신 결정이 아니라 "안내 대상으로 확인했다"는 은행 담당자의 수동 확인일 뿐이며,
+응답에는 항상 비보장 문구(disclaimer_text)가 동반된다(원칙6).
 """
 from datetime import datetime, timezone
 
@@ -27,8 +37,10 @@ from api.queries import get_emission_factors, get_hitl_queue, get_unit_prices
 from db.alerts import detect_alerts
 from db.calc_engine import CalcDataGap, ClassifiedItemInput, compute_emission, \
     index_emission_factors, index_unit_prices
-from db.models import Classification, Company, TraceLog, Voucher
+from db.document_access_log import access_history, record_access, recent_access_log
+from db.models import Classification, Company, SourceDocument, TraceLog, Voucher
 from db.pcaf import portfolio_summary, rate_upgrade_candidates
+from db.rate_approvals import list_rate_requests, review_rate_request
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -329,3 +341,124 @@ def trace_runs(session: Session = Depends(get_session)):
             "result_badges": badges,
         })
     return {"runs": runs}
+
+
+# ── 승인요청 큐 (우대금리·설비금융) — HITL 큐와 분리된 별도 데이터·화면 ──────────
+
+class ReviewDecision(BaseModel):
+    """승인/반려 처리자·비고. 아직 별도 인증 체계가 없어 문자열로 직접 받는다
+    (기존 review-log가 evidence 문자열로 조치자를 남기는 것과 같은 관례)."""
+
+    reviewed_by: str
+    note: str | None = None
+
+
+def _serialize_rate_request(req) -> dict:
+    return {
+        "id": req.id,
+        "company_id": req.company_id,
+        "request_type": req.request_type,
+        "current_grade": req.current_grade,
+        "target_grade": req.target_grade,
+        "missing_summary": req.missing_summary,
+        "disclaimer_text": req.disclaimer_text,
+        "status": req.status,
+        "reviewed_by": req.reviewed_by,
+        "reviewed_at": req.reviewed_at.isoformat() if req.reviewed_at else None,
+        "review_note": req.review_note,
+        "created_at": req.created_at.isoformat() if req.created_at else None,
+    }
+
+
+@router.get("/rate-requests")
+def rate_requests(status: str | None = None, session: Session = Depends(get_session)):
+    """승인요청 큐 — 사장님이 우대금리/설비금융 안내를 요청한 건.
+
+    HITL 큐(분류 신뢰도)와 별개 데이터다 — GET /admin/hitl과 혼동하지 말 것.
+    """
+    requests = list_rate_requests(session, status=status)
+    company_names = {
+        c.id: c.name
+        for c in session.execute(select(Company)).scalars().all()
+    }
+    return {
+        "requests": [
+            {**_serialize_rate_request(r), "company_name": company_names.get(r.company_id)}
+            for r in requests
+        ]
+    }
+
+
+@router.patch("/rate-requests/{request_id}/approve")
+def approve_rate_request(
+    request_id: int, decision: ReviewDecision, session: Session = Depends(get_session)
+):
+    """승인 — 여신 결정이 아니라 "안내 대상으로 확인했다"는 담당자 수동 확인(CLAUDE.md §9).
+    응답에는 항상 disclaimer_text(비보장 문구)가 동반된다(원칙6).
+    """
+    req = review_rate_request(
+        session, request_id, decision="approved",
+        reviewed_by=decision.reviewed_by, note=decision.note,
+    )
+    if req is None:
+        raise HTTPException(status_code=404, detail=f"request_id={request_id} 없음")
+    if req.status != "approved":
+        raise HTTPException(status_code=409, detail=f"이미 {req.status} 처리된 요청입니다")
+    return _serialize_rate_request(req)
+
+
+@router.patch("/rate-requests/{request_id}/reject")
+def reject_rate_request(
+    request_id: int, decision: ReviewDecision, session: Session = Depends(get_session)
+):
+    """반려 — 사유는 review_note에 남긴다."""
+    req = review_rate_request(
+        session, request_id, decision="rejected",
+        reviewed_by=decision.reviewed_by, note=decision.note,
+    )
+    if req is None:
+        raise HTTPException(status_code=404, detail=f"request_id={request_id} 없음")
+    if req.status != "rejected":
+        raise HTTPException(status_code=409, detail=f"이미 {req.status} 처리된 요청입니다")
+    return _serialize_rate_request(req)
+
+
+# ── 원본문서 열람 + 접근 감사 로그 ───────────────────────────────────────────
+# 주의: "/documents/access-log"가 "/documents/{document_id}"보다 먼저 등록돼야 한다.
+# FastAPI는 등록 순서대로 매칭하므로, {document_id}가 먼저면 "access-log"라는
+# 문자열이 document_id로 잘못 파싱 시도된다.
+
+@router.get("/documents/access-log")
+def document_access_log(session: Session = Depends(get_session)):
+    """전체 원본문서 열람 이력 — 최근 순."""
+    return {"entries": recent_access_log(session)}
+
+
+@router.get("/documents/{document_id}")
+def view_document(
+    document_id: int, viewed_by: str, session: Session = Depends(get_session)
+):
+    """원본문서 열람 — 조회할 때마다 접근 로그를 남긴다(v1 §6 2주차).
+
+    viewed_by는 쿼리 파라미터로 받는다(별도 인증 체계 미도입 — 위 ReviewDecision과
+    같은 관례). 열람 자체는 조치가 아니므로 별도 confirm 없이 GET 시점에 즉시 기록한다.
+    """
+    doc = session.get(SourceDocument, document_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"document_id={document_id} 없음")
+
+    record_access(session, document_id, viewed_by)
+
+    return {
+        "id": doc.id,
+        "company_id": doc.company_id,
+        "document_type": doc.document_type,
+        "original_filename": doc.original_filename,
+        "document_date": doc.document_date.isoformat() if doc.document_date else None,
+        "extracted_json": doc.extracted_json,
+        "verification_status": doc.verification_status,
+        "access_history": [
+            {"accessed_by": a.accessed_by, "accessed_at": a.accessed_at.isoformat() if a.accessed_at else None}
+            for a in access_history(session, document_id)
+        ],
+    }

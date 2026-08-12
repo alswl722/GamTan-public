@@ -6,8 +6,10 @@ import type {
   AlertItem,
   BulkActionResult,
   ClassificationEdit,
+  DocumentAccessLogEntry,
   HitlItem,
   PortfolioResponse,
+  RateApprovalRequestItem,
   RateCandidateItem,
   ReviewLogEntry,
   TraceRunItem,
@@ -64,5 +66,40 @@ export function getAlerts(): Promise<AlertItem[]> {
 export function getRateCandidates(): Promise<RateCandidateItem[]> {
   return apiGet<{ candidates: RateCandidateItem[] }>("/admin/rate-candidates").then(
     (r) => r.candidates,
+  );
+}
+
+/**
+ * 승인요청 큐 — HITL 큐(GET /admin/hitl, 분류 신뢰도)와 분리된 별도 데이터·엔드포인트.
+ * status를 넘기면 그 상태만 필터(예: "pending"만 보기).
+ */
+export function getRateRequests(status?: string): Promise<RateApprovalRequestItem[]> {
+  const qs = status ? `?status=${encodeURIComponent(status)}` : "";
+  return apiGet<{ requests: RateApprovalRequestItem[] }>(`/admin/rate-requests${qs}`).then(
+    (r) => r.requests,
+  );
+}
+
+/** 승인 — 여신 결정이 아니라 "안내 대상 확인"(CLAUDE.md §9). 응답에 항상 비보장 문구 포함. */
+export function approveRateRequest(
+  requestId: number,
+  reviewedBy: string,
+  note?: string,
+): Promise<RateApprovalRequestItem> {
+  return apiPatch(`/admin/rate-requests/${requestId}/approve`, { reviewed_by: reviewedBy, note });
+}
+
+export function rejectRateRequest(
+  requestId: number,
+  reviewedBy: string,
+  note?: string,
+): Promise<RateApprovalRequestItem> {
+  return apiPatch(`/admin/rate-requests/${requestId}/reject`, { reviewed_by: reviewedBy, note });
+}
+
+/** 원본문서 접근 감사 로그 — 열람 이벤트 자체의 기록(review-log와 다른 축). */
+export function getDocumentAccessLog(): Promise<DocumentAccessLogEntry[]> {
+  return apiGet<{ entries: DocumentAccessLogEntry[] }>("/admin/documents/access-log").then(
+    (r) => r.entries,
   );
 }
