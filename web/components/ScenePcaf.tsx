@@ -68,6 +68,97 @@ const fmt = (n: number) => n.toFixed(1);
 const GRADE_TICKS = [5, 4, 3, 2, 1] as const;
 const posOfGrade = (g: number) => ((5 - g) / 4) * 100;
 
+// 매출액 추정 vs 전표 기반 실측 — 카드형 Before/After 비교(값을 화살표 문장 대신
+// 두 박스로 나란히 놓고, 오른쪽 박스 위에 변화율 배지를 단다).
+const EMISSION_BOX_MAX_H = 56;
+const EMISSION_BOX_MIN_H = 22;
+
+function EmissionBoxCompare({ beforeValue, afterValue }: { beforeValue: number; afterValue: number }) {
+  const pct = beforeValue > 0 ? Math.round(((afterValue - beforeValue) / beforeValue) * 100) : 0;
+  const pctLabel = `${pct > 0 ? "+" : ""}${pct}%`;
+
+  // 박스 높이 자체를 값에 비례시켜 "줄었다/늘었다"가 숫자를 안 읽어도 바로
+  // 보이게 한다 — 둘 다 고정 높이면 변화가 안 느껴진다. 최소 높이는 변화율
+  // 배지 텍스트가 박스 안에 들어갈 만큼은 확보한다.
+  const maxValue = Math.max(beforeValue, afterValue, 0.001);
+  const beforeH = Math.max(EMISSION_BOX_MIN_H, Math.round((beforeValue / maxValue) * EMISSION_BOX_MAX_H));
+  const afterH = Math.max(EMISSION_BOX_MIN_H, Math.round((afterValue / maxValue) * EMISSION_BOX_MAX_H));
+
+  // 값 배지(pill)·라벨은 항상 같은 위치에 고정하고, 막대만 고정 높이 트랙
+  // 안에서 아래를 기준으로 자라게 한다 — 그래야 막대 높이가 바뀌어도 글씨가
+  // 같이 밀려 올라가지/내려가지 않는다.
+  return (
+    <div className="flex flex-1 flex-col justify-center gap-2">
+      <div className="flex gap-2">
+        <div className="flex-1 text-center">
+          <span className="inline-block rounded-full bg-line px-2 py-0.5 text-[10px] font-bold text-muted">
+            {fmt(beforeValue)}t
+          </span>
+          <div
+            className="mt-1.5 flex items-end justify-center"
+            style={{ height: EMISSION_BOX_MAX_H }}
+          >
+            <div className="w-full rounded-xl bg-line" style={{ height: beforeH }} />
+          </div>
+          <div className="mt-1.5 text-[10px] font-semibold text-faint">측정 전</div>
+        </div>
+        <div className="flex-1 text-center">
+          <span className="inline-block rounded-full bg-line px-2 py-0.5 text-[10px] font-bold text-muted">
+            {fmt(afterValue)}t
+          </span>
+          <div
+            className="mt-1.5 flex items-end justify-center"
+            style={{ height: EMISSION_BOX_MAX_H }}
+          >
+            <div
+              className="flex w-full items-center justify-center rounded-xl bg-brand"
+              style={{ height: afterH }}
+            >
+              <span className="text-[10px] font-bold text-white">{pctLabel}</span>
+            </div>
+          </div>
+          <div className="mt-1.5 text-[10px] font-semibold text-muted">측정 후</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Scope1/2 + 검토 예정 건수를 세로로 쌓아 EmissionBoxCompare 옆에 컴팩트하게 배치.
+function ScopeCompact({
+  scope1,
+  scope2,
+  hitlCount,
+}: {
+  scope1: number;
+  scope2: number;
+  hitlCount: number;
+}) {
+  return (
+    <div className="flex flex-1 flex-col justify-center rounded-xl bg-bg p-3">
+      <div className="space-y-2 text-[11.5px]">
+        <div className="flex items-center justify-between">
+          <span className="flex items-center gap-1.5 text-muted">
+            <span className="h-2 w-2 rounded-full bg-scope1" /> Scope1
+          </span>
+          <span className="font-semibold text-ink">{fmt(scope1)}</span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="flex items-center gap-1.5 text-muted">
+            <span className="h-2 w-2 rounded-full bg-scope2" /> Scope2
+          </span>
+          <span className="font-semibold text-ink">{fmt(scope2)}</span>
+        </div>
+      </div>
+      {hitlCount > 0 && (
+        <div className="mt-2 rounded-md bg-hitl/25 px-2 py-1 text-center text-[10px] font-semibold text-hitl-ink">
+          검토 예정 {hitlCount}건
+        </div>
+      )}
+    </div>
+  );
+}
+
 function GradeLadder({
   before,
   after,
@@ -146,51 +237,32 @@ function FuelBreakdown({ after }: { after: After }) {
   const estimatedPct = Math.max(0, 100 - measuredPct);
 
   return (
-    <div className="mt-3 rounded-2xl bg-surface p-5">
+    <div className="flex-1 rounded-2xl bg-surface p-4">
       <div className="text-[13px] font-semibold text-ink">항목별 상세</div>
-      <p className="mt-1 text-[11.5px] leading-relaxed text-muted">
-        {after.estimated_gap_tco2e > 0 ? (
-          <>
-            전체 {fmt(after.total)}tCO₂e 중 {fmt(after.measured_tco2e)}tCO₂e는 실제 자료로
-            확인했고, {fmt(after.estimated_gap_tco2e)}tCO₂e는 자료가 없는 달을 업종 평균으로
-            채운 추정치예요.
-          </>
-        ) : (
-          <>전체 {fmt(after.total)}tCO₂e 모두 실제 자료로 확인했어요.</>
-        )}
-      </p>
 
-      <div className="mt-3 flex h-2.5 overflow-hidden rounded-full bg-bg">
+      <div className="mt-2.5 flex h-2 overflow-hidden rounded-full bg-bg">
         <div className="h-full bg-brand" style={{ width: `${measuredPct}%` }} />
         {estimatedPct > 0 && <div className="h-full bg-line" style={{ width: `${estimatedPct}%` }} />}
       </div>
-      <div className="mt-1.5 flex items-center justify-between text-[10.5px] text-faint">
-        <span className="flex items-center gap-1">
-          <span className="h-1.5 w-1.5 rounded-full bg-brand" /> 실측 {fmt(after.measured_tco2e)}
-        </span>
-        {after.estimated_gap_tco2e > 0 && (
-          <span className="flex items-center gap-1">
-            <span className="h-1.5 w-1.5 rounded-full bg-line" /> 추정 보정{" "}
-            {fmt(after.estimated_gap_tco2e)}
-          </span>
-        )}
+      <div className="mt-1 text-[10px] leading-relaxed text-faint">
+        실측 {fmt(after.measured_tco2e)}
+        {after.estimated_gap_tco2e > 0 && <> · 추정 {fmt(after.estimated_gap_tco2e)}</>}
       </div>
 
-      <div className="mt-4 space-y-2 border-t border-line pt-3">
+      <div className="mt-3 space-y-1.5 border-t border-line pt-2.5">
         {after.by_fuel.map((row) => (
-          <div key={row.fuel} className="flex items-center justify-between text-[12.5px]">
+          <div key={row.fuel} className="flex items-center justify-between text-[11.5px]">
             <span className="text-muted">{row.fuel}</span>
-            <span className="flex items-center gap-1.5">
-              <span className="font-semibold text-ink">{fmt(row.total_tco2e)}tCO₂e</span>
-              {row.estimated_tco2e > 0 && (
-                <span className="rounded-md bg-line px-1.5 py-0.5 text-[10px] font-semibold text-muted">
-                  추정 포함
-                </span>
-              )}
+            <span className="font-semibold text-ink">
+              {fmt(row.total_tco2e)}
+              {row.estimated_tco2e > 0 && <span className="text-faint">*</span>}
             </span>
           </div>
         ))}
       </div>
+      {after.by_fuel.some((row) => row.estimated_tco2e > 0) && (
+        <div className="mt-2 text-[9.5px] text-faint">* 추정 보정 포함</div>
+      )}
     </div>
   );
 }
@@ -216,9 +288,6 @@ function MonthlyTrendChart({ monthly }: { monthly: After["monthly"] }) {
   return (
     <div className="mt-3 rounded-2xl bg-surface p-5">
       <div className="text-[13px] font-semibold text-ink">월별 배출 추이</div>
-      <p className="mt-1 text-[11.5px] leading-relaxed text-muted">
-        자료가 있는 달만 실측치로 그려요. 빈 칸은 아직 연동 안 된 달이에요.
-      </p>
 
       <div
         className="mt-4 flex items-end justify-between gap-1"
@@ -307,6 +376,43 @@ function DistributionTrack({
         <span>상위</span>
         <span>하위</span>
       </div>
+    </div>
+  );
+}
+
+// 항목별 상세와 좌우로 짝지어지는 컴팩트 벤치마크 카드.
+function BenchmarkCard({
+  benchmark,
+  hasDistribution,
+}: {
+  benchmark: Benchmark;
+  hasDistribution: boolean;
+}) {
+  return (
+    <div className="flex flex-1 flex-col rounded-2xl bg-surface p-4">
+      {hasDistribution ? (
+        <>
+          <p className="truncate text-[13px] font-semibold text-ink">
+            동종 {benchmark.industry_name ?? benchmark.industry_code} 대비
+          </p>
+          {/* 제목은 항목별 상세와 같은 높이(맨 위)에 고정하고, 나머지(퍼센트+막대)는
+              남는 세로 공간 안에서 가운데로 — 그래야 옆 카드가 더 길어도 막대가
+              카드 위쪽에 붕 떠 있지 않는다. */}
+          <div className="flex flex-1 flex-col justify-center">
+            <p className="text-[14px] font-bold text-ink">
+              상위 <span className="text-brand-ink">{benchmark.percentile_pct}%</span>
+            </p>
+            <DistributionTrack min={benchmark.min!} max={benchmark.max!} value={benchmark.value!} />
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="text-[13px] font-semibold text-ink">동종 업종 벤치마킹</div>
+          <p className="mt-1.5 text-[11.5px] leading-relaxed text-muted">
+            분류 실행 후 산출돼요.
+          </p>
+        </>
+      )}
     </div>
   );
 }
@@ -411,11 +517,8 @@ export function ScenePcaf() {
       <h2 className="text-[17px] font-bold leading-snug text-ink">
         측정이 끝났어요
       </h2>
-      <p className="mt-1 text-[13px] leading-relaxed text-muted">
-        기존 매출 추정 대비 데이터 품질이 얼마나 좋아졌는지 보여드려요.
-      </p>
 
-      {/* 등급 사다리 — 배출량 수치가 아니라 "5칸 중 어디로 이동했는지"를 직접 보여준다 */}
+      {/* 등급 사다리 — 결과의 핵심이라 원래 크기(전체 폭)를 유지한다. */}
       <div className="mt-5 space-y-4 rounded-2xl bg-surface p-5">
         {after ? (
           <GradeLadder before={before.grade} after={after.grade} improvedBy={gradeUp} />
@@ -432,62 +535,22 @@ export function ScenePcaf() {
           </>
         )}
         {after && (
-          <div className="space-y-1.5 border-t border-line pt-3 text-[11.5px] text-muted">
-            <div>
-              매출액 추정 {fmt(before.emission_tco2e)}tCO₂e → 전표 기반 실측{" "}
-              <span className="font-semibold text-ink">{fmt(after.total)}tCO₂e</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span>
-                Scope1 <span className="font-semibold text-ink">{fmt(after.scope1)}</span> · Scope2{" "}
-                <span className="font-semibold text-ink">{fmt(after.scope2)}</span>
-              </span>
-              {after.hitl_count > 0 && (
-                <span className="rounded-md bg-hitl/25 px-2 py-0.5 font-semibold text-hitl-ink">
-                  검토 예정 {after.hitl_count}건
-                </span>
-              )}
-            </div>
+          <div className="flex gap-3 border-t border-line pt-3">
+            <EmissionBoxCompare beforeValue={before.emission_tco2e} afterValue={after.total} />
+            <ScopeCompact scope1={after.scope1} scope2={after.scope2} hitlCount={after.hitl_count} />
           </div>
         )}
       </div>
 
-      {after && <FuelBreakdown after={after} />}
-      {after && <MonthlyTrendChart monthly={after.monthly} />}
-
-      <div className="mt-3 rounded-2xl bg-surface p-5">
-        {hasDistribution ? (
-          <>
-            <p className="text-[12px] font-semibold text-muted">
-              동종 {benchmark.industry_name ?? benchmark.industry_code} 대비
-              배출량
-            </p>
-            <p className="mt-0.5 text-[16px] font-bold text-ink">
-              상위 <span className="text-brand-ink">{benchmark.percentile_pct}%</span>
-              입니다
-            </p>
-            <DistributionTrack
-              min={benchmark.min!}
-              max={benchmark.max!}
-              value={benchmark.value!}
-            />
-            {benchmark.hint && (
-              <p className="mt-3 text-[12.5px] leading-relaxed text-muted">
-                {benchmark.hint}
-              </p>
-            )}
-          </>
-        ) : (
-          <>
-            <div className="text-[12px] font-semibold text-muted">
-              동종 업종 벤치마킹 · {benchmark.industry_name ?? benchmark.industry_code}
-            </div>
-            <p className="mt-1.5 text-[13px] leading-relaxed text-muted">
-              벤치마킹은 분류 실행 후 산출됩니다.
-            </p>
-          </>
-        )}
+      {/* 벤치마크 + 항목별 상세를 좌우로 배치해 한 화면에 같이 들어오게 한다.
+          항목별 상세는 분류 실행 전엔 보여줄 게 없어 그때는 벤치마크 카드
+          (아직 산출 전 안내) 혼자 폭을 채운다. */}
+      <div className="mt-3 flex gap-3">
+        <BenchmarkCard benchmark={benchmark} hasDistribution={hasDistribution} />
+        {after && <FuelBreakdown after={after} />}
       </div>
+
+      {after && <MonthlyTrendChart monthly={after.monthly} />}
 
       {alerts.length > 0 && (
         <div className="mt-3 space-y-2 rounded-2xl bg-surface p-5">
