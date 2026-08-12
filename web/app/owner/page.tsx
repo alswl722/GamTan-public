@@ -114,7 +114,7 @@ export default function OwnerHomePage() {
         className="btn-cta group mt-5 block rounded-3xl bg-surface px-5 py-5 shadow-card transition-transform"
       >
         <span className="flex items-center justify-between gap-2">
-          <span className="max-w-[50%] text-[16.5px] font-extrabold leading-snug text-ink">
+          <span className="max-w-[58%] text-[19px] font-extrabold leading-snug text-ink">
             우리 기업 탄소 배출량을
             <br />
             확인해보세요
