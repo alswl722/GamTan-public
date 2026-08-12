@@ -9,3 +9,5 @@ openpyxl
 python-multipart
 pytest
 alembic
+pdfplumber
+reportlab
