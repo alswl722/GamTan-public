@@ -1,4 +1,4 @@
-"""PCAF 품질평가 API — Business Loans and Unlisted Equity 데이터 품질 후보.
+"""PCAF 품질평가 API — Business Loans and Unlisted Equity 데이터 품질 후보 + 인벤토리 집계.
 
 기존 /pcaf/{company_id}(장면④ Before/After)는 그대로 유지한다. 이 라우터는
 새 스키마(BorrowerEmissionInventory, PcafQualityRule) 기반의 병행 경로다
@@ -6,6 +6,11 @@
 
 - GET  /borrowers/{company_id}/quality-assessments/{year}            최신 인벤토리 조회
 - POST /borrowers/{company_id}/quality-assessments/{year}/evaluate   재산정 + 새 버전 저장
+
+evaluate는 품질 후보(candidate_quality_score)뿐 아니라 실제 연간 Scope 배출량
+(emission_tco2e, db/pcaf_quality.py::aggregate_scope_emissions)도 함께 계산해
+저장한다 — 전에는 candidate_quality_score만 채우고 emission_tco2e는 항상 null로
+남아 있었다(v1 §4 "인벤토리 완전성 집계", docs/db-schema.md §17 노트 해소).
 
 여신 결정은 하지 않는다(CLAUDE.md §9). status는 항상 candidate — 은행 담당자 승인
 전에는 자동 확정하지 않는다.
@@ -16,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from api.db import get_session
 from db.models import BorrowerEmissionInventory, Company, OrganizationalBoundary, PcafQualityRule
-from db.pcaf_quality import assess_borrower_emission_quality
+from db.pcaf_quality import aggregate_scope_emissions, assess_borrower_emission_quality
 
 router = APIRouter(prefix="/borrowers", tags=["quality"])
 
@@ -134,12 +139,17 @@ def evaluate_quality_assessment(company_id: int, year: int, session: Session = D
             .order_by(BorrowerEmissionInventory.version.desc())
         ).scalars().first()
 
+        emissions = aggregate_scope_emissions(session, company_id, year, scope)
+
         inventory = BorrowerEmissionInventory(
             financial_institution_id=boundary.financial_institution_id,
             company_id=company_id,
             reporting_year=year,
             organizational_boundary_id=boundary.id,
             scope_group=scope,
+            emission_tco2e=emissions["emission_tco2e"],
+            scope3_status=emissions["scope3_status"],
+            verified=emissions["verified"],
             completeness_pct=assessment["completeness_pct"],
             candidate_quality_score=assessment["candidate_score"],
             candidate_quality_rule_id=rule_id,
@@ -161,6 +171,8 @@ def _serialize(inventory: BorrowerEmissionInventory) -> dict:
         "company_id": inventory.company_id,
         "reporting_year": inventory.reporting_year,
         "scope_group": inventory.scope_group,
+        "emission_tco2e": inventory.emission_tco2e,
+        "scope3_status": inventory.scope3_status,
         "candidate_score": inventory.candidate_quality_score,
         "status": inventory.status,
         "rule_id": inventory.candidate_quality_rule_id,

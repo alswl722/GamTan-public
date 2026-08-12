@@ -29,6 +29,7 @@ from db.models import (
     Voucher,
 )
 from db.pcaf_quality import (
+    aggregate_scope_emissions,
     assess_borrower_emission_quality,
     assess_inventory_completeness,
     classify_activity_data_method,
@@ -283,6 +284,61 @@ def test_no_activity_data_yields_no_candidate_with_limitation(db):
     assert result["limitations"]
 
 
+# ── aggregate_scope_emissions (v1 §4 "인벤토리 완전성 집계") ─────────────────
+def test_aggregate_scope_emissions_sums_kg_to_tco2e(db):
+    """전표별 classifications의 emission_co2e(kg) 합산 → tCO2e — 실제 배출량 산출.
+    BorrowerEmissionInventory.emission_tco2e를 채우는 유일한 계산 경로다."""
+    session, cid = db
+    for m in range(1, 4):  # 3개월 × 500.0 kgCO2e = 1500 kg = 1.5 tCO2e
+        _add_voucher(session, cid, m, "도시가스", quantity=100)
+
+    result = aggregate_scope_emissions(session, cid, YEAR, "scope_1")
+    assert result["emission_tco2e"] == 1.5
+    assert result["scope3_status"] is None
+
+
+def test_aggregate_scope_emissions_excludes_rejected_classifications(db):
+    """담당자가 반려한 건은 신뢰할 수 없는 분류라 집계에서 제외한다
+    (db/pcaf.py::_after_measured와 동일 규칙)."""
+    session, cid = db
+    _add_voucher(session, cid, 1, "도시가스", quantity=100, status="auto")
+    _add_voucher(session, cid, 2, "도시가스", quantity=100, status="rejected")
+
+    result = aggregate_scope_emissions(session, cid, YEAR, "scope_1")
+    assert result["emission_tco2e"] == 0.5  # 1건만 반영(500kg)
+
+
+def test_aggregate_scope_emissions_scope1_and_scope2_are_independent(db):
+    """Scope 1(가스)과 Scope 2(전기)는 서로 다른 값으로 독립 집계된다."""
+    session, cid = db
+    _add_voucher(session, cid, 1, "도시가스", quantity=100, scope=1)
+    _add_voucher(session, cid, 1, "전기요금", scope=2)
+    _add_voucher(session, cid, 2, "전기요금", scope=2)
+
+    scope1 = aggregate_scope_emissions(session, cid, YEAR, "scope_1")
+    scope2 = aggregate_scope_emissions(session, cid, YEAR, "scope_2")
+    assert scope1["emission_tco2e"] == 0.5
+    assert scope2["emission_tco2e"] == 1.0
+
+
+def test_aggregate_scope_emissions_no_data_yields_null_not_zero(db):
+    """해당 Scope 전표가 아예 없으면 emission_tco2e=None — 0으로 채우지 않는다(원칙9)."""
+    session, cid = db
+    result = aggregate_scope_emissions(session, cid, YEAR, "scope_1")
+    assert result["emission_tco2e"] is None
+
+
+def test_aggregate_scope_emissions_scope3_always_null_not_calculated(db):
+    """Scope 3는 이 프로젝트가 데이터를 만들지 않으므로 항상 None + not_calculated."""
+    session, cid = db
+    for m in range(1, 13):
+        _add_voucher(session, cid, m, "도시가스", quantity=100)
+
+    result = aggregate_scope_emissions(session, cid, YEAR, "scope_3")
+    assert result["emission_tco2e"] is None
+    assert result["scope3_status"] == "not_calculated"
+
+
 # ── build_quality_evidence ───────────────────────────────────────────────────
 def test_quality_evidence_includes_rule_source_reference(db):
     """basis에 적용 옵션의 원문 근거(source_reference)가 포함된다 — 판정 근거 역추적 가능."""
@@ -338,6 +394,24 @@ def test_evaluate_endpoint_persists_and_versions(api_client):
     get_res = client.get(f"/borrowers/{cid}/quality-assessments/{YEAR}")
     assert get_res.status_code == 200
     assert all(a["version"] == 2 for a in get_res.json()["assessments"])
+
+
+def test_evaluate_endpoint_persists_emission_tco2e(api_client):
+    """evaluate가 candidate_quality_score뿐 아니라 실제 연간 Scope 배출량
+    (emission_tco2e)도 함께 계산·저장한다 — v1 §4 "인벤토리 완전성 집계".
+    전에는 emission_tco2e가 항상 null로 남아 있었다(docs/db-schema.md §17 노트)."""
+    client, session, cid = api_client
+
+    for m in range(1, 13):
+        _add_voucher(session, cid, m, "도시가스", quantity=100)  # 12개월 × 500kg = 6.0 tCO2e
+
+    res = client.post(f"/borrowers/{cid}/quality-assessments/{YEAR}/evaluate")
+    assert res.status_code == 200, res.text
+    scope1 = next(a for a in res.json()["assessments"] if a["scope_group"] == "scope_1")
+    assert scope1["emission_tco2e"] == 6.0
+
+    scope2 = next(a for a in res.json()["assessments"] if a["scope_group"] == "scope_2")
+    assert scope2["emission_tco2e"] is None  # 전기 전표 없음 — 0이 아니라 null
 
 
 def test_evaluate_basis_persisted_and_recoverable_via_get(api_client):
