@@ -366,6 +366,39 @@ class SourceDocumentAccessLog(Base):
     )
 
 
+class DocumentIngestionFailure(Base):
+    """업로드 반려·실패 이력 (v1 Tier 2 "품질 이슈 로그", owner-admin-flow-spec.md §7).
+
+    api/document_ingestion.py::ingest_uploaded_document()가 예외(DuplicateDocumentError,
+    MissingInstitutionAttributionError, HometaxExcelFormatError, DocumentParseError)를
+    던지면 그 순간 아무 것도 DB에 안 남고 HTTP 응답으로만 실패가 전달됐다 — 관리자가
+    "왜, 얼마나 자주 업로드가 실패하는지" 추적할 방법이 없었다. 이 테이블은 그 실패
+    자체를 기록한다(성공한 업로드는 SourceDocument로 이미 남으므로 여기 안 남는다).
+
+    company_id는 nullable — MissingInstitutionAttributionError처럼 기관 귀속 판정 전
+    단계에서 실패해도 기록은 남겨야 한다(company_id 자체는 항상 알 수 있어 실제로는
+    항상 채워지지만, 미래의 실패 유형을 대비해 스키마를 강제하지 않는다).
+    """
+    __tablename__ = "document_ingestion_failures"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    company_id = Column(Integer, ForeignKey("companies.id"))
+    document_type = Column(String(50))
+    original_filename = Column(String(255))
+    failure_reason = Column(String(30), nullable=False)
+    # duplicate | missing_institution | excel_format | parse_error
+    detail = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=now)
+
+    __table_args__ = (
+        CheckConstraint(
+            "failure_reason IN ('duplicate', 'missing_institution', 'excel_format', 'parse_error')",
+            name="ck_document_ingestion_failures_reason",
+        ),
+        Index("ix_document_ingestion_failures_company", "company_id"),
+    )
+
+
 class RateApprovalRequest(Base):
     """우대금리·설비금융 안내 승인요청 큐 (v1 §6 2주차).
 

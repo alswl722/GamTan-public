@@ -30,6 +30,7 @@ from db.document_text_extractor import DocumentParseError
 from db.hometax_excel_parser import HometaxExcelFormatError
 from db.models import Company
 from db.pcaf import upgrade_candidate_for_company
+from db.quality_issues import record_ingestion_failure
 from db.rate_approvals import (
     CompanyNotFoundError,
     DISCLAIMER_TEXT,
@@ -110,21 +111,38 @@ async def upload_document(
     # (db/document_text_extractor.py). 못 읽으면 422로 명확히 실패한다.
 
     file_bytes = await file.read()
+    filename = file.filename or "upload"
     try:
         return ingest_uploaded_document(
-            session, company_id, file_bytes, file.filename or "upload",
+            session, company_id, file_bytes, filename,
             document_type, mode=mode, year=year, month=month,
         )
     except DuplicateDocumentError as e:
+        record_ingestion_failure(
+            session, company_id, document_type=document_type, original_filename=filename,
+            failure_reason="duplicate", detail=str(e),
+        )
         raise HTTPException(status_code=409, detail=str(e))
     except MissingInstitutionAttributionError as e:
+        record_ingestion_failure(
+            session, company_id, document_type=document_type, original_filename=filename,
+            failure_reason="missing_institution", detail=str(e),
+        )
         raise HTTPException(status_code=422, detail=str(e))
     except HometaxExcelFormatError as e:
         # 실패 가시성 원칙 — 파싱 실패를 목업 데이터로 가리지 않고 그대로 안내(CLAUDE.md §6)
+        record_ingestion_failure(
+            session, company_id, document_type=document_type, original_filename=filename,
+            failure_reason="excel_format", detail=str(e),
+        )
         raise HTTPException(status_code=422, detail=str(e))
     except DocumentParseError as e:
         # 문서에서 날짜·금액을 못 읽었거나(화질 불량 등) 엉뚱한 칸에 업로드된 경우 —
         # 같은 실패 가시성 원칙, 값을 지어내지 않고 사유를 그대로 보여준다.
+        record_ingestion_failure(
+            session, company_id, document_type=document_type, original_filename=filename,
+            failure_reason="parse_error", detail=str(e),
+        )
         raise HTTPException(status_code=422, detail=str(e))
 
 

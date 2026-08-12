@@ -9,6 +9,7 @@ import type {
   DocumentAccessLogEntry,
   HitlItem,
   PortfolioResponse,
+  QualityIssueEntry,
   RateApprovalRequestItem,
   RateCandidateItem,
   ReviewLogEntry,
@@ -102,4 +103,15 @@ export function getDocumentAccessLog(): Promise<DocumentAccessLogEntry[]> {
   return apiGet<{ entries: DocumentAccessLogEntry[] }>("/admin/documents/access-log").then(
     (r) => r.entries,
   );
+}
+
+/** 품질 이슈 로그(열람 전용) — 업로드 반려·실패 이력만 모은다(v1 Tier 2). */
+export function getQualityIssues(): Promise<QualityIssueEntry[]> {
+  return apiGet<{ issues: QualityIssueEntry[] }>("/admin/quality-issues").then((r) => r.issues);
+}
+
+/** 감사 대응 근거 패키지 CSV 내보내기 URL — 다운로드 링크로 그대로 사용(fetch 불필요). */
+export function auditPackageCsvUrl(companyId: number, year: number): string {
+  const base = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+  return `${base}/admin/audit-package?company_id=${companyId}&year=${year}&format=csv`;
 }

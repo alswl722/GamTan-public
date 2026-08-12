@@ -6,6 +6,7 @@ import type {
   DocumentAccessLogEntry,
   HitlItem,
   PortfolioResponse,
+  QualityIssueEntry,
   RateApprovalRequestItem,
   RateCandidateItem,
   ReviewLogEntry,
@@ -15,9 +16,11 @@ import { cn } from "@/lib/utils";
 import { AlertsPanel } from "@/components/admin/AlertsPanel";
 import { ApprovalQueue } from "@/components/admin/ApprovalQueue";
 import { AuditLog } from "@/components/admin/AuditLog";
+import { AuditPackage } from "@/components/admin/AuditPackage";
 import { DocumentAccessLog } from "@/components/admin/DocumentAccessLog";
 import { GradeDonut } from "@/components/admin/GradeDonut";
 import { HitlWorkspace } from "@/components/admin/HitlWorkspace";
+import { QualityIssueLog } from "@/components/admin/QualityIssueLog";
 import { RateCandidates } from "@/components/admin/RateCandidates";
 import { TraceHistory } from "@/components/admin/TraceHistory";
 import { VerificationBadge } from "@/components/admin/VerificationBadge";
@@ -29,6 +32,8 @@ const TABS = [
   { id: "approvals", label: "승인요청" },
   { id: "trace", label: "실행 이력" },
   { id: "audit", label: "변경 이력" },
+  { id: "quality-issues", label: "품질 이슈" },
+  { id: "audit-package", label: "감사 대응" },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -42,6 +47,7 @@ export interface DashboardShellProps {
   rateCandidates: RateCandidateItem[];
   rateRequests: RateApprovalRequestItem[];
   documentAccessLog: DocumentAccessLogEntry[];
+  qualityIssues: QualityIssueEntry[];
   /** 담당자 검토 탭에서 확정/반려가 성공할 때마다 호출 — 변경 이력을 최신으로 다시 불러온다. */
   onReviewed?: () => void;
 }
@@ -98,6 +104,7 @@ export function DashboardShell({
   rateCandidates,
   rateRequests,
   documentAccessLog,
+  qualityIssues,
   onReviewed,
 }: DashboardShellProps) {
   const [activeTab, setActiveTab] = useState<TabId>("hitl");
@@ -179,6 +186,18 @@ export function DashboardShell({
             <div className="min-h-0">
               <DocumentAccessLog entries={documentAccessLog} />
             </div>
+          </div>
+        )}
+
+        {activeTab === "quality-issues" && (
+          <div className="h-full p-4">
+            <QualityIssueLog issues={qualityIssues} />
+          </div>
+        )}
+
+        {activeTab === "audit-package" && (
+          <div className="h-full p-4">
+            <AuditPackage companies={portfolio.companies} />
           </div>
         )}
       </div>

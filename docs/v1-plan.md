@@ -27,10 +27,13 @@ Scope: 2026년 8월 v1 구현·검증·시연 일정
 > - 개발자 A: OCR mock → 실제 PDF 텍스트 추출 교체 **완료·병합** — PR #34, §5-3 참고.
 >   §5-2에서 "OCR은 결정론적 mock"이라 남겼던 전제가 실물 데이터 확인(텍스트 레이어 PDF임을
 >   확인)으로 해소됨.
+> - 개발자 B: Tier 2 조기 착수 — 품질 이슈 로그(업로드 반려·실패 이력) + 감사 대응 근거
+>   패키지(기업·기간별 시계열 원자료 조회, CSV 내보내기) **구현 완료, PR 대기**.
+>   상세는 §7-1 참고. CSV만 우선 구현, PDF 서술형 감사보고서는 범위 밖.
 > - **남은 것**: 2주차 A 항목(K택소노미·설비투자 필드, `ScenePcaf.tsx`를 정식 PCAF 엔진
 >   `db/pcaf_quality.py`로 교체)이 아직 미착수 — 코드 확인 결과 `db/models.py`에 K택소노미
 >   필드 없음, `ScenePcaf.tsx`는 여전히 `/pcaf/{id}`(구 엔진) 호출 중. 아래 §6 표 참고.
-> - `dev` 최신 기준 `pytest` 174 passed, 3 skipped(라이브 DB 파괴적 테스트만 스킵, 회귀 없음.
+> - `dev` 최신 기준 `pytest` 185 passed, 3 skipped(라이브 DB 파괴적 테스트만 스킵, 회귀 없음.
 >   `pdfplumber`·`reportlab` 신규 의존성은 `pip install -r requirements.txt` 재실행 필요).
 
 > 기준 브랜치: `dev` (병합 대상: `feat/db-alembic-migration`)
@@ -364,6 +367,31 @@ PR #28/#29 리뷰 대응 중 발견된, 이번 작업과 무관한 기존 실패
 후보 있음/없음 두 분기 모두 `tests/test_rate_approval_queue.py`가 커버.
 
 PR: https://github.com/noeyish/GamTan/pull/31 (`feat/owner-rate-request-ui` → `dev`, **병합 완료**)
+
+---
+
+## 7-1. Tier 2 조기 착수 — 품질 이슈 로그 + 감사 대응 근거 패키지 (구현 완료, PR 대기)
+
+`docs/owner-admin-flow-spec.md` §7(품질 이슈 로그)·§8(감사 대응 근거 패키지)를 3주차를
+기다리지 않고 조기 착수. A의 2주차 잔여 작업(K택소노미 필드)과 독립적이라 먼저 진행.
+
+- **품질 이슈 로그**: 신규 테이블 `DocumentIngestionFailure`(`0012_document_ingestion_failures.py`).
+  `api/document_ingestion.py::ingest_uploaded_document()`가 던지는 예외(중복·기관귀속
+  미완료·엑셀형식오류·PDF판독실패)가 이전엔 HTTP 응답으로만 전달되고 DB엔 아무 것도
+  안 남았다 — `db/quality_issues.py::record_ingestion_failure()`로 owner 업로드
+  라우터의 각 except 블록에서 기록하도록 연결. 성공한 업로드는 `SourceDocument`로 이미
+  남으므로 이 테이블엔 실패만 쌓인다. `GET /admin/quality-issues`(열람 전용).
+- **감사 대응 근거 패키지**: 신규 테이블 없음 — `db/audit_package.py::build_audit_package()`가
+  기존 `trace_logs` + `classifications.evidence` + `vouchers`를 기업·연도(월 범위 옵션)
+  기준으로 조인해 시계열(`entries`)로 반환. `GET /admin/audit-package?company_id=&year=`
+  (JSON), `&format=csv`로 원자료 CSV 다운로드. **PDF 서술형 감사보고서는 이번 범위 밖**
+  (reportlab은 이미 requirements에 있어 후속 작업으로 부담 적음).
+- 관리자 대시보드에 탭 2개 신설: "품질 이슈"(`QualityIssueLog.tsx`), "감사 대응"
+  (`AuditPackage.tsx` — 기업 선택 드롭다운 + 연도 입력 + 조회 + CSV 다운로드 링크).
+- 테스트: `tests/test_quality_issue_and_audit_package.py` 15건(순수 로직 8 + API 라우터 4
+  + 통합 3) + 기존 `test_owner_document_upload.py`에 실패 기록 검증 1건 추가. 전체
+  `pytest` 185 passed. 프론트 `tsc --noEmit`·`next build` 통과.
+- PR: 아직 미생성 — 브랜치 `feat/quality-issue-log-and-audit-package`.
 
 ---
 
