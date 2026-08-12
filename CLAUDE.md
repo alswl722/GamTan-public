@@ -22,7 +22,7 @@
 | 레이어 | 스택 |
 | --- | --- |
 | 백엔드 | FastAPI (Python), SQLAlchemy ORM, **Alembic**(스키마 마이그레이션 — `alembic/versions/`, `Base.metadata.create_all`이나 수동 `ALTER TABLE` 직접 사용 금지) |
-| 프론트 | Next.js, 라우트 2개: `/owner`(사장님, 5단계 위저드) `/admin`(관리자) |
+| 프론트 | Next.js, 라우트 2개: `/owner`(사장님 앱 — 기업 선택기 있는 메인 화면, 위저드 본체는 `/owner/measure`) `/admin`(관리자) |
 | DB | **Supabase (PostgreSQL)**, 팀 공유 개발 DB — SQLAlchemy로 직접 접속. Supabase Auth/Storage/자동 REST **사용 금지** (예외: 트레이스 뷰 Realtime 구독만 선택 허용, 안 되면 2초 폴링) |
 | LLM | 전표 분류(도구②): **Gemini API**(google-genai, gemini-3.5-flash, structured output JSON). 에이전트 오케스트레이터: **코드 우선** — 결정론적 단계 진행 + 이상치 판단만 Gemini(google-genai, 동일 모델) 호출 |
 | 구조 | 모노레포, Docker Compose (앱만 — DB 컨테이너 없음). `docker compose up` — api는 호스트 8010→컨테이너 8000, web은 호스트 3010→컨테이너 3000(다른 프로젝트 포트 충돌 방지) |
@@ -34,7 +34,7 @@
 - 무료 티어 자동 pause 있음 → GitHub Actions 1일 1회 핑 쿼리
 - **공유 DB이므로 여러 명이 동시에 접속한다.** `alembic upgrade/downgrade`를 포함한 모든 DDL은 팀 전체에 즉시 영향을 준다 — 적용 전 사용자 확인 필수, 로컬 마이그레이션 파일을 만든 뒤에도 커밋·푸시를 미루지 말 것(리비전 번호 충돌 방지)
 
-## 4. DB 테이블 (20개)
+## 4. DB 테이블 (22개)
 
 세부 컬럼·제약은 정본 `db/models.py`, 사람이 읽기 쉬운 표는 `docs/db-schema.md` 참고. 두 세대로 나뉜다.
 
@@ -49,7 +49,7 @@
 7. `llm_cache` — 전표 텍스트 해시 → LLM 응답 (정식 기능: 비용·재현성)
 8. `industry_distributions` — 업종별 배출량 분포 (min/median/max, 벤치마킹·이상치 검증용)
 
-**v1 기관/PCAF 레이어 (12개)** — 여신 포트폴리오 단위 PCAF Business Loans 산정을 위해 추가.
+**v1 기관/PCAF 레이어 (14개)** — 여신 포트폴리오 단위 PCAF Business Loans 산정 + 관리자 안내/감사 레이어.
 
 9. `financial_institutions` — 금융기관, 데이터 격리(tenant)의 루트
 10. `institution_users` — 기관 소속 사용자, 역할 기반 권한
@@ -57,12 +57,14 @@
 12. `portfolios` — 기관별 기업대출 포트폴리오 스냅숏
 13. `organizational_boundaries` — 차주 조직범위 기준정보
 14. `source_documents` — 원본 증빙 문서(세금계산서·고지서·마이데이터 응답 등), `(company_id, file_hash)` 유니크로 중복 적재 방지 — **하이브리드 데이터 입력의 공통 착지점**
-15. `pcaf_quality_rules` — PCAF Standard Part A Third Edition Table 10.1-2 옵션 체계(1a~3c) 참조 테이블
-16. `borrower_emission_inventories` — 차주 연간 Scope별 배출량 (Scope 3 미산정은 0이 아니라 null)
-17. `inventory_gas_emissions` — 인벤토리의 가스별(7대 온실가스) 배출량
-18. `business_loan_exposures` — 포트폴리오의 기업대출 익스포저 (비상장 중소기업 일반 목적 대출만 지원)
-19. `borrower_financials` — 차주 재무정보 (PCAF total debt는 총부채와 혼용 금지)
-20. `fx_rates` — 환율
+15. `source_document_access_logs` — 원본문서 열람 감사 로그(누가 언제 열람했는지 — 분류 확정/반려 조치 기록과는 다른 축, v1 2주차)
+16. `pcaf_quality_rules` — PCAF Standard Part A Third Edition Table 10.1-2 옵션 체계(1a~3c) 참조 테이블
+17. `borrower_emission_inventories` — 차주 연간 Scope별 배출량 (Scope 3 미산정은 0이 아니라 null, `emission_tco2e`는 `db/pcaf_quality.py::aggregate_scope_emissions`가 채움)
+18. `inventory_gas_emissions` — 인벤토리의 가스별(7대 온실가스) 배출량
+19. `business_loan_exposures` — 포트폴리오의 기업대출 익스포저 (비상장 중소기업 일반 목적 대출만 지원)
+20. `borrower_financials` — 차주 재무정보 (PCAF total debt는 총부채와 혼용 금지)
+21. `fx_rates` — 환율
+22. `rate_approval_requests` — 우대금리·설비금융 안내 승인요청 큐 (사장님 요청 → 은행 담당자 승인/반려, 여신 결정 아님 — 원칙10)
 
 ## 5. 핵심 설계 원칙 (위반 금지)
 
@@ -105,7 +107,7 @@
 
 - `/mock/hometax`, `/mock/kepco` — 세금계산서·전기고지서 mock, v0.1부터 유지. 시연 기업 12개월치 전표 반환. ⚠️ **3~5월 도시가스 전표는 의도적으로 결손시킬 것** — 결손 감지 킬러씬 트리거, 빼먹으면 시연 불가. 7월 전표에 "지게차 경유 외 1종" 포함(분류 킬러씬용)
 - **마이데이터 5종 mock**(`POST /mock/{source}/{company_id}`, `api/mydata_kyb_mock.py`) — 사업자등록증명·부가세과세표준증명·표준재무제표증명·중소기업확인서·전기요금납부내역. **전부 기업 식별·재무 프로필용이며 배출량 계산과 무관** — 표준재무제표증명만 `borrower_financials`에 매핑, 나머지는 `source_documents`에만 적재. 한전·가스공사 마이데이터에는 사용량(kWh 등)이 없어 배출량 계산에 못 쓴다는 게 확인된 사실 — 그래서 아래 업로드 3종이 별도로 존재한다.
-- **업로드 3종**(`POST /owner/{company_id}/documents/upload`, `api/document_ingestion.py`) — 세금계산서(사진/PDF OCR 또는 홈택스 엑셀 택1)·전기요금고지서·도시가스고지서. `source_documents` → 에너지 관련 타입만 `vouchers`로 변환 → **기존 분류·계산 파이프라인을 그대로 재사용**한다. OCR은 현재 결정론적 mock(`db/document_extraction.py`, 파일 해시 시드) — 함수 경계만 고정, 실 OCR·로컬 모델 교체는 추후.
+- **업로드 3종**(`POST /owner/{company_id}/documents/upload`, `api/document_ingestion.py`) — 세금계산서(사진/PDF OCR 또는 홈택스 엑셀 택1)·전기요금고지서·도시가스고지서. `source_documents` → 에너지 관련 타입만 `vouchers`로 변환 → **기존 분류·계산 파이프라인을 그대로 재사용**한다. "OCR"은 실제로는 `db/document_text_extractor.py`가 PDF 텍스트 레이어에서 문서종류·날짜·금액·수량을 정규식으로 읽는다(회계 담당 업로드 서류가 스캔 이미지가 아니라 reportlab로 그린 텍스트 PDF라 비전 모델 없이 가능) — 실패하면(비-PDF·형식 다름) `year`/`month`가 명시된 경우만 `db/document_extraction.py`의 결정론적 합성 mock으로 폴백. 사용자는 업로드 전에 월을 지정하지 않고 여러 파일을 한 번에 올리면 각 파일의 실제 날짜가 응답으로 돌아온다. 실 사진·스캔본 OCR(비전 모델)은 여전히 범위 밖 — `extract_pdf_text()` 내부만 교체하면 됨.
 - 어느 문서가 필수/선택/해당없음인지는 사장님이 고른 연료 유형(`Company.fuel_types_json`)으로 결정된다 — 순수함수 `db/document_requirements.py::required_documents()`가 프론트·백엔드 양쪽에서 참조하는 단일 기준.
 - 합성 전표 생성기는 파라미터형 (데모 50건 → 결선 300건). 표현 변형 포함: "경유 외 1종", "유류대금", "동절기 난방유" 등 비정형 텍스트
 
