@@ -15,10 +15,23 @@ Scope: 2026년 8월 v1 구현·검증·시연 일정
 > - 1주차 B 항목(PCAF 품질 후보 규칙 엔진) **완료·병합** — PR #25(`feat/pcaf-quality-rules` → `dev`)
 >   `dev` 병합 완료. 상세는 §5-1 참고.
 > - 1주차 A 항목(하이브리드 데이터 입력: 마이데이터 5종·연료체크·문서업로드) **완료·병합** — PR #26
->   (`feat/hybrid-data-input-pipeline` → `dev`) `dev` 병합 완료. 상세는 §5-2 참고. 단, 아래 완료조건에
->   적어둔 대로 `borrower_emission_inventories` 집계는 이번 주 범위 밖으로 남아 있다.
-> - 2주차 B 항목(승인요청 큐 + 원본문서 접근 감사 로그) **구현 완료, 리뷰 대기** — PR #28
->   (`feat/admin-approval-queue` → `dev`, OPEN). 상세는 §6-1 참고.
+>   (`feat/hybrid-data-input-pipeline` → `dev`) `dev` 병합 완료. 상세는 §5-2 참고.
+> - 2주차 B 항목(승인요청 큐 + 원본문서 접근 감사 로그) **완료·병합** — PR #28(`dev` 병합),
+>   리뷰 지적 2건 수정 PR #29(`dev` 병합) 포함. 상세는 §6-1 참고.
+> - PR #28 리뷰 대응 중 발견된 pre-existing 테스트 실패 3건(`test_rules.py` 카운트·I050
+>   케이스, `test_alembic_migration.py` 백필 누락) **완료·병합** — PR #30. 상세는 §6-2 참고.
+> - 2주차 B "owner 안내 요청 버튼" 잔여 항목 **완료·병합** — PR #31(`ScenePcaf.tsx` 실데이터 연동).
+> - `borrower_emission_inventories` 연간 Scope 배출량 집계(1주차 완료조건에서 이월됐던 항목)
+>   **완료·병합** — PR #32(`db/pcaf_quality.py::aggregate_scope_emissions`). 상세는 §6-3 참고.
+> - 개발자 A: 사장님 앱 홈 화면 + 기업 선택기 + 마이데이터 CSV 실연동 **완료·병합** — PR #33.
+> - 개발자 A: OCR mock → 실제 PDF 텍스트 추출 교체 **완료·병합** — PR #34, §5-3 참고.
+>   §5-2에서 "OCR은 결정론적 mock"이라 남겼던 전제가 실물 데이터 확인(텍스트 레이어 PDF임을
+>   확인)으로 해소됨.
+> - **남은 것**: 2주차 A 항목(K택소노미·설비투자 필드, `ScenePcaf.tsx`를 정식 PCAF 엔진
+>   `db/pcaf_quality.py`로 교체)이 아직 미착수 — 코드 확인 결과 `db/models.py`에 K택소노미
+>   필드 없음, `ScenePcaf.tsx`는 여전히 `/pcaf/{id}`(구 엔진) 호출 중. 아래 §6 표 참고.
+> - `dev` 최신 기준 `pytest` 174 passed, 3 skipped(라이브 DB 파괴적 테스트만 스킵, 회귀 없음.
+>   `pdfplumber`·`reportlab` 신규 의존성은 `pip install -r requirements.txt` 재실행 필요).
 
 > 기준 브랜치: `dev` (병합 대상: `feat/db-alembic-migration`)
 >
@@ -150,8 +163,8 @@ alembic upgrade head                  # 빈 DB에서 마이그레이션 성공 �
 ### 1주차 완료조건
 
 - `feat/db-alembic-migration` 병합 완료, 기존 데이터 보존 확인 — ✅ 완료
-- PCAF 품질 후보가 규칙 코드·근거와 함께 산정된다 (임시 1~5등급 표기 제거) — ✅ 완료. 단 `ScenePcaf.tsx`(사장님 리포트 화면)는 아직 구 엔진 `db/pcaf.py::company_pcaf_summary()`를 쓴다 — 정식 엔진(`db/pcaf_quality.py`)으로 교체는 미착수, 2주차로 이월.
-- 하이브리드 입력 데이터가 기존 차주 인벤토리 스키마에 정합적으로 적재된다 — **부분 완료로 재정의됨.** 애초 계획한 "차주 인벤토리(`borrower_emission_inventories`) 직접 적재"는 하지 않는다 — 그 테이블을 채우는 연간 Scope 집계 로직 자체가 아직 없기 때문(§5-2, B 담당 영역). 대신 A의 1주차 구현은 `source_documents`(원본 증빙) → `vouchers`(에너지 관련만) 경로로 착지해 **기존 v0.1 분류·계산 파이프라인(`classify_vouchers`→`calc_engine.py`)을 그대로 재사용**하는 것으로 완료됐다. `borrower_emission_inventories` 집계는 이번 주 범위 밖 — 팀에 공유 완료.
+- PCAF 품질 후보가 규칙 코드·근거와 함께 산정된다 (임시 1~5등급 표기 제거) — ✅ 완료. 단 `ScenePcaf.tsx`(사장님 리포트 화면)는 아직 구 엔진 `db/pcaf.py::company_pcaf_summary()`를 쓴다 — 정식 엔진(`db/pcaf_quality.py`)으로 교체는 2주차 A 항목으로 이월, 아직 미착수(§6 참고).
+- 하이브리드 입력 데이터가 기존 차주 인벤토리 스키마에 정합적으로 적재된다 — ✅ **완료.** A의 1주차 구현(`source_documents`→`vouchers`, §5-2)에 이어, `borrower_emission_inventories`를 채우는 연간 Scope 집계 로직도 PR #32(§6-3)로 완료돼 최종적으로 두 경로 모두 정합적으로 적재된다.
 
 ### 5-1. PCAF 품질 후보 규칙 엔진 — 구현 상세 (PR #25)
 
@@ -197,9 +210,9 @@ alembic upgrade head                  # 빈 DB에서 마이그레이션 성공 �
   /owner/{company_id}/fuel-types`), 순수함수 `db/document_requirements.py::required_documents()`가
   이 값을 문서별 필수/선택/해당없음으로 변환 — 프론트(`SceneUpload.tsx`)와 결손 감지 필터
   (`api/queries.py::get_coverage()`)가 둘 다 이 함수를 참조해 로직이 갈라지지 않는다.
-- **OCR은 이번 주엔 결정론적 mock**(`db/document_extraction.py::extract_document()`) —
-  파일 바이트의 SHA 해시로 시드해 항상 같은 입력엔 같은 결과를 내는 합성 데이터. 함수 경계만
-  고정해뒀고, 추후 실 OCR·로컬 모델(Qwen 등)로 교체해도 나머지 파이프라인은 안 건드려도 된다.
+- **OCR은 당시 결정론적 mock**(`db/document_extraction.py::extract_document()`) —
+  파일 바이트의 SHA 해시로 시드해 항상 같은 입력엔 같은 결과를 내는 합성 데이터였다.
+  **PR #34로 실제 PDF 텍스트 추출로 교체됨 — 상세는 §5-3.**
 - **기관 귀속**: `api/queries.py::resolve_institution_borrower()`가 `consent_status='active'`인
   `institution_borrowers` 레코드를 찾아 새 `source_documents`/`vouchers`에 채운다 — 동의 철회
   기업의 신규 업로드가 계속 쌓이는 걸 막는다.
@@ -219,21 +232,46 @@ alembic upgrade head                  # 빈 DB에서 마이그레이션 성공 �
   `test_owner_coverage.py`, `test_mock_mydata_router.py` 등 신규, 전체 `pytest` 통과.
 - PR: https://github.com/noeyish/GamTan/pull/26 (`feat/hybrid-data-input-pipeline` → `dev`, **병합 완료**)
 
+### 5-3. 실제 PDF 텍스트 추출로 OCR mock 교체 (PR #34)
+
+회계 담당 업로드 서류(`data/업로드서류/`)가 스캔 이미지가 아니라 reportlab로 그린 텍스트
+레이어 PDF라는 게 확인돼, pdfplumber로 문서종류·날짜·금액·수량을 그대로 읽을 수 있음이
+드러났다(OCR·비전 모델 불필요) — §5-2에서 남겨뒀던 "OCR mock" 전제가 실물 데이터
+확인으로 바뀐 경우.
+
+- `db/document_text_extractor.py` 신규: PDF 텍스트에서 문서종류·날짜·금액·수량을 정규식으로
+  파싱. 기대한 문서종류와 실제 내용이 다르면(엉뚱한 칸에 업로드) 명확히 실패, 저품질 스캔처럼
+  금액이 판독 불가로 가려진 경우도 값을 지어내지 않고 실패시킨다(CLAUDE.md 실패 가시성 원칙).
+- `db/document_extraction.py`: 실 추출을 우선하고, `year`/`month`가 명시적으로 주어졌을 때만
+  기존 해시 기반 합성 mock으로 폴백(테스트·임의 파일 업로드 편의는 유지).
+- `api/document_ingestion.py`, `api/routers/owner.py`: `year`/`month`가 선택값으로 전환 —
+  문서에서 읽어낸 값을 응답에 실어 보낸다. 파싱 실패는 422로 안내.
+- `web/components/SceneUpload.tsx`: 월별 업로드 UI를 여러 파일 일괄 업로드로 교체(월 선택
+  드롭다운 제거), 응답으로 받은 월을 배지에 표시. 실패 사유(화질 불량·잘못된 칸 등)를 실제
+  메시지로 노출. "빠진 데이터" 경고 배너 제거.
+- `requirements.txt`에 `pdfplumber`(실 추출)·`reportlab`(생성기 재현) 추가.
+- 테스트: 신규 `test_document_text_extractor.py` + 기존 3개 갱신, 전체 `pytest` 174 passed.
+  실제 생성 PDF로 브라우저 end-to-end 검증(여러 파일 동시 업로드 → 각 파일 실제 날짜 정확히
+  인식, 저품질 스캔·중복 업로드 실패 메시지 정상 노출).
+- PR: https://github.com/noeyish/GamTan/pull/34 (`feat/upload-real-pdf-extraction` → `dev`, **병합 완료**)
+
 ---
 
 ## 6. 2주차 — K택소노미·설비투자 + 관리자 플로우
 
 > **진행 현황**: `dev`에는 이미 관리자 대시보드 HITL 큐(대량처리·필터·변경이력/감사로그 탭 —
 > `63f9202`, `c8e4082`, `17b398b`)와 등급 상승 역산 API skeleton(`e7c229c`, `0f920b3`)이
-> 병합 계획보다 앞서 반영돼 있다. 아래 B 항목은 "승인요청 큐(우대금리·설비금융, 비보장 문구)"를
-> 기존 HITL 큐와 명확히 분리하는 나머지 작업으로 좁혀졌다 — 처음부터 새로 만드는 것이 아니라
-> 기존 admin 라우터·화면 위에 승인요청 큐를 추가하는 확장 작업이다.
+> 병합 계획보다 앞서 반영돼 있다. B 항목("승인요청 큐(우대금리·설비금융, 비보장 문구)"를
+> 기존 HITL 큐와 명확히 분리)은 PR #28·#29로 완료·병합됐다. 이어서 owner 쪽 버튼 UI(PR #31),
+> pre-existing 테스트 3건 정리(PR #30), 인벤토리 집계(PR #32)까지 마무리됐다 — 상세는
+> §6-1·§6-2·§6-3. **2주차에서 유일하게 남은 항목은 A(K택소노미·설비투자 필드 + `ScenePcaf.tsx`
+> 정식 엔진 교체)뿐이다.**
 
 | 담당 | 작업                                                                                                                                  | 검증                                                  | 상태 |
 | ---- | ------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- | ---- |
-| A    | K택소노미·설비투자 필드를 classification 테이블에 추가(신규 Alembic revision), LLM 분류 프롬프트 확장. ~~결손 감지에 연료유형 필터 반영~~은 PR #26에서 선행 완료(`api/queries.py::get_coverage()`). 추가로 `ScenePcaf.tsx`를 구 엔진(`db/pcaf.py`)에서 정식 엔진(`db/pcaf_quality.py`)으로 교체 — 1주차 완료조건 §5 노트 참고 | 기존 classification 회귀 테스트 통과 + 신규 필드 검증, `ScenePcaf.tsx` 교체 후 PCAF 화면 수동 확인 | 진행 예정 |
-| B    | 관리자 대시보드: HITL 큐(분류 신뢰도, 기 구현)와 승인요청 큐(우대금리·설비금융, 비보장 문구 포함, 신규)를 명확히 분리, 원본문서 접근 감사 로그 확장 | 두 큐 혼동 없음, 반려 로그 자동/담당자 구분           | ✅ 구현 완료 — PR #28 리뷰 대기(§6-1). 단 owner 화면 "안내 요청" 버튼 UI는 미착수(아래 노트) |
-| 회계 | 정답지 라벨링, PCAF 품질 규칙 검수                                                                                                    | —                                                     | 진행 예정 |
+| A    | K택소노미·설비투자 필드를 classification 테이블에 추가(신규 Alembic revision), LLM 분류 프롬프트 확장. ~~결손 감지에 연료유형 필터 반영~~은 PR #26에서 선행 완료(`api/queries.py::get_coverage()`). 추가로 `ScenePcaf.tsx`를 구 엔진(`db/pcaf.py`)에서 정식 엔진(`db/pcaf_quality.py`)으로 교체 — 1주차 완료조건 §5 노트 참고 | 기존 classification 회귀 테스트 통과 + 신규 필드 검증, `ScenePcaf.tsx` 교체 후 PCAF 화면 수동 확인 | ⬜ **미착수 — 2주차 유일한 잔여 항목** (2026-08-12 재확인: `db/models.py`에 K택소노미 필드 없음, `ScenePcaf.tsx`는 여전히 `/pcaf/{id}` 구 엔진 호출) |
+| B    | 관리자 대시보드: HITL 큐(분류 신뢰도, 기 구현)와 승인요청 큐(우대금리·설비금융, 비보장 문구 포함, 신규)를 명확히 분리, 원본문서 접근 감사 로그 확장 | 두 큐 혼동 없음, 반려 로그 자동/담당자 구분           | ✅ 완료 — PR #28·#29 병합(§6-1) |
+| 회계 | 정답지 라벨링, PCAF 품질 규칙 검수                                                                                                    | —                                                     | ✅ 진행 중 — `data/감탄_데이터준비_샘플.xlsx` 확장(I042~I050, R051~R058, K택소노미/설비 신규 시트 8개) 반영 확인. `README_확장내역` 시트 참고 |
 
 ### 처리 흐름
 
@@ -247,13 +285,9 @@ alembic upgrade head                  # 빈 DB에서 마이그레이션 성공 �
 
 ### 2주차 완료조건
 
-- K택소노미·설비투자 필드가 기존 계산 로직을 깨지 않는다. — A 담당, 진행 예정
+- K택소노미·설비투자 필드가 기존 계산 로직을 깨지 않는다. — ⬜ A 담당, 미착수(유일한 잔여 항목)
 - 안내 문구에 항상 비보장 고지가 포함된다. — ✅ 완료(테스트로 검증, §6-1)
 - HITL 큐와 승인요청 큐가 분리된 데이터·화면으로 존재한다. — ✅ 완료(§6-1)
-
-> **노트**: 위 "처리 흐름"의 "사장님이 우대금리/설비금융 안내 클릭" 단계는 백엔드 API
-> (`POST /owner/{company_id}/rate-requests`)만 준비됐고, `/owner` 화면에 클릭할 버튼 UI는
-> 아직 없다 — 다음 작업으로 남아 있다.
 
 ### 6-1. 승인요청 큐 + 원본문서 접근 감사 로그 — 구현 상세 (PR #28)
 
@@ -277,9 +311,59 @@ alembic upgrade head                  # 빈 DB에서 마이그레이션 성공 �
   412MB→395MB, 캐시 재빌드 17.6s→0.76s, web 캐시 재빌드 37s→1.25s.
 - 테스트: `tests/test_rate_approval_queue.py` 18건(순수 로직 6 + API 라우터 12, HITL 큐와의
   데이터 분리 포함). 전체 `pytest` 140 passed, 3 skipped. 프론트 `tsc --noEmit`·`next build` 통과.
-- **미착수로 남은 부분**: `/owner` 화면에 "안내 요청" 버튼 UI — 백엔드 API는 준비됐으나
-  카드 컴포넌트를 아직 붙이지 않았다.
-- PR: https://github.com/noeyish/GamTan/pull/28 (`feat/admin-approval-queue` → `dev`, OPEN)
+- 리뷰 지적 2건(PR #29, `fix/rate-approval-review-bugs` → `dev`, 병합 완료)도 함께 반영:
+  `request_type` 미검증 시 500이 나던 걸 `Literal` 타입으로 422 전환, 이미 처리된 요청
+  재처리 시 조용히 성공하던 걸 `AlreadyProcessedError`로 항상 409가 나도록 수정.
+- PR: https://github.com/noeyish/GamTan/pull/28 (`feat/admin-approval-queue` → `dev`, **병합 완료**),
+  https://github.com/noeyish/GamTan/pull/29 (`fix/rate-approval-review-bugs` → `dev`, **병합 완료**)
+
+### 6-2. pre-existing 테스트 실패 3건 정리 (PR #30)
+
+PR #28/#29 리뷰 대응 중 발견된, 이번 작업과 무관한 기존 실패 3건을 정리했다.
+
+- `test_rules.py::test_expected_results_has_rows`: 카운트 하드코딩(41)이 PR #27(합성
+  데이터 확장)로 늘어난 실제 Excel 행 수(50)와 어긋남 — 갱신.
+- `test_rules.py::test_auto_classified_rows_match_expected_scope_and_fuel`: 룰 매칭
+  버그가 아니었다. I050("지게차 경유 외 1종")은 I001과 품목명·금액이 완전히 동일한
+  "중복 업로드 문서" 검증용 케이스라, 룰 엔진(품목 텍스트만 입력)은 원리적으로 이 둘을
+  구분할 수 없다 — 중복 방지는 `source_documents.file_hash` UQ 제약(§14, db-schema.md)이
+  전담하는 영역. 테스트에서 I050을 룰 엔진 검증 대상에서 명시적으로 제외했다. **회계
+  담당이 이후 이 케이스를 README_확장내역 시트에 "동일 전표 중복 업로드(자동 제외)"로
+  명시해 같은 결론을 확인해줬다.**
+- `test_alembic_migration.py::test_backfill_assigns_default_institution_to_all_existing_vouchers`:
+  `db/seed_mock.py`가 0006 마이그레이션 이후 재실행되며 만든 신규 전표가
+  `financial_institution_id`를 안 채우고 있었다 — `_resolve_demo_institution_borrower()`
+  추가로 향후 재시드부터 정상 채워지도록 수정, Supabase 기존 데이터는 UPDATE로 백필.
+- PR: https://github.com/noeyish/GamTan/pull/30 (`fix/rule-matching-i050` → `dev`, **병합 완료**)
+
+### 6-3. `borrower_emission_inventories` 연간 Scope 배출량 집계 (PR #32)
+
+1주차 완료조건에서 이월됐던 "차주 인벤토리 직접 적재" 항목. `BorrowerEmissionInventory`
+테이블은 있고 `candidate_quality_score`만 채워지고 있었을 뿐, `emission_tco2e`(실제
+배출량)를 계산해 넣는 로직 자체가 없었다.
+
+- `db/pcaf_quality.py`에 `aggregate_scope_emissions(session, company_id, reporting_year,
+  scope_group)` 추가 — 전표별 `Classification.emission_co2e`(kg) 합산 → tCO2e. 담당자
+  반려 건 제외(`db/pcaf.py::_after_measured`와 동일 규칙). 해당 Scope 전표가 없으면
+  None(0 아님). Scope 3는 항상 None + `scope3_status='not_calculated'`(원칙9).
+- 기존 `db/pcaf.py::_after_measured`(v0.1 사장님 리포트용, 연도 필터 없이 Scope 1·2
+  통합)는 재사용하지 않고, `db/pcaf_quality.py`가 이미 하던 연도·`scope_group` 필터
+  조인 패턴(`assess_inventory_completeness`)을 그대로 한 번 더 써서 로직 중복을 피했다.
+- `POST /borrowers/{company_id}/quality-assessments/{year}/evaluate`(기존 엔드포인트)가
+  `candidate_quality_score`와 함께 이 값도 계산해 저장하도록 확장 — 신규 엔드포인트는
+  안 만듦.
+- 테스트: 골든 케이스 5건 + API 통합 1건 추가, `tests/test_pcaf_quality.py` 27개 통과.
+- PR: https://github.com/noeyish/GamTan/pull/32 (`feat/inventory-aggregation` → `dev`, **병합 완료**)
+
+### 6-4. owner "안내 요청" 버튼 실데이터 연동 (PR #31)
+
+2주차 B 항목의 owner 쪽 잔여 UI. `ScenePcaf.tsx`(리포트 화면, `/owner` 5단계)의 기존
+정적 "우대금리 대상 안내" 카드를 실데이터로 교체 — `GET /owner/{company_id}/rate-candidate`
+조회 → 후보면 현재/목표 등급·missing·benefit·disclaimer_text 카드 + "우대금리 안내 요청"
+버튼 노출, 클릭 시 `POST /owner/{company_id}/rate-requests` → 관리자 승인요청 큐로 전달.
+후보 있음/없음 두 분기 모두 `tests/test_rate_approval_queue.py`가 커버.
+
+PR: https://github.com/noeyish/GamTan/pull/31 (`feat/owner-rate-request-ui` → `dev`, **병합 완료**)
 
 ---
 
