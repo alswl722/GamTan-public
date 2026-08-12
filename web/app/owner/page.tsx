@@ -114,9 +114,9 @@ export default function OwnerHomePage() {
         <Image
           src="/ddockdi_1.png"
           alt=""
-          width={92}
-          height={92}
-          className="pointer-events-none absolute right-9 top-2 z-10 object-contain"
+          width={104}
+          height={104}
+          className="pointer-events-none absolute right-6 top-0 z-10 object-contain"
         />
 
         <span className="relative flex items-center justify-between gap-2">
