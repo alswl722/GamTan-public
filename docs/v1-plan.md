@@ -12,9 +12,11 @@ Scope: 2026년 8월 v1 구현·검증·시연 일정
 
 > **진행 현황 (2026-08-12)**
 > - §1 D0(`feat/db-alembic-migration` → `dev` 병합) **완료**.
-> - 1주차 B 항목(PCAF 품질 후보 규칙 엔진)은 PCAF Standard Part A Third Edition 원문(Table 10.1-2)
->   대조까지 마쳐 **구현 완료**, PR #25(`feat/pcaf-quality-rules` → `dev`)로 리뷰 대기 중 — 아직 `dev`
->   미병합. 상세는 §5-1 참고.
+> - 1주차 B 항목(PCAF 품질 후보 규칙 엔진) **완료·병합** — PR #25(`feat/pcaf-quality-rules` → `dev`)
+>   `dev` 병합 완료. 상세는 §5-1 참고.
+> - 1주차 A 항목(하이브리드 데이터 입력: 마이데이터 5종·연료체크·문서업로드) **완료·병합** — PR #26
+>   (`feat/hybrid-data-input-pipeline` → `dev`) `dev` 병합 완료. 상세는 §5-2 참고. 단, 아래 완료조건에
+>   적어둔 대로 `borrower_emission_inventories` 집계는 이번 주 범위 밖으로 남아 있다.
 
 > 기준 브랜치: `dev` (병합 대상: `feat/db-alembic-migration`)
 >
@@ -77,19 +79,19 @@ alembic upgrade head                  # 빈 DB에서 마이그레이션 성공 �
 3. 하이브리드 데이터 입력: 공공 마이데이터 5종 + 파일 업로드(OCR) 3종 + 연료 유형 체크 → 차주 인벤토리 테이블에 적재
 4. 대량 전표 / 홈택스 엑셀 업로드
 5. K-택소노미 스크리닝 필드 + 설비투자 탐지 필드 (LLM 분류 출력 확장, classification 테이블에 추가 컬럼)
-6. 관리자 플로우: HITL 큐 / 승인요청 큐 분리, 포트폴리오 뷰
+6. 관리자 플로우: HITL 큐 / 승인요청 큐 분리, 포트폴리오 뷰 (화면별 상세는 `docs/owner-admin-flow-spec.md` 은행 담당자 §2~5 참고 — 단 그 문서의 히트맵·Top10·감사패키지는 Tier 2~3 항목이라 이 Tier 1 범위엔 포함 안 됨)
 7. 감사 로그 (기존 트레이스 로그 + 원본문서 접근 로그 확장)
 
 **Tier 2 (여유 되면)**
 
-8. 우대금리·설비금융 "안내" — 데이터 완전성·K택소노미 적합성 기준, **PCAF 등급 상승이나 자격을 보장하지 않는다는 문구 필수 동반**
-9. 되묻는 HITL / 청중별 통역 / PCAF 데이터 품질 실시간 지표화(초안→확정 알림) / 탄소 신용카드(QR)
+8. 우대금리·설비금융 "안내" — 데이터 완전성·K택소노미 적합성 기준, **PCAF 등급 상승이나 자격을 보장하지 않는다는 문구 필수 동반** (사장님 화면 상세: `docs/owner-admin-flow-spec.md` 기업 §4-1·§4-3)
+9. 되묻는 HITL / 청중별 통역 / PCAF 데이터 품질 실시간 지표화(초안→확정 알림) / 탄소 신용카드(QR) (되묻는 HITL 관련 미결정 논의는 `docs/hitl-owner-action.md` 참고)
 
 **Tier 3 (자를 후보, 비전 슬라이드로만)**
 
 10. 기업대출 금융배출량(귀속계수) 계산 — 은행 포트폴리오 집계용, 구 3주차 계획대로 진행 여부는 시간 보고 결정
 11. `business_loans_readiness` 체크리스트 — 시간 되면 4주차
-12. 월간 AI 브리핑, 장비개선 시뮬레이터, 지역집중 리스크 히트맵, 그린 임팩트 예금
+12. 월간 AI 브리핑, 장비개선 시뮬레이터, 지역집중 리스크 히트맵, 그린 임팩트 예금 — 히트맵·연동 우선순위 Top10·감사 대응 근거 패키지의 화면 상세 설계는 `docs/owner-admin-flow-spec.md` 은행 담당자 §5·§8에 있음(아직 이 Tier 배정 자체가 바뀐 건 아님)
 
 ### v1 제외 범위
 
@@ -139,15 +141,15 @@ alembic upgrade head                  # 빈 DB에서 마이그레이션 성공 �
 | 담당    | 작업                                                                                                                                                                       | 검증                                                               | 상태 |
 | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | ---- |
 | 공통 D0 | §1 병합 절차 수행                                                                                                                                                          | 마이그레이션·기존 테스트 4종 통과                                  | ✅ 완료 |
-| B       | `pcaf_quality_rules` 시드와 규칙 엔진, Scope 1·2/Scope 3 품질 후보 분리, 완전성과 품질 후보 분리                                                                           | PCAF 원문 규칙별 골든 케이스                                       | ✅ 구현 완료 — PR #25 리뷰 대기(§5-1) |
-| A       | 공공 마이데이터 5종 연동(또는 Mock), 연료 유형 체크 UI, 파일 업로드(OCR) 3종, 대량전표/홈택스 엑셀 파서 → 차주 인벤토리 테이블(`borrower_inventory` 등 기존 스키마)에 매핑 | 업로드 데이터가 기존 인벤토리 스키마 컬럼에 정확히 적재되는지 확인 | 진행 예정 |
+| B       | `pcaf_quality_rules` 시드와 규칙 엔진, Scope 1·2/Scope 3 품질 후보 분리, 완전성과 품질 후보 분리                                                                           | PCAF 원문 규칙별 골든 케이스                                       | ✅ 완료 — PR #25 `dev` 병합(§5-1) |
+| A       | 공공 마이데이터 5종 Mock, 연료 유형 체크 UI, 파일 업로드(OCR mock) 3종, 홈택스 엑셀 파서 → `source_documents`/`vouchers`(기존 파이프라인 재사용) + `borrower_financials`(표준재무제표증명)에 매핑 | 업로드 데이터가 `source_documents`/`vouchers`/`borrower_financials`에 정확히 적재되는지 확인 | ✅ 완료 — PR #26 `dev` 병합(§5-2) |
 | 회계    | K택소노미 100개 활동 매핑표, 설비 키워드 사전, "외 1종" 배분규칙 확정 —**개발 착수 전제조건**                                                                              | —                                                                  | 진행 예정 |
 
 ### 1주차 완료조건
 
 - `feat/db-alembic-migration` 병합 완료, 기존 데이터 보존 확인 — ✅ 완료
-- PCAF 품질 후보가 규칙 코드·근거와 함께 산정된다 (임시 1~5등급 표기 제거) — ✅ 구현 완료, PR #25 병합 후 최종 확정
-- 하이브리드 입력 데이터가 기존 차주 인벤토리 스키마에 정합적으로 적재된다 — 진행 예정
+- PCAF 품질 후보가 규칙 코드·근거와 함께 산정된다 (임시 1~5등급 표기 제거) — ✅ 완료. 단 `ScenePcaf.tsx`(사장님 리포트 화면)는 아직 구 엔진 `db/pcaf.py::company_pcaf_summary()`를 쓴다 — 정식 엔진(`db/pcaf_quality.py`)으로 교체는 미착수, 2주차로 이월.
+- 하이브리드 입력 데이터가 기존 차주 인벤토리 스키마에 정합적으로 적재된다 — **부분 완료로 재정의됨.** 애초 계획한 "차주 인벤토리(`borrower_emission_inventories`) 직접 적재"는 하지 않는다 — 그 테이블을 채우는 연간 Scope 집계 로직 자체가 아직 없기 때문(§5-2, B 담당 영역). 대신 A의 1주차 구현은 `source_documents`(원본 증빙) → `vouchers`(에너지 관련만) 경로로 착지해 **기존 v0.1 분류·계산 파이프라인(`classify_vouchers`→`calc_engine.py`)을 그대로 재사용**하는 것으로 완료됐다. `borrower_emission_inventories` 집계는 이번 주 범위 밖 — 팀에 공유 완료.
 
 ### 5-1. PCAF 품질 후보 규칙 엔진 — 구현 상세 (PR #25)
 
@@ -172,7 +174,48 @@ alembic upgrade head                  # 빈 DB에서 마이그레이션 성공 �
 - **부수 반영**: 스코프 밖에서 발견한 `Company.fuel_types_json` drift(원칙8 "연료 유형은
   기업이 직접 체크")를 이번 PR에 정식 반영(`0008_company_fuel_types.py`).
 - 테스트: `tests/test_pcaf_quality.py`(16개 골든 케이스), 전체 `pytest` 통과, Supabase 실제 적용 확인.
-- PR: https://github.com/noeyish/GamTan/pull/25 (`feat/pcaf-quality-rules` → `dev`, OPEN)
+- PR: https://github.com/noeyish/GamTan/pull/25 (`feat/pcaf-quality-rules` → `dev`, **병합 완료**)
+
+### 5-2. 하이브리드 데이터 입력 파이프라인 — 구현 상세 (PR #26)
+
+기획 회의에서 확인된 사실 정정(마이데이터 5종은 전부 KYB/재무 프로필용이고 배출량 계산에 쓰이는
+세금계산서·전기고지서·도시가스고지서는 마이데이터가 아니라 항상 업로드로만 들어온다)을 반영해,
+"마이데이터 5종 + 업로드 3종"을 완전히 분리된 두 경로로 구현했다.
+
+- **경로 분리**:
+  - 마이데이터 5종(`business-registration`, `vat-tax-base`, `financial-statement`,
+    `sme-certificate`, `kepco-payment-history`, `api/mydata_kyb_mock.py::collect_mydata()`)은
+    전부 KYB/재무 프로필용 — 표준재무제표증명만 `borrower_financials`에 매핑되고 나머지는
+    `source_documents`에만 적재된다. 계산 파이프라인과 무관.
+  - 업로드 3종(세금계산서 OCR/엑셀 택1, 전기요금고지서, 도시가스고지서,
+    `api/document_ingestion.py::ingest_uploaded_document()`)은 `source_documents` → **에너지
+    관련 타입만** `vouchers`로 변환 → **기존 v0.1 `classify_vouchers()`/`calc_engine.py` 파이프라인을
+    수정 없이 그대로 재사용**한다. 새 계산 로직을 만들지 않았다.
+- **연료 유형 체크**: 사장님이 고른 값을 `Company.fuel_types_json`에 저장(`PATCH
+  /owner/{company_id}/fuel-types`), 순수함수 `db/document_requirements.py::required_documents()`가
+  이 값을 문서별 필수/선택/해당없음으로 변환 — 프론트(`SceneUpload.tsx`)와 결손 감지 필터
+  (`api/queries.py::get_coverage()`)가 둘 다 이 함수를 참조해 로직이 갈라지지 않는다.
+- **OCR은 이번 주엔 결정론적 mock**(`db/document_extraction.py::extract_document()`) —
+  파일 바이트의 SHA 해시로 시드해 항상 같은 입력엔 같은 결과를 내는 합성 데이터. 함수 경계만
+  고정해뒀고, 추후 실 OCR·로컬 모델(Qwen 등)로 교체해도 나머지 파이프라인은 안 건드려도 된다.
+- **기관 귀속**: `api/queries.py::resolve_institution_borrower()`가 `consent_status='active'`인
+  `institution_borrowers` 레코드를 찾아 새 `source_documents`/`vouchers`에 채운다 — 동의 철회
+  기업의 신규 업로드가 계속 쌓이는 걸 막는다.
+- **동시성 방어**: `source_documents`에 `(company_id, file_hash)` 유니크 제약, `borrower_financials`에
+  `(company_id, financial_year, version)` 유니크 제약을 걸어(`0010_upload_dedup_constraints.py`)
+  앱 레벨 SELECT-then-INSERT 중복 체크가 못 잡는 동시 업로드(더블클릭·재시도) 레이스를 DB 레벨에서
+  막는다. 개발 중 자체 회귀 테스트로 `session.get()`의 autoflush가 방어 로직보다 먼저 예외를
+  터뜨리는 타이밍 버그를 발견해 수정했다.
+- **킬러씬 보호**: ○○정밀 데모 시나리오(3~5월 도시가스 결손, 7월 경유 이상치)는 새 연료체크
+  UI가 기본값을 잘못 추론해 깨지지 않도록, `SceneUpload.tsx`가 마운트 시 기존 `coverage` 응답에서
+  연료 기본값을 역추론하는 방어 로직을 둔다.
+- **범위 밖으로 남긴 것**: `borrower_emission_inventories`(연간 Scope 집계) 적재는 하지 않음 — 위
+  1주차 완료조건 참고. K택소노미·설비투자 필드 확장은 2주차(§6) 그대로 유지.
+- 테스트: `test_document_requirements.py`, `test_resolve_institution_borrower.py`,
+  `test_document_extraction.py`, `test_hometax_excel_parser.py`, `test_document_ingestion.py`,
+  `test_mydata_kyb_mock.py`, `test_owner_document_upload.py`, `test_owner_fuel_types.py`,
+  `test_owner_coverage.py`, `test_mock_mydata_router.py` 등 신규, 전체 `pytest` 통과.
+- PR: https://github.com/noeyish/GamTan/pull/26 (`feat/hybrid-data-input-pipeline` → `dev`, **병합 완료**)
 
 ---
 
@@ -186,7 +229,7 @@ alembic upgrade head                  # 빈 DB에서 마이그레이션 성공 �
 
 | 담당 | 작업                                                                                                                                  | 검증                                                  |
 | ---- | ------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| A    | K택소노미·설비투자 필드를 classification 테이블에 추가(신규 Alembic revision), LLM 분류 프롬프트 확장, 결손 감지에 연료유형 필터 반영 | 기존 classification 회귀 테스트 통과 + 신규 필드 검증 |
+| A    | K택소노미·설비투자 필드를 classification 테이블에 추가(신규 Alembic revision), LLM 분류 프롬프트 확장. ~~결손 감지에 연료유형 필터 반영~~은 PR #26에서 선행 완료(`api/queries.py::get_coverage()`). 추가로 `ScenePcaf.tsx`를 구 엔진(`db/pcaf.py`)에서 정식 엔진(`db/pcaf_quality.py`)으로 교체 — 1주차 완료조건 §5 노트 참고 | 기존 classification 회귀 테스트 통과 + 신규 필드 검증, `ScenePcaf.tsx` 교체 후 PCAF 화면 수동 확인 |
 | B    | 관리자 대시보드: HITL 큐(분류 신뢰도, 기 구현)와 승인요청 큐(우대금리·설비금융, 비보장 문구 포함, 신규)를 명확히 분리, 원본문서 접근 감사 로그 확장 | 두 큐 혼동 없음, 반려 로그 자동/담당자 구분           |
 | 회계 | 정답지 라벨링, PCAF 품질 규칙 검수                                                                                                    | —                                                     |
 
