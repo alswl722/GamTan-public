@@ -6,7 +6,7 @@
 이 문서는 두 세대의 스키마를 함께 담고 있다.
 
 - **v0.1 코어 엔진 테이블** (§1~8) — 전표→탄소량 변환 파이프라인. 데모부터 지금까지 교체 없이 계속 사용 중.
-- **v1 기관/PCAF 테이블** (§9~20) — 여신 포트폴리오 단위 금융배출량(PCAF Business Loans) 산정을 위해 추가된 레이어. `financial_institutions`를 데이터 격리의 루트로 두고, 기존 v0.1 테이블(`vouchers`, `classifications`)에는 소속 기관을 가리키는 FK만 nullable로 얹었다(§21 참고).
+- **v1 기관/PCAF 테이블** (§9~22) — 여신 포트폴리오 단위 금융배출량(PCAF Business Loans) 산정 레이어(§9~21)와 그 위의 관리자 승인요청·감사 로그(§15, §22, 2주차 추가)까지 포함. `financial_institutions`를 데이터 격리의 루트로 두고, 기존 v0.1 테이블(`vouchers`, `classifications`)에는 소속 기관을 가리키는 FK만 nullable로 얹었다(§23 참고).
 
 ## 1. `companies` — 기업
 | 컬럼 | 타입 | 키/제약 | 설명 |
@@ -240,7 +240,19 @@
 
 > 하이브리드 입력 파이프라인(마이데이터 5종 + 업로드 3종)의 공통 착지점. 에너지 관련 문서(세금계산서·전기고지서·도시가스고지서)는 여기 적재된 뒤 `vouchers`로 변환돼 기존 `classify_vouchers()`/`calc_engine.py` 파이프라인을 그대로 탄다. 표준재무제표증명은 `borrower_financials`에도 매핑되고, 나머지 KYB성 문서(사업자등록증명·부가세과세표준증명·중소기업확인서·전기요금납부내역)는 이 테이블에만 남는다.
 
-## 15. `pcaf_quality_rules` — PCAF Business Loans 데이터 품질표
+## 15. `source_document_access_logs` — 원본문서 열람 감사 로그 (v1 2주차)
+| 컬럼 | 타입 | 키/제약 | 설명 |
+| --- | --- | --- | --- |
+| id | INTEGER | PK | |
+| source_document_id | INTEGER | FK→source_documents.id, NN | |
+| accessed_by | VARCHAR(100) | NN | 담당자 식별자 — 별도 인증 체계 도입 전까지 문자열로만 받음 |
+| accessed_at | TIMESTAMPTZ | default now | |
+
+**IX** `ix_source_document_access_logs_document` (source_document_id)
+
+> "분류를 확정/반려했다"는 조치 기록(`classifications.evidence` 누적, §3)과 "원본 증빙을 열람했다"는 접근 기록은 서로 다른 축이라 분리했다 — `SourceDocument` 자체엔 열람자·열람시각 컬럼이 없어 조회할 때마다 여기 한 행씩 쌓인다(`GET /admin/documents/{id}` 호출 시 자동 기록).
+
+## 16. `pcaf_quality_rules` — PCAF Business Loans 데이터 품질표
 PCAF Standard Part A Third Edition, Table 10.1-2(Annex, p.192)의 Option 1a/1b/2a/2b/3a/3b/3c 7종을 그대로 옮긴 참조 테이블.
 
 | 컬럼 | 타입 | 키/제약 | 설명 |
@@ -261,7 +273,7 @@ PCAF Standard Part A Third Edition, Table 10.1-2(Annex, p.192)의 Option 1a/1b/2
 
 > 분류 신뢰도(`classifications.confidence`)·HITL 상태와는 완전히 분리된 축 — "이 배출량이 얼마나 확신되는가"가 아니라 "이 배출량이 무엇을 근거로 산정됐는가"를 표준화한다.
 
-## 16. `borrower_emission_inventories` — 차주 연간 Scope별 배출량 인벤토리
+## 17. `borrower_emission_inventories` — 차주 연간 Scope별 배출량 인벤토리
 | 컬럼 | 타입 | 키/제약 | 설명 |
 | --- | --- | --- | --- |
 | id | INTEGER | PK | |
@@ -292,9 +304,9 @@ PCAF Standard Part A Third Edition, Table 10.1-2(Annex, p.192)의 Option 1a/1b/2
 
 **IX** `ix_inventories_company_year_scope` (company_id, reporting_year, scope_group) · **CK** `ck_inventories_scope_group`, `ck_inventories_scope2_method`, `ck_inventories_scope3_status`, `ck_inventories_status`
 
-> ⚠️ 이 테이블을 채우는 집계 로직(전표별 `classifications` → 연간 Scope 합산)은 아직 없다 — PCAF 품질 엔진 담당 몫으로 남아 있음. 현재 `GET /borrowers/{company_id}/quality-assessments/{year}`는 이 테이블 없이 직접 계산한다.
+> `emission_tco2e`는 `db/pcaf_quality.py::aggregate_scope_emissions`(전표별 `classifications` → 연간 Scope 합산, kg→t)가 채운다 — `POST /borrowers/{company_id}/quality-assessments/{year}/evaluate`가 `candidate_quality_score`와 함께 매번 계산해 저장한다(v1 §4 "인벤토리 완전성 집계", 2주차 반영). 기존 `db/pcaf.py::_after_measured`(v0.1 사장님 리포트 `/pcaf/{id}`용, 연도 필터 없이 Scope 1·2 통합)와는 별개 계산 경로 — 후자는 재사용하지 않고 이 파일이 이미 하던 연도·Scope 분리 집계(§16 `assess_inventory_completeness`)와 같은 방식으로 새로 집계한다. Scope 3는 이 프로젝트가 데이터를 만들지 않아 항상 `emission_tco2e=null`, `scope3_status='not_calculated'`.
 
-## 17. `inventory_gas_emissions` — 인벤토리의 가스별 배출량
+## 18. `inventory_gas_emissions` — 인벤토리의 가스별 배출량
 | 컬럼 | 타입 | 키/제약 | 설명 |
 | --- | --- | --- | --- |
 | id | INTEGER | PK | |
@@ -310,7 +322,7 @@ PCAF Standard Part A Third Edition, Table 10.1-2(Annex, p.192)의 Option 1a/1b/2
 
 **IX** `ix_gas_emissions_inventory` · **CK** `ck_gas_emissions_gas_type`
 
-## 18. `business_loan_exposures` — 포트폴리오의 기업대출 익스포저
+## 19. `business_loan_exposures` — 포트폴리오의 기업대출 익스포저
 지원 조건: `asset_class=business_loans_and_unlisted_equity`, `company_type=private_company`, `loan_purpose=general_corporate_purpose`. 미충족 시 `included=false` + `exclusion_reason` 기록(비상장 중소기업 일반 목적 기업대출만 지원).
 
 | 컬럼 | 타입 | 키/제약 | 설명 |
@@ -332,7 +344,7 @@ PCAF Standard Part A Third Edition, Table 10.1-2(Annex, p.192)의 Option 1a/1b/2
 
 **UQ** `uq_business_loan_exposures_portfolio_external_id` (portfolio_id, external_exposure_id) · **IX** `ix_business_loan_exposures_company`
 
-## 19. `borrower_financials` — 차주 재무정보
+## 20. `borrower_financials` — 차주 재무정보
 | 컬럼 | 타입 | 키/제약 | 설명 |
 | --- | --- | --- | --- |
 | id | INTEGER | PK | |
@@ -353,7 +365,7 @@ PCAF Standard Part A Third Edition, Table 10.1-2(Annex, p.192)의 Option 1a/1b/2
 
 **IX** `ix_borrower_financials_company_year` (company_id, financial_year) · **UQ** `uq_borrower_financials_company_year_version` (company_id, financial_year, version) — 동시 요청이 같은 (기업,연도,버전) 중복 행을 만드는 레이스 방지
 
-## 20. `fx_rates` — 환율
+## 21. `fx_rates` — 환율
 | 컬럼 | 타입 | 키/제약 | 설명 |
 | --- | --- | --- | --- |
 | id | INTEGER | PK | |
@@ -367,16 +379,39 @@ PCAF Standard Part A Third Edition, Table 10.1-2(Annex, p.192)의 Option 1a/1b/2
 
 **IX** `ix_fx_rates_pair_date` (base_currency, quote_currency, rate_date) · **CK** `ck_fx_rates_rate_type`
 
+## 22. `rate_approval_requests` — 우대금리·설비금융 안내 승인요청 큐 (v1 2주차)
+| 컬럼 | 타입 | 키/제약 | 설명 |
+| --- | --- | --- | --- |
+| id | INTEGER | PK | |
+| company_id | INTEGER | FK→companies.id, NN | |
+| request_type | VARCHAR(20) | NN, CK, default 'rate_upgrade' | `rate_upgrade` \| `equipment_finance` |
+| current_grade | SMALLINT | | 요청 생성 시점 PCAF 등급 스냅샷 |
+| target_grade | SMALLINT | | 결손을 채웠을 때의 예상 등급 스냅샷 |
+| missing_summary | TEXT | | 필요 데이터 요약(생성 시점 고정) |
+| disclaimer_text | TEXT | NN | 비보장 문구 — 생성 시점에 고정 저장(정책이 바뀌어도 과거 요청 문구는 그대로) |
+| status | VARCHAR(20) | NN, CK, default 'pending' | `pending` \| `approved` \| `rejected` |
+| reviewed_by | VARCHAR(100) | | |
+| reviewed_at | TIMESTAMPTZ | | |
+| review_note | TEXT | | |
+| created_at | TIMESTAMPTZ | default now | |
+
+**CK** `ck_rate_approval_requests_request_type`, `ck_rate_approval_requests_status` · **IX** `ix_rate_approval_requests_company`, `ix_rate_approval_requests_status`
+
+> 기존 `GET /admin/rate-candidates`(§16 `pcaf_quality_rules`와는 무관, `db/pcaf.py::rate_upgrade_candidates`)는 읽기 전용 "안내 후보" 목록만 계산할 뿐 저장하지 않는다. 이 테이블은 사장님이 그 안내를 보고 실제로 만든 요청과, 은행 담당자의 승인/반려를 저장한다. 승인은 여신 결정이 아니다(§3 원칙6, 원칙9) — "안내 대상으로 확인했다"는 수동 확인이며, `current_grade`/`target_grade`/`missing_summary`는 이후 재산정과 무관하게 요청 당시 근거를 그대로 보존한다. `classifications`(분류 신뢰도) 기반 HITL 큐와는 데이터·엔드포인트가 완전히 분리돼 있다.
+
 ---
 
-## 21. 참고
+## 23. 참고
 
 - 정본은 `db/models.py`. 스키마 변경은 전부 Alembic 마이그레이션(`alembic/versions/`)으로 관리 — `Base.metadata.create_all` 직접 호출이나 `init_db.py`의 수동 `ALTER TABLE`은 더 이상 쓰지 않는다.
 - 초기화: `alembic upgrade head`(스키마) + 마스터 데이터 시드는 `db/init_db.py`, 시연 데이터는 `db/seed_mock.py`.
 - **공유 Supabase DB에 마이그레이션 적용 전 항상 사용자 확인을 받는다** — 여러 명이 같은 DB에 붙어 있어 `alembic upgrade/downgrade`가 곧바로 팀 전체에 영향을 준다.
 - v0.1 테이블(`vouchers`, `classifications`)과 v1 테이블(`source_documents`, `institution_borrowers` 등)은 서로 nullable FK로만 연결돼 있다 — 기존 파이프라인을 건드리지 않고 기관 귀속·문서 출처를 얹는 방식(0006 백필로 기존 데모 데이터도 기본 기관에 소급 연결).
 - PCAF 엔진은 현재 두 갈래로 존재한다: 임시 구현 `db/pcaf.py::company_pcaf_summary()`(구 1~5등급 방식, `ScenePcaf.tsx`가 아직 이걸 씀)와 정식 구현 `db/pcaf_quality.py`(Table 10.1-2 옵션 기반, `/borrowers/{company_id}/quality-assessments/{year}`로 노출되지만 프론트 미연결) — 교체 작업 남아 있음.
+- `db/pcaf.py::rate_upgrade_candidates`(전체 기업 순회, 읽기 전용 안내 목록)는 단일 기업 판정 함수 `upgrade_candidate_for_company`로 리팩터링됐다 — `rate_approval_requests` 생성 시(§22) 동일 판정 로직을 재사용해 등급 스냅샷을 저장하기 위함(로직 중복 없음).
 
 ## 변경 이력
-- 2026-08: v1 기관/PCAF 레이어(§9~20) 전면 추가, Alembic 도입 반영, PCAF 이원화 현황 명시.
+- 2026-08(2주차): §17 `borrower_emission_inventories.emission_tco2e`를 채우는 집계 로직(`aggregate_scope_emissions`) 추가 — 스키마 변경 없음, 계산 경로만 신규(§4 역할분담 "인벤토리 완전성 집계" 해소).
+- 2026-08(2주차): `source_document_access_logs`(§15), `rate_approval_requests`(§22) 추가 — 승인요청 큐(HITL 큐와 분리)와 원본문서 열람 감사 로그(PR #28). `0011_rate_approval_and_access_log.py` 마이그레이션.
+- 2026-08: v1 기관/PCAF 레이어(§9~21) 전면 추가, Alembic 도입 반영, PCAF 이원화 현황 명시.
 - 2026-07: `classifications.reviewed_at` 추가 — 관리자 대시보드 "검토 대기" 집계(오늘 확정/반려 건수)를 위해 담당자 확정/반려 시각을 기록. `PATCH /admin/classifications/{id}/confirm|reject`, `edit_classification`에서 기록.

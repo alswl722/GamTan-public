@@ -31,6 +31,11 @@ PR #25 리뷰 반영 (2026-08-12): 최초 버전은 연료 버킷(전기/가스/
 Scope 2가 같은 dominant_basis/option_code를 받는 버그가 있었다(예: 경유 11개월 + 전기
 1개월이 섞이면 전기 행이 경유 데이터에 좌우됨). _FUEL_BUCKET_SCOPE로 연료→Scope를
 매핑해 Scope 1(가스·경유/유류)과 Scope 2(전기)를 분리 집계하도록 고쳤다.
+
+v1 §4 "인벤토리 완전성 집계" (2026-08-12): aggregate_scope_emissions 추가 —
+BorrowerEmissionInventory.emission_tco2e를 실제로 채우는 유일한 계산 경로. 전에는
+candidate_quality_score(품질 후보 점수)만 채우고 emission_tco2e는 항상 null로
+남아 있었다(docs/db-schema.md §17 노트).
 """
 from dataclasses import dataclass, field
 
@@ -135,6 +140,47 @@ def assess_inventory_completeness(
         activity_basis_breakdown=basis_counts,
         completeness_pct=round(covered_slots / total_slots * 100, 1) if total_slots else 0.0,
     )
+
+
+def aggregate_scope_emissions(
+    session: Session, company_id: int, reporting_year: int, scope_group: str
+) -> dict:
+    """전표별 classifications → 연간 Scope 배출량 합산 (v1 §4 "인벤토리 완전성 집계").
+
+    BorrowerEmissionInventory.emission_tco2e를 채우는 유일한 계산 경로다. 기존
+    db/pcaf.py::_after_measured가 같은 합산을 하지만 Scope 1·2 통합·연도 필터
+    없이 전체 기간을 다루는(v0.1 사장님 리포트용) 다른 용도라 재사용하지 않고,
+    assess_inventory_completeness와 같은 연도·scope_group 필터로 새로 집계한다
+    (이 파일이 이미 연도별 Scope 분리 집계를 하고 있어 일관성 유지).
+
+    Scope 3는 이 프로젝트가 데이터를 만들지 않으므로 emission_tco2e=None,
+    scope3_status="not_calculated"로 반환한다 — 0으로 합산하지 않는다(원칙9).
+    담당자가 반려한 건(status='rejected')은 분류를 신뢰할 수 없다는 판정이므로
+    제외한다(db/pcaf.py::_after_measured와 동일 규칙).
+    """
+    if scope_group == "scope_3":
+        return {"emission_tco2e": None, "scope3_status": "not_calculated", "verified": False}
+
+    fuels = [f for f, s in _FUEL_BUCKET_SCOPE.items() if s == scope_group]
+    rows = session.execute(
+        select(Voucher, Classification)
+        .join(Classification, Classification.voucher_id == Voucher.id)
+        .where(Voucher.company_id == company_id, Voucher.year == reporting_year)
+    ).all()
+
+    total_kg = 0.0
+    has_any = False
+    for voucher, classification in rows:
+        if _fuel_bucket(voucher.item_description) not in fuels:
+            continue
+        has_any = True
+        if classification.status == "rejected" or not classification.emission_co2e:
+            continue
+        total_kg += float(classification.emission_co2e)
+
+    if not has_any:
+        return {"emission_tco2e": None, "scope3_status": None, "verified": False}
+    return {"emission_tco2e": round(total_kg / 1000.0, 2), "scope3_status": None, "verified": False}
 
 
 def _fuel_bucket(item: str | None) -> str:

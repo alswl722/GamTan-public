@@ -4,7 +4,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from db.models import Base, Company, FinancialInstitution, InstitutionBorrower
-from db.seed_mock import DEMO_TENANT_KEY, EXTRA_COMPANIES, seed_extra_companies
+from db.seed_mock import _DEMO_TENANT_KEY, EXTRA_COMPANIES, seed_extra_companies
 
 
 @pytest.fixture()
@@ -22,7 +22,7 @@ def test_seeds_all_six_companies_with_active_institution_borrower(db):
     assert len(companies) == len(EXTRA_COMPANIES)
 
     inst = db.execute(
-        select(FinancialInstitution).where(FinancialInstitution.tenant_key == DEMO_TENANT_KEY)
+        select(FinancialInstitution).where(FinancialInstitution.tenant_key == _DEMO_TENANT_KEY)
     ).scalar_one()
 
     borrowers = db.execute(select(InstitutionBorrower)).scalars().all()
@@ -42,7 +42,7 @@ def test_seeding_twice_is_idempotent(db):
 
 def test_reuses_existing_financial_institution_if_present(db):
     """0006 백필이 이미 만들어둔 데모 기관이 있으면 새로 만들지 않고 재사용한다."""
-    inst = FinancialInstitution(name="기존 기관", reporting_currency="KRW", tenant_key=DEMO_TENANT_KEY)
+    inst = FinancialInstitution(name="기존 기관", reporting_currency="KRW", tenant_key=_DEMO_TENANT_KEY)
     db.add(inst)
     db.commit()
 
