@@ -20,9 +20,10 @@ from db.pcaf_quality import assess_borrower_emission_quality
 
 router = APIRouter(prefix="/borrowers", tags=["quality"])
 
-# PcafQualityRule.scope_group("scope_1_2")은 품질규칙 매칭 단위이고,
-# BorrowerEmissionInventory.scope_group(scope_1|scope_2|scope_3, §7.4 CHECK 제약)은
-# 인벤토리 저장 단위다 — 서로 다른 값 도메인이므로 저장 시 Scope 1·2 두 행으로 나눈다.
+# db/pcaf_quality.assess_borrower_emission_quality는 Scope 1과 Scope 2를 각각
+# 독립적으로 평가한다(PR #25 리뷰 CONFIRMED 수정 — 이전에는 "scope_1_2" 하나로
+# 합쳐 평가한 뒤 두 인벤토리 행에 동일 값을 복사해 넣었고, 그 결과 서로 다른
+# 배출원(전기 vs 가스·경유)의 activity_basis가 서로의 점수를 오염시켰다).
 _INVENTORY_SCOPES_FOR_SCOPE_1_2 = ("scope_1", "scope_2")
 
 
@@ -88,33 +89,41 @@ def get_quality_assessment(company_id: int, year: int, session: Session = Depend
 
 @router.post("/{company_id}/quality-assessments/{year}/evaluate")
 def evaluate_quality_assessment(company_id: int, year: int, session: Session = Depends(get_session)):
-    """품질 후보 재산정 — Scope 1·2 각각 새 버전으로 저장(기존 최신 행이 있으면 supersedes 로 연결).
+    """품질 후보 재산정 — Scope 1·2를 각각 독립적으로 평가해 새 버전으로 저장
+    (기존 최신 행이 있으면 supersedes 로 연결).
 
-    PcafQualityRule.scope_group("scope_1_2")은 품질규칙 매칭 단위이고,
-    BorrowerEmissionInventory.scope_group(scope_1|scope_2)은 인벤토리 저장 단위라
-    동일 평가 결과를 두 스코프 행에 나눠 저장한다.
+    Scope 1(가스·경유/유류)과 Scope 2(전기)는 배출원이 서로 달라 activity_basis
+    구성비도 다를 수 있으므로 db/pcaf_quality.assess_borrower_emission_quality를
+    스코프별로 따로 호출한다(PR #25 리뷰 CONFIRMED 수정).
     승인된(status='approved') 인벤토리도 덮어쓰지 않고 새 버전을 만든다(CLAUDE.md
     "승인된 결과는 덮어쓰지 않고 새 버전으로 재산정").
+
+    적어도 한 Scope가 산정 가능해야 저장한다 — 둘 다 산정 불가면 422로 명확히 실패시킨다
+    (CLAUDE.md 실패 가시성 원칙, 목업으로 채우지 않는다).
     """
     _require_company(session, company_id)
     boundary = _latest_boundary(session, company_id, year)
 
-    assessment = assess_borrower_emission_quality(session, company_id, year, "scope_1_2")
-    if assessment["candidate_score"] is None:
+    assessments = {
+        scope: assess_borrower_emission_quality(session, company_id, year, scope)
+        for scope in _INVENTORY_SCOPES_FOR_SCOPE_1_2
+    }
+    if all(a["candidate_score"] is None for a in assessments.values()):
+        limitations = [msg for a in assessments.values() for msg in a["limitations"]]
         raise HTTPException(
             status_code=422,
-            detail="; ".join(assessment["limitations"]) or "품질 후보를 산정할 수 없습니다",
+            detail="; ".join(limitations) or "품질 후보를 산정할 수 없습니다",
         )
 
-    rule_id = None
-    if assessment["option_code"]:
-        rule = session.execute(
-            select(PcafQualityRule).where(PcafQualityRule.option_code == assessment["option_code"])
-        ).scalar_one_or_none()
-        rule_id = rule.id if rule else None
-
     saved = []
-    for scope in _INVENTORY_SCOPES_FOR_SCOPE_1_2:
+    for scope, assessment in assessments.items():
+        rule_id = None
+        if assessment["option_code"]:
+            rule = session.execute(
+                select(PcafQualityRule).where(PcafQualityRule.option_code == assessment["option_code"])
+            ).scalar_one_or_none()
+            rule_id = rule.id if rule else None
+
         previous = session.execute(
             select(BorrowerEmissionInventory)
             .where(
@@ -134,6 +143,7 @@ def evaluate_quality_assessment(company_id: int, year: int, session: Session = D
             completeness_pct=assessment["completeness_pct"],
             candidate_quality_score=assessment["candidate_score"],
             candidate_quality_rule_id=rule_id,
+            candidate_quality_basis_json=assessment["basis"],
             limitations_json=assessment["limitations"],
             status="draft",
             version=(previous.version + 1) if previous else 1,
@@ -143,10 +153,10 @@ def evaluate_quality_assessment(company_id: int, year: int, session: Session = D
         saved.append(inventory)
 
     session.commit()
-    return {"assessments": [_serialize(inv, basis=assessment["basis"]) for inv in saved]}
+    return {"assessments": [_serialize(inv) for inv in saved]}
 
 
-def _serialize(inventory: BorrowerEmissionInventory, basis: list[str] | None = None) -> dict:
+def _serialize(inventory: BorrowerEmissionInventory) -> dict:
     return {
         "company_id": inventory.company_id,
         "reporting_year": inventory.reporting_year,
@@ -154,7 +164,7 @@ def _serialize(inventory: BorrowerEmissionInventory, basis: list[str] | None = N
         "candidate_score": inventory.candidate_quality_score,
         "status": inventory.status,
         "rule_id": inventory.candidate_quality_rule_id,
-        "basis": basis or [],
+        "basis": inventory.candidate_quality_basis_json or [],
         "limitations": inventory.limitations_json or [],
         "completeness_pct": inventory.completeness_pct,
         "bank_review_required": True,

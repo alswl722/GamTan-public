@@ -7,9 +7,13 @@ PCAF Standard Part A Third Edition, Table 10.1-2(Annex p.192) 원문 옵션 체�
   - 분류 신뢰도(HITL)와 PCAF 품질점수는 완전히 분리된 축이다(§6.1, §6.4).
   - 활동자료 근거(생산량 vs 매출 환산)에 따라 다른 옵션이 매칭된다.
   - 완전성(completeness_pct)과 품질 후보(candidate_score)는 서로 다른 필드·다른 계산 경로다.
+  - Scope 1과 Scope 2는 서로 다른 배출원(가스·경유 vs 전기)이라 독립적으로 집계·평가된다
+    (PR #25 리뷰 CONFIRMED 수정 — 이전에는 한데 묶여 서로의 점수를 오염시켰다).
   - Scope 1·2와 Scope 3는 원문상 같은 옵션 체계를 공유하되(별도 표 없음), 이 프로젝트가
     Scope 3 데이터를 아직 만들지 않아 결과가 갈린다 — 0으로 합산되지 않는다.
   - status는 항상 "candidate" — 자동 승인되지 않는다(CLAUDE.md §9).
+  - 판정 근거(basis)는 DB(candidate_quality_basis_json)에 영구 저장되고 GET으로 복원된다
+    (PR #25 리뷰 CONFIRMED 수정 — 이전에는 evaluate 응답에만 실리고 저장되지 않았다).
 """
 import pytest
 from sqlalchemy import create_engine
@@ -121,8 +125,8 @@ def test_completeness_pct_separate_from_candidate_score(db):
     for m in range(1, 13):
         _add_voucher(session, cid, m, "도시가스", quantity=100)
 
-    completeness = assess_inventory_completeness(session, cid, YEAR)
-    quality = assess_borrower_emission_quality(session, cid, YEAR, "scope_1_2")
+    completeness = assess_inventory_completeness(session, cid, YEAR, "scope_1")
+    quality = assess_borrower_emission_quality(session, cid, YEAR, "scope_1")
 
     assert completeness.completeness_pct == quality["completeness_pct"]
     assert "candidate_score" not in completeness.__dict__
@@ -135,8 +139,38 @@ def test_missing_months_reported_by_fuel(db):
     for m in (1, 2, 3):
         _add_voucher(session, cid, m, "도시가스", quantity=100)
 
-    completeness = assess_inventory_completeness(session, cid, YEAR)
+    completeness = assess_inventory_completeness(session, cid, YEAR, "scope_1")
     assert completeness.missing_months["가스"] == list(range(4, 13))
+
+
+def test_scope1_and_scope2_completeness_are_independent(db):
+    """Scope 1(가스, 경유/유류)과 Scope 2(전기) 완전성은 서로 다른 슬롯 기준으로 독립
+    집계된다(PR #25 리뷰 CONFIRMED — 이전에는 연료 구분 없이 한데 묶여 집계됐다).
+    도시가스만 12개월 채우면 Scope 1은 가스 슬롯만 채워져 50%(가스 12/12, 경유·유류 0/12),
+    Scope 2(전기 전용)는 데이터가 아예 없어 0%다."""
+    session, cid = db
+    for m in range(1, 13):
+        _add_voucher(session, cid, m, "도시가스", quantity=100)  # Scope 1(가스)만 채움
+
+    scope1 = assess_inventory_completeness(session, cid, YEAR, "scope_1")
+    scope2 = assess_inventory_completeness(session, cid, YEAR, "scope_2")
+
+    assert scope1.completeness_pct == 50.0
+    assert scope2.completeness_pct == 0.0
+    assert scope1.activity_basis_breakdown
+    assert not scope2.activity_basis_breakdown
+
+
+def test_other_bucket_vouchers_excluded_from_both_completeness_and_basis(db):
+    """어느 연료 버킷에도 안 잡히는(기타) 전표는 completeness와 activity_basis_breakdown
+    양쪽에서 동일하게 제외된다 — 리포트에 안 보이는 전표가 옵션 코드 선택에는 영향을
+    주는 근거-결과 불일치를 막는다(PR #25 리뷰)."""
+    session, cid = db
+    _add_voucher(session, cid, 1, "사무용품비", quantity=100)  # 어느 버킷에도 안 잡힘
+
+    completeness = assess_inventory_completeness(session, cid, YEAR, "scope_1")
+    assert completeness.months_covered == 0
+    assert not completeness.activity_basis_breakdown
 
 
 # ── assess_borrower_emission_quality — 활동자료 근거별 옵션 매칭 ─────────────
@@ -145,14 +179,14 @@ def test_production_data_scores_higher_than_revenue_estimate(db):
     session, cid = db
     for m in range(1, 13):
         _add_voucher(session, cid, m, "도시가스", quantity=100)
-    production_result = assess_borrower_emission_quality(session, cid, YEAR, "scope_1_2")
+    production_result = assess_borrower_emission_quality(session, cid, YEAR, "scope_1")
 
     company2 = Company(name="타사", industry_code="C251")
     session.add(company2)
     session.commit()
     for m in range(1, 13):
         _add_voucher(session, company2.id, m, "유류대금")
-    revenue_result = assess_borrower_emission_quality(session, company2.id, YEAR, "scope_1_2")
+    revenue_result = assess_borrower_emission_quality(session, company2.id, YEAR, "scope_1")
 
     assert production_result["candidate_score"] < revenue_result["candidate_score"]
     assert production_result["option_code"] == "2b"
@@ -169,8 +203,26 @@ def test_mixed_data_within_year_uses_dominant_basis(db):
     for m in (9, 10, 11, 12):  # 4개월 revenue
         _add_voucher(session, cid, m, "유류대금")
 
-    result = assess_borrower_emission_quality(session, cid, YEAR, "scope_1_2")
+    result = assess_borrower_emission_quality(session, cid, YEAR, "scope_1")
     assert result["option_code"] == "2b"  # production이 다수
+
+
+def test_scope1_basis_not_polluted_by_scope2_data(db):
+    """Scope 2(전기)가 revenue 기반이어도 Scope 1(가스, production 기반) 점수는
+    영향받지 않는다 — PR #25 리뷰가 지적한 Scope 오염 버그의 회귀 테스트."""
+    session, cid = db
+    for m in range(1, 13):
+        _add_voucher(session, cid, m, "도시가스", quantity=100)  # Scope 1: production
+    for m in range(1, 13):
+        _add_voucher(session, cid, m, "전기요금")  # Scope 2: revenue(수량 없음)
+
+    scope1 = assess_borrower_emission_quality(session, cid, YEAR, "scope_1")
+    scope2 = assess_borrower_emission_quality(session, cid, YEAR, "scope_2")
+
+    assert scope1["option_code"] == "2b"
+    assert scope1["candidate_score"] == 3
+    assert scope2["option_code"] == "3a"
+    assert scope2["candidate_score"] == 4
 
 
 # ── HITL 분리 (§6.1) ─────────────────────────────────────────────────────────
@@ -180,7 +232,7 @@ def test_hitl_review_required_does_not_change_quality_score(db):
     for m in range(1, 13):
         _add_voucher(session, cid, m, "도시가스", quantity=100, status="review_required")
 
-    result = assess_borrower_emission_quality(session, cid, YEAR, "scope_1_2")
+    result = assess_borrower_emission_quality(session, cid, YEAR, "scope_1")
     assert result["candidate_score"] is not None
     assert result["option_code"] == "2b"
 
@@ -192,12 +244,12 @@ def test_scope_1_2_and_scope_3_assessed_separately(db):
     for m in range(1, 13):
         _add_voucher(session, cid, m, "도시가스", quantity=100)
 
-    s12 = assess_borrower_emission_quality(session, cid, YEAR, "scope_1_2")
+    s1 = assess_borrower_emission_quality(session, cid, YEAR, "scope_1")
     s3 = assess_borrower_emission_quality(session, cid, YEAR, "scope_3")
 
-    assert s12["scope_group"] == "scope_1_2"
+    assert s1["scope_group"] == "scope_1"
     assert s3["scope_group"] == "scope_3"
-    assert s12["candidate_score"] is not None
+    assert s1["candidate_score"] is not None
     assert s3["candidate_score"] is None  # 이 프로젝트가 Scope 3 데이터를 만들지 않음
 
 
@@ -217,7 +269,7 @@ def test_status_always_candidate_never_auto_approved(db):
     for m in range(1, 13):
         _add_voucher(session, cid, m, "도시가스", quantity=100)
 
-    for scope_group in ("scope_1_2", "scope_3"):
+    for scope_group in ("scope_1", "scope_2", "scope_3"):
         result = assess_borrower_emission_quality(session, cid, YEAR, scope_group)
         assert result["status"] == "candidate"
         assert result["bank_review_required"] is True
@@ -226,7 +278,7 @@ def test_status_always_candidate_never_auto_approved(db):
 def test_no_activity_data_yields_no_candidate_with_limitation(db):
     """분류가 아예 없으면 candidate_score=None + 명확한 사유를 반환(추정으로 채우지 않음)."""
     session, cid = db
-    result = assess_borrower_emission_quality(session, cid, YEAR, "scope_1_2")
+    result = assess_borrower_emission_quality(session, cid, YEAR, "scope_1")
     assert result["candidate_score"] is None
     assert result["limitations"]
 
@@ -237,7 +289,7 @@ def test_quality_evidence_includes_rule_source_reference(db):
     session, cid = db
     for m in range(1, 13):
         _add_voucher(session, cid, m, "도시가스", quantity=100)
-    result = assess_borrower_emission_quality(session, cid, YEAR, "scope_1_2")
+    result = assess_borrower_emission_quality(session, cid, YEAR, "scope_1")
     assert any("Table 10.1-2" in b for b in result["basis"])
     assert any("2b" in b for b in result["basis"])
 
@@ -286,6 +338,40 @@ def test_evaluate_endpoint_persists_and_versions(api_client):
     get_res = client.get(f"/borrowers/{cid}/quality-assessments/{YEAR}")
     assert get_res.status_code == 200
     assert all(a["version"] == 2 for a in get_res.json()["assessments"])
+
+
+def test_evaluate_basis_persisted_and_recoverable_via_get(api_client):
+    """evaluate 응답의 basis(판정 근거)가 DB에 저장되고, 이후 GET으로도 동일하게
+    조회된다 — PR #25 리뷰 CONFIRMED 수정(이전에는 응답에만 실리고 저장되지 않아
+    GET이 항상 빈 배열을 반환했다)."""
+    client, session, cid = api_client
+    for m in range(1, 13):
+        _add_voucher(session, cid, m, "도시가스", quantity=100)
+
+    post_res = client.post(f"/borrowers/{cid}/quality-assessments/{YEAR}/evaluate")
+    assert post_res.status_code == 200, post_res.text
+    scope1_post = next(a for a in post_res.json()["assessments"] if a["scope_group"] == "scope_1")
+    assert scope1_post["basis"]  # POST 응답에 근거가 실림
+
+    get_res = client.get(f"/borrowers/{cid}/quality-assessments/{YEAR}")
+    assert get_res.status_code == 200
+    scope1_get = next(a for a in get_res.json()["assessments"] if a["scope_group"] == "scope_1")
+    assert scope1_get["basis"] == scope1_post["basis"]  # GET에서도 동일하게 복원됨(더 이상 빈 배열 아님)
+
+
+def test_evaluate_saves_partial_scope_when_only_one_scope_has_data(api_client):
+    """Scope 1만 데이터가 있어도 evaluate는 두 행을 모두 저장한다 — Scope 2는
+    candidate_score=None + limitations로 결손 자체가 정보로 남는다(0으로 채우지 않음)."""
+    client, session, cid = api_client
+    for m in range(1, 13):
+        _add_voucher(session, cid, m, "도시가스", quantity=100)  # Scope 1만
+
+    res = client.post(f"/borrowers/{cid}/quality-assessments/{YEAR}/evaluate")
+    assert res.status_code == 200, res.text
+    by_scope = {a["scope_group"]: a for a in res.json()["assessments"]}
+    assert by_scope["scope_1"]["candidate_score"] is not None
+    assert by_scope["scope_2"]["candidate_score"] is None
+    assert by_scope["scope_2"]["limitations"]
 
 
 def test_evaluate_without_boundary_fails_clearly(db):

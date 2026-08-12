@@ -408,6 +408,7 @@ class BorrowerEmissionInventory(Base):
     completeness_pct = Column(Float)
     candidate_quality_score = Column(SmallInteger)
     candidate_quality_rule_id = Column(Integer, ForeignKey("pcaf_quality_rules.id"))
+    candidate_quality_basis_json = Column(JSON)
     limitations_json = Column(JSON)
     status = Column(String(20), nullable=False, default="draft")  # draft | calculated | reviewed | approved | superseded
     version = Column(Integer, nullable=False, default=1)

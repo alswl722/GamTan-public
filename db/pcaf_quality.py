@@ -25,6 +25,12 @@ PCAF Standard Part A Third Edition, Table 10.1-2(Annex p.192) 원문 옵션 체�
     반환한다(0 합산 금지) — 이는 PCAF 옵션 체계의 제약이 아니라 이 프로젝트의 데이터
     가용성 한계다.
   - LLM 미호출 — PcafQualityRule 매칭과 completeness_pct 계산은 전부 결정론적 코드.
+
+PR #25 리뷰 반영 (2026-08-12): 최초 버전은 연료 버킷(전기/가스/경유·유류) 구분 없이
+회사·연도 전표를 전부 한데 묶어 activity_basis_breakdown을 집계했고, 그 결과 Scope 1과
+Scope 2가 같은 dominant_basis/option_code를 받는 버그가 있었다(예: 경유 11개월 + 전기
+1개월이 섞이면 전기 행이 경유 데이터에 좌우됨). _FUEL_BUCKET_SCOPE로 연료→Scope를
+매핑해 Scope 1(가스·경유/유류)과 Scope 2(전기)를 분리 집계하도록 고쳤다.
 """
 from dataclasses import dataclass, field
 
@@ -33,7 +39,7 @@ from sqlalchemy.orm import Session
 
 from db.models import Classification, PcafQualityRule, Voucher
 
-_FUEL_BUCKET_SCOPE = {"전기": 2, "가스": 1, "경유/유류": 1}
+_FUEL_BUCKET_SCOPE = {"전기": "scope_2", "가스": "scope_1", "경유/유류": "scope_1"}
 
 
 def classify_activity_data_method(voucher: Voucher, classification: Classification) -> str:
@@ -48,18 +54,29 @@ def classify_activity_data_method(voucher: Voucher, classification: Classificati
     verified_emissions/unverified_emissions(1a/1b, 차주 직접 보고+검증)와
     assets/asset_turnover_ratio(3b/3c)는 이 프로젝트가 아직 만들지 않는 입력
     경로이므로 반환하지 않는다 — 없는 값을 만들어내지 않는다.
+
+    참고(PR #25 리뷰): 이 함수의 반환값(production/revenue)은 Classification 모델의
+    기존 activity_data_method 필드(0005 마이그레이션, reported_quantity 등)와 다른
+    어휘로 같은 개념을 표현한다. 기존 필드는 현재 다른 코드에서 쓰이지 않아 급하지
+    않지만, 두 체계를 나중에 통합할 필요가 있다.
     """
     raw = voucher.raw_json or {}
-    if raw.get("quantity"):
+    if raw.get("quantity") is not None:
         return "production"
     return "revenue"
 
 
 @dataclass
 class CompletenessAssessment:
-    """§6.3 차주 인벤토리 완전성 — PCAF 품질 후보와 분리해서 반환한다."""
+    """§6.3 차주 인벤토리 완전성 — PCAF 품질 후보와 분리해서 반환한다.
+
+    scope_group 단위(scope_1|scope_2)로 산정한다 — Scope 1(가스·경유/유류)과
+    Scope 2(전기)를 한데 묶어 집계하면 서로 다른 배출원의 activity_basis가
+    섞여 품질 후보 점수가 오염된다(PR #25 리뷰 CONFIRMED).
+    """
 
     reporting_year: int
+    scope_group: str
     months_covered: int
     missing_months: dict[str, list[int]] = field(default_factory=dict)
     activity_basis_breakdown: dict[str, int] = field(default_factory=dict)
@@ -67,15 +84,22 @@ class CompletenessAssessment:
 
 
 def assess_inventory_completeness(
-    session: Session, company_id: int, reporting_year: int
+    session: Session, company_id: int, reporting_year: int, scope_group: str
 ) -> CompletenessAssessment:
-    """해당 기업·보고연도의 12개월 충족 여부, 결손월, 활동자료 근거 구성비를 집계.
+    """해당 기업·보고연도·Scope의 12개월 충족 여부, 결손월, 활동자료 근거 구성비를 집계.
 
-    completeness_pct는 "12개월 × 3개 연료 대분류" 슬롯 중 결손 없는 슬롯의 비율이다
+    scope_group: "scope_1"(가스, 경유/유류) | "scope_2"(전기). _FUEL_BUCKET_SCOPE로
+    연료 버킷을 Scope에 매핑해 해당 Scope의 연료만 대상으로 집계한다.
+
+    completeness_pct는 "12개월 × 해당 Scope 연료 개수" 슬롯 중 결손 없는 슬롯의 비율이다
     — 배출량 가중이 아니라 시간·배출원 커버리지 기준(§6.3). 품질 후보 점수(candidate_score)
     산정에는 이 값을 참고자료로만 넘기고 직접 곱하지 않는다(완전성과 품질 후보는 분리, §6.3).
+
+    "기타"(어느 연료 버킷에도 속하지 않는) 전표는 completeness matrix에 안 잡히는 것과
+    동일하게 activity_basis_breakdown 집계에서도 제외한다 — 리포트에 안 보이는 전표가
+    옵션 코드 선택에는 영향을 주는 근거-결과 불일치를 막기 위함(PR #25 리뷰).
     """
-    fuels = ["전기", "가스", "경유/유류"]
+    fuels = [f for f, s in _FUEL_BUCKET_SCOPE.items() if s == scope_group]
     rows = session.execute(
         select(Voucher, Classification)
         .join(Classification, Classification.voucher_id == Voucher.id)
@@ -84,10 +108,13 @@ def assess_inventory_completeness(
 
     matrix = {f: {m: False for m in range(1, 13)} for f in fuels}
     basis_counts: dict[str, int] = {}
+    covered_months: set[int] = set()
     for voucher, classification in rows:
         bucket = _fuel_bucket(voucher.item_description)
-        if bucket in matrix:
-            matrix[bucket][voucher.month] = True
+        if bucket not in matrix:
+            continue
+        matrix[bucket][voucher.month] = True
+        covered_months.add(voucher.month)
         basis = classify_activity_data_method(voucher, classification)
         basis_counts[basis] = basis_counts.get(basis, 0) + 1
 
@@ -100,11 +127,10 @@ def assess_inventory_completeness(
             missing[fuel] = gaps
         covered_slots += 12 - len(gaps)
 
-    months_covered = len({v.month for v, _ in rows})
-
     return CompletenessAssessment(
         reporting_year=reporting_year,
-        months_covered=months_covered,
+        scope_group=scope_group,
+        months_covered=len(covered_months),
         missing_months=missing,
         activity_basis_breakdown=basis_counts,
         completeness_pct=round(covered_slots / total_slots * 100, 1) if total_slots else 0.0,
@@ -147,10 +173,14 @@ def assess_borrower_emission_quality(
 ) -> dict:
     """PCAF 데이터 품질 후보 산정 — 원문 Table 10.1-2 옵션 체계를 그대로 적용.
 
-    scope_group: "scope_1_2" | "scope_3". 옵션 체계 자체는 Scope 1·2와 Scope 3에
+    scope_group: "scope_1" | "scope_2" | "scope_3". 옵션 체계 자체는 Scope 1·2·3에
     공통이지만(원문에 별도 표 없음), 이 프로젝트는 Scope 3 활동자료를 아직 만들지
     않으므로 candidate_score=None 으로 반환한다 — PCAF 옵션 제약이 아니라 이
     프로젝트의 데이터 가용성 한계임을 limitations 에 명시한다.
+
+    Scope 1과 Scope 2는 각각 별도로 completeness/activity_basis_breakdown을
+    집계한다(PR #25 리뷰 CONFIRMED — 이전에는 두 Scope를 한데 묶어 집계해서
+    서로 다른 배출원의 activity_basis가 서로의 점수를 오염시켰다).
     """
     if scope_group == "scope_3":
         return {
@@ -169,12 +199,12 @@ def assess_borrower_emission_quality(
             "bank_review_required": True,
         }
 
-    completeness = assess_inventory_completeness(session, company_id, reporting_year)
+    completeness = assess_inventory_completeness(session, company_id, reporting_year, scope_group)
     if not completeness.activity_basis_breakdown:
         return {
             "standard": "PCAF Part A Third Edition",
             "asset_class": "business_loans_and_unlisted_equity",
-            "scope_group": "scope_1_2",
+            "scope_group": scope_group,
             "candidate_score": None,
             "status": "candidate",
             "option_code": None,
@@ -193,7 +223,7 @@ def assess_borrower_emission_quality(
     return {
         "standard": "PCAF Part A Third Edition",
         "asset_class": "business_loans_and_unlisted_equity",
-        "scope_group": "scope_1_2",
+        "scope_group": scope_group,
         "candidate_score": rule.quality_score if rule else None,
         "status": "candidate",
         "option_code": rule.option_code if rule else None,
