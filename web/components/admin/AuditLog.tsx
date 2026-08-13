@@ -1,12 +1,15 @@
 "use client";
 
-// 실API: GET /admin/review-log
+// 실API: GET /admin/review-log (page/page_size/company_name 서버사이드 페이지네이션)
 // 별도 감사 테이블 없이 Classification.evidence 에 이미 누적된 담당자 조치 기록을 노출한다.
 
 import { useMemo, useState } from "react";
+import { getReviewLog } from "@/lib/admin-data";
 import type { ReviewLogEntry } from "@/lib/admin-types";
+import { usePaginatedLog } from "@/lib/use-paginated-log";
 import { cn } from "@/lib/utils";
 import { DateText } from "@/lib/use-formatted-date";
+import { PaginationBar } from "@/components/admin/PaginationBar";
 
 const STATUS_MAP: Record<string, { label: string; cls: string }> = {
   confirmed: { label: "확정", cls: "bg-brand-soft text-brand-ink border-brand/30" },
@@ -64,28 +67,20 @@ function LogRow({ entry }: { entry: ReviewLogEntry }) {
   );
 }
 
-export function AuditLog({ entries }: { entries: ReviewLogEntry[] }) {
-  const [filterCompany, setFilterCompany] = useState("전체");
+const PAGE_SIZE = 50;
+
+export function AuditLog() {
+  const { data, loading, error, page, setPage, searchInput, setSearchInput, retry } =
+    usePaginatedLog<{ entries: ReviewLogEntry[] }>(getReviewLog, PAGE_SIZE);
+  // 상태(확정/반려) 필터는 서버 파라미터로 넘기지 않고 현재 페이지 안에서만 적용한다 —
+  // 기업명 검색(서버사이드)과 달리 필터 결과가 페이지 경계를 넘나들 필요가 적은 보조 필터.
   const [filterStatus, setFilterStatus] = useState("전체");
-  const [search, setSearch] = useState("");
 
-  const companies = useMemo(
-    () => ["전체", ...Array.from(new Set(entries.map((e) => e.company_name)))],
-    [entries],
+  const entries = data?.entries ?? [];
+  const filtered = useMemo(
+    () => (filterStatus === "전체" ? entries : entries.filter((e) => e.status === filterStatus)),
+    [entries, filterStatus],
   );
-
-  const filtered = useMemo(() => {
-    let list = [...entries];
-    if (filterCompany !== "전체") list = list.filter((e) => e.company_name === filterCompany);
-    if (filterStatus !== "전체") list = list.filter((e) => e.status === filterStatus);
-    if (search.trim()) {
-      const q = search.trim().toLowerCase();
-      list = list.filter(
-        (e) => e.raw.toLowerCase().includes(q) || (e.evidence ?? "").toLowerCase().includes(q),
-      );
-    }
-    return list;
-  }, [entries, filterCompany, filterStatus, search]);
 
   const selectCls =
     "rounded-md border border-line bg-surface px-2.5 py-1.5 text-xs text-muted transition-colors focus:outline-none focus:ring-1 focus:ring-brand";
@@ -95,25 +90,16 @@ export function AuditLog({ entries }: { entries: ReviewLogEntry[] }) {
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-6 py-4">
         <div>
           <h2 className="text-base font-semibold text-ink">변경 이력</h2>
-          <p className="mt-0.5 text-xs text-faint">
-            담당자 확정·반려 조치 {entries.length}건 — 최근 조치순
-          </p>
+          <p className="mt-0.5 text-xs text-faint">담당자 확정·반려 조치 — 최근 조치순</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <input
             type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="전표·근거 검색"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="기업명 검색"
             className="w-40 rounded-md border border-line bg-surface px-2.5 py-1.5 text-xs text-ink placeholder:text-faint transition-colors focus:outline-none focus:ring-1 focus:ring-brand"
           />
-          <select className={selectCls} value={filterCompany} onChange={(e) => setFilterCompany(e.target.value)}>
-            {companies.map((c) => (
-              <option key={c} value={c}>
-                {c === "전체" ? "기업 전체" : c}
-              </option>
-            ))}
-          </select>
           <select className={selectCls} value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
             <option value="전체">상태 전체</option>
             <option value="confirmed">확정</option>
@@ -123,7 +109,22 @@ export function AuditLog({ entries }: { entries: ReviewLogEntry[] }) {
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {filtered.length === 0 ? (
+        {error ? (
+          <div className="flex h-40 flex-col items-center justify-center gap-2 text-sm text-faint">
+            <span className="text-hitl-ink">{error}</span>
+            <button
+              type="button"
+              onClick={retry}
+              className="rounded-md border border-line bg-surface px-3 py-1.5 text-xs font-semibold text-muted hover:text-ink"
+            >
+              다시 시도
+            </button>
+          </div>
+        ) : loading && !data ? (
+          <div className="flex h-40 flex-col items-center justify-center text-sm text-faint">
+            불러오는 중…
+          </div>
+        ) : filtered.length === 0 ? (
           <div className="flex h-40 flex-col items-center justify-center text-sm text-faint">
             조치 이력 없음
           </div>
@@ -131,6 +132,10 @@ export function AuditLog({ entries }: { entries: ReviewLogEntry[] }) {
           filtered.map((entry) => <LogRow key={entry.voucher_id} entry={entry} />)
         )}
       </div>
+
+      {data && data.total > 0 && (
+        <PaginationBar total={data.total} page={page} pageSize={PAGE_SIZE} onChange={setPage} />
+      )}
     </div>
   );
 }

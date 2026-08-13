@@ -5,7 +5,7 @@ HTTP 응답으로만 전달되고 DB에는 아무 것도 남지 않았다 — �
 "왜, 얼마나 자주 업로드가 실패하는지" 확인할 방법이 없었다. 이 모듈은 그 실패
 자체를 기록·조회한다. 성공한 업로드는 SourceDocument로 이미 남으므로 여기 안 남는다.
 """
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from db.models import Company, DocumentIngestionFailure
@@ -40,26 +40,50 @@ def record_ingestion_failure(
     return record
 
 
-def list_ingestion_failures(session: Session, limit: int = 300) -> list[dict]:
-    """관리자 대시보드 "품질 이슈 로그"(열람 전용) — 최근 순, 기업명 조인."""
+def list_ingestion_failures(
+    session: Session,
+    *,
+    page: int = 1,
+    page_size: int = 50,
+    company_name: str | None = None,
+) -> dict:
+    """관리자 대시보드 "품질 이슈 로그"(열람 전용) — 최근 순, 기업명 조인.
+
+    company_name을 넘기면 기업명 부분일치(대소문자 무시)로 필터한다. total은
+    필터 적용 후 전체 건수 — 프론트가 "N건 중 M~K" 페이지 표시에 쓴다.
+    """
+    base = select(DocumentIngestionFailure, Company).join(
+        Company, DocumentIngestionFailure.company_id == Company.id
+    )
+    if company_name:
+        base = base.where(Company.name.ilike(f"%{company_name}%"))
+
+    total = session.execute(
+        select(func.count()).select_from(base.with_only_columns(DocumentIngestionFailure.id).subquery())
+    ).scalar_one()
+
     stmt = (
-        select(DocumentIngestionFailure, Company)
-        .join(Company, DocumentIngestionFailure.company_id == Company.id)
-        .order_by(DocumentIngestionFailure.created_at.desc())
-        .limit(limit)
+        base.order_by(DocumentIngestionFailure.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
     )
     rows = session.execute(stmt).all()
-    return [
-        {
-            "id": f.id,
-            "company_id": f.company_id,
-            "company_name": company.name,
-            "document_type": f.document_type,
-            "original_filename": f.original_filename,
-            "failure_reason": f.failure_reason,
-            "failure_reason_label": _FAILURE_REASON_LABEL.get(f.failure_reason, f.failure_reason),
-            "detail": f.detail,
-            "created_at": f.created_at.isoformat() if f.created_at else None,
-        }
-        for f, company in rows
-    ]
+    return {
+        "issues": [
+            {
+                "id": f.id,
+                "company_id": f.company_id,
+                "company_name": company.name,
+                "document_type": f.document_type,
+                "original_filename": f.original_filename,
+                "failure_reason": f.failure_reason,
+                "failure_reason_label": _FAILURE_REASON_LABEL.get(f.failure_reason, f.failure_reason),
+                "detail": f.detail,
+                "created_at": f.created_at.isoformat() if f.created_at else None,
+            }
+            for f, company in rows
+        ],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }

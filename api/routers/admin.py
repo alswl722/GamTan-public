@@ -9,10 +9,12 @@
 - PATCH /admin/classifications/bulk-confirm   여러 건 일괄 확정 (건별 성공/실패 반환)
 - PATCH /admin/classifications/bulk-reject    여러 건 일괄 반려 (건별 성공/실패 반환)
 - GET   /admin/review-log                     담당자 조치 이력(감사 로그) — evidence 누적 기록을 노출
+                                               (page/page_size/company_name 서버사이드 페이지네이션)
 - GET   /admin/documents/{id}                 원본문서 열람 (조회 시 접근 로그 자동 기록)
 - GET   /admin/documents/{id}/file            원본문서 파일 바이너리 (PDF, 조회 시 접근 로그 자동 기록)
-- GET   /admin/documents/access-log           원본문서 접근 감사 로그 목록
-- GET   /admin/quality-issues                 품질 이슈 로그 — 업로드 반려·실패 이력 (열람 전용)
+- GET   /admin/documents/access-log           원본문서 접근 감사 로그 목록 (page/page_size/company_name)
+- GET   /admin/quality-issues                 품질 이슈 로그 — 업로드 반려·실패 이력 (열람 전용,
+                                               page/page_size/company_name)
 - GET   /admin/audit-package                  감사 대응 근거 패키지 — 기업·기간 지정 시계열 원자료(JSON/CSV/PDF)
 
 여신 결정·스코어링은 하지 않는다(CLAUDE.md §9). AI가 1차 스크리닝한 저신뢰 건을
@@ -28,7 +30,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from api.db import get_session
@@ -252,20 +254,38 @@ def reject_classification(voucher_id: int, session: Session = Depends(get_sessio
 
 
 @router.get("/review-log")
-def review_log(session: Session = Depends(get_session)):
+def review_log(
+    page: int = 1,
+    page_size: int = 50,
+    company_name: str | None = None,
+    session: Session = Depends(get_session),
+):
     """담당자 조치 이력(감사 로그) — 확정/반려된 건을 최근 조치순으로.
 
     별도 감사 테이블을 새로 두지 않는다 — confirm/edit/reject 가 이미 evidence 에
     "무엇을 했는지"를 원본 판단 근거 뒤에 누적해서 남긴다(설계 원칙: 모든 판단에
     evidence 저장). 이 엔드포인트는 그 기록을 조회용으로 노출만 한다.
+
+    company_name을 넘기면 기업명 부분일치(대소문자 무시)로 필터한다. total은
+    필터 적용 후 전체 건수 — 프론트가 "N건 중 M~K" 페이지 표시에 쓴다.
     """
-    stmt = (
+    base = (
         select(Classification, Voucher, Company)
         .join(Voucher, Classification.voucher_id == Voucher.id)
         .join(Company, Voucher.company_id == Company.id)
         .where(Classification.reviewed_at.isnot(None))
-        .order_by(Classification.reviewed_at.desc())
-        .limit(300)
+    )
+    if company_name:
+        base = base.where(Company.name.ilike(f"%{company_name}%"))
+
+    total = session.execute(
+        select(func.count()).select_from(base.with_only_columns(Classification.id).subquery())
+    ).scalar_one()
+
+    stmt = (
+        base.order_by(Classification.reviewed_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
     )
     rows = session.execute(stmt).all()
     return {
@@ -280,7 +300,10 @@ def review_log(session: Session = Depends(get_session)):
                 "reviewed_at": c.reviewed_at.isoformat() if c.reviewed_at else None,
             }
             for c, v, co in rows
-        ]
+        ],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
     }
 
 
@@ -355,9 +378,14 @@ def trace_runs(session: Session = Depends(get_session)):
 # 문자열이 document_id로 잘못 파싱 시도된다.
 
 @router.get("/documents/access-log")
-def document_access_log(session: Session = Depends(get_session)):
+def document_access_log(
+    page: int = 1,
+    page_size: int = 50,
+    company_name: str | None = None,
+    session: Session = Depends(get_session),
+):
     """전체 원본문서 열람 이력 — 최근 순."""
-    return {"entries": recent_access_log(session)}
+    return recent_access_log(session, page=page, page_size=page_size, company_name=company_name)
 
 
 @router.get("/documents/{document_id}")
@@ -427,10 +455,15 @@ def download_document_file(
 # ── 품질 이슈 로그 (v1 Tier 2, owner-admin-flow-spec.md §7) ────────────────────
 
 @router.get("/quality-issues")
-def quality_issues(session: Session = Depends(get_session)):
+def quality_issues(
+    page: int = 1,
+    page_size: int = 50,
+    company_name: str | None = None,
+    session: Session = Depends(get_session),
+):
     """업로드 반려·실패 이력 — 열람 전용. 성공한 업로드는 여기 안 남는다
     (SourceDocument로 이미 남으므로). 실패만 원인별로 모아 보여준다."""
-    return {"issues": list_ingestion_failures(session)}
+    return list_ingestion_failures(session, page=page, page_size=page_size, company_name=company_name)
 
 
 # ── 감사 대응 근거 패키지 (v1 Tier 2, owner-admin-flow-spec.md §8) ──────────────
