@@ -13,8 +13,6 @@ import {
   getKTaxonomyLeads,
   getPortfolio,
   getQualityIssues,
-  getRateCandidates,
-  getRateRequests,
   getReviewLog,
   getTraceRuns,
 } from "@/lib/admin-data";
@@ -25,8 +23,6 @@ import type {
   KTaxonomyLeadItem,
   PortfolioResponse,
   QualityIssueEntry,
-  RateApprovalRequestItem,
-  RateCandidateItem,
   ReviewLogEntry,
   TraceRunItem,
 } from "@/lib/admin-types";
@@ -38,8 +34,6 @@ type Data = {
   traceRuns: TraceRunItem[];
   reviewLog: ReviewLogEntry[];
   alerts: AlertItem[];
-  rateCandidates: RateCandidateItem[];
-  rateRequests: RateApprovalRequestItem[];
   documentAccessLog: DocumentAccessLogEntry[];
   qualityIssues: QualityIssueEntry[];
   kTaxonomyLeads: KTaxonomyLeadItem[];
@@ -58,8 +52,6 @@ export default function AdminPage() {
       getTraceRuns(),
       getReviewLog(),
       getAlerts(),
-      getRateCandidates(),
-      getRateRequests(),
       getDocumentAccessLog(),
       getQualityIssues(),
       getKTaxonomyLeads(),
@@ -71,8 +63,6 @@ export default function AdminPage() {
           traceRuns,
           reviewLog,
           alerts,
-          rateCandidates,
-          rateRequests,
           documentAccessLog,
           qualityIssues,
           kTaxonomyLeads,
@@ -83,8 +73,6 @@ export default function AdminPage() {
             traceRuns,
             reviewLog,
             alerts,
-            rateCandidates,
-            rateRequests,
             documentAccessLog,
             qualityIssues,
             kTaxonomyLeads,
@@ -137,8 +125,6 @@ export default function AdminPage() {
       traceRuns={data.traceRuns}
       reviewLog={data.reviewLog}
       alerts={data.alerts}
-      rateCandidates={data.rateCandidates}
-      rateRequests={data.rateRequests}
       documentAccessLog={data.documentAccessLog}
       qualityIssues={data.qualityIssues}
       kTaxonomyLeads={data.kTaxonomyLeads}

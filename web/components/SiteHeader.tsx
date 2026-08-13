@@ -9,9 +9,10 @@ export function SiteHeader() {
   const pathname = usePathname();
   // admin(웹 대시보드)만 헤더를 전체 폭으로 — owner(모바일 앱 흐름)는 중앙정렬 좁은 폭 유지
   const isAdmin = pathname?.startsWith("/admin");
-  // 사장님 앱(모바일 앱 흐름)에는 관리자 화면으로 넘어가는 버튼을 두지 않는다 —
+  // 어느 화면에서도 다른 페르소나로 넘어가는 네비 버튼을 두지 않는다 —
   // 서로 다른 페르소나 전환용 버튼이 있으면 실제 앱처럼 안 보인다.
   const isOwner = pathname?.startsWith("/owner");
+  const showPersonaNav = !isOwner && !isAdmin;
 
   return (
     <header className="sticky top-0 z-20 border-b border-line/70 bg-surface/80 backdrop-blur-md">
@@ -31,7 +32,7 @@ export function SiteHeader() {
           </span>
         </Link>
         <div className="flex items-center gap-3">
-          {isOwner ? (
+          {isOwner && (
             // 사장님 앱은 실제 모바일 앱처럼 — 페르소나 전환 링크 대신 알림 아이콘만
             <button
               type="button"
@@ -41,7 +42,9 @@ export function SiteHeader() {
               <Bell size={19} strokeWidth={2.2} />
               <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-red-500 ring-2 ring-surface" />
             </button>
-          ) : (
+          )}
+
+          {showPersonaNav && (
             <nav className="flex items-center gap-1 text-[13.5px]">
               <Link
                 href="/owner"

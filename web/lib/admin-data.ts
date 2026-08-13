@@ -1,7 +1,7 @@
 /**
  * 관리자 대시보드 데이터 접근 — 백엔드 실제 응답(apiGet/apiPatch)만 다룬다.
  */
-import { apiGet, apiPatch } from "@/lib/api";
+import { apiGet, apiPatch, BASE_URL } from "@/lib/api";
 import type {
   AlertItem,
   BulkActionResult,
@@ -11,8 +11,6 @@ import type {
   KTaxonomyLeadItem,
   PortfolioResponse,
   QualityIssueEntry,
-  RateApprovalRequestItem,
-  RateCandidateItem,
   ReviewLogEntry,
   TraceRunItem,
   TraceStep,
@@ -25,6 +23,12 @@ export function getPortfolio(): Promise<PortfolioResponse> {
 
 export function getHitl(): Promise<HitlItem[]> {
   return apiGet<{ queue: HitlItem[] }>("/admin/hitl").then((r) => r.queue);
+}
+
+/** 전표 원본 파일(PDF) URL — <iframe>/<a>가 직접 src·href로 거는 용도.
+ * 열람 시점에 GET /admin/documents/{id}/file 쪽에서 접근 로그가 자동 기록된다. */
+export function documentFileUrl(documentId: number, viewedBy: string): string {
+  return `${BASE_URL}/admin/documents/${documentId}/file?viewed_by=${encodeURIComponent(viewedBy)}`;
 }
 
 export function confirmVoucher(voucherId: number) {
@@ -65,43 +69,9 @@ export function getAlerts(): Promise<AlertItem[]> {
   return apiGet<{ alerts: AlertItem[] }>("/admin/alerts").then((r) => r.alerts);
 }
 
-export function getRateCandidates(): Promise<RateCandidateItem[]> {
-  return apiGet<{ candidates: RateCandidateItem[] }>("/admin/rate-candidates").then(
-    (r) => r.candidates,
-  );
-}
-
 /** K택소노미·설비투자 리드 목록 — 정렬은 데이터 완전성만(감축 실적 기반 금지, 원칙7). */
 export function getKTaxonomyLeads(): Promise<KTaxonomyLeadItem[]> {
   return apiGet<{ leads: KTaxonomyLeadItem[] }>("/admin/k-taxonomy-leads").then((r) => r.leads);
-}
-
-/**
- * 승인요청 큐 — HITL 큐(GET /admin/hitl, 분류 신뢰도)와 분리된 별도 데이터·엔드포인트.
- * status를 넘기면 그 상태만 필터(예: "pending"만 보기).
- */
-export function getRateRequests(status?: string): Promise<RateApprovalRequestItem[]> {
-  const qs = status ? `?status=${encodeURIComponent(status)}` : "";
-  return apiGet<{ requests: RateApprovalRequestItem[] }>(`/admin/rate-requests${qs}`).then(
-    (r) => r.requests,
-  );
-}
-
-/** 승인 — 여신 결정이 아니라 "안내 대상 확인"(CLAUDE.md §9). 응답에 항상 비보장 문구 포함. */
-export function approveRateRequest(
-  requestId: number,
-  reviewedBy: string,
-  note?: string,
-): Promise<RateApprovalRequestItem> {
-  return apiPatch(`/admin/rate-requests/${requestId}/approve`, { reviewed_by: reviewedBy, note });
-}
-
-export function rejectRateRequest(
-  requestId: number,
-  reviewedBy: string,
-  note?: string,
-): Promise<RateApprovalRequestItem> {
-  return apiPatch(`/admin/rate-requests/${requestId}/reject`, { reviewed_by: reviewedBy, note });
 }
 
 /** 원본문서 접근 감사 로그 — 열람 이벤트 자체의 기록(review-log와 다른 축). */

@@ -8,14 +8,11 @@ import type {
   KTaxonomyLeadItem,
   PortfolioResponse,
   QualityIssueEntry,
-  RateApprovalRequestItem,
-  RateCandidateItem,
   ReviewLogEntry,
   TraceRunItem,
 } from "@/lib/admin-types";
 import { cn } from "@/lib/utils";
 import { AlertsPanel } from "@/components/admin/AlertsPanel";
-import { ApprovalQueue } from "@/components/admin/ApprovalQueue";
 import { AuditLog } from "@/components/admin/AuditLog";
 import { AuditPackage } from "@/components/admin/AuditPackage";
 import { DocumentAccessLog } from "@/components/admin/DocumentAccessLog";
@@ -23,7 +20,6 @@ import { GradeDonut } from "@/components/admin/GradeDonut";
 import { HitlWorkspace } from "@/components/admin/HitlWorkspace";
 import { KTaxonomyLeads } from "@/components/admin/KTaxonomyLeads";
 import { QualityIssueLog } from "@/components/admin/QualityIssueLog";
-import { RateCandidates } from "@/components/admin/RateCandidates";
 import { TraceHistory } from "@/components/admin/TraceHistory";
 import { VerificationBadge } from "@/components/admin/VerificationBadge";
 
@@ -31,7 +27,6 @@ const TABS = [
   { id: "hitl", label: "담당자 검토" },
   { id: "grades", label: "등급 분포" },
   { id: "risk", label: "여신 리스크" },
-  { id: "approvals", label: "승인요청" },
   { id: "k-taxonomy", label: "K택소노미 리드" },
   { id: "trace", label: "실행 이력" },
   { id: "audit", label: "변경 이력" },
@@ -47,56 +42,11 @@ export interface DashboardShellProps {
   traceRuns: TraceRunItem[];
   reviewLog: ReviewLogEntry[];
   alerts: AlertItem[];
-  rateCandidates: RateCandidateItem[];
-  rateRequests: RateApprovalRequestItem[];
   documentAccessLog: DocumentAccessLogEntry[];
   qualityIssues: QualityIssueEntry[];
   kTaxonomyLeads: KTaxonomyLeadItem[];
   /** 담당자 검토 탭에서 확정/반려가 성공할 때마다 호출 — 변경 이력을 최신으로 다시 불러온다. */
   onReviewed?: () => void;
-}
-
-/** 상단 KPI 스트립 — 한 줄, 헤더에 고정. */
-function KpiStripCompact({ data, onReviewClick }: { data: PortfolioResponse; onReviewClick: () => void }) {
-  const fmt = (n: number) => n.toLocaleString("ko-KR", { maximumFractionDigits: 1 });
-  const items = [
-    { label: "Scope 1", value: fmt(data.scope1_total), unit: "tCO₂e" },
-    { label: "Scope 2", value: fmt(data.scope2_total), unit: "tCO₂e" },
-    { label: "합계", value: fmt(data.total), unit: "tCO₂e", accent: true },
-    { label: "PCAF 가중평균 등급", value: data.avg_grade != null ? `${data.avg_grade}등급` : "—", unit: "" },
-    { label: "실측 커버리지", value: `${data.measured_coverage_pct}%`, unit: "" },
-  ];
-
-  return (
-    <div className="-mx-1 flex flex-wrap items-start gap-y-3 divide-x divide-line">
-      {items.map((item) => (
-        <div key={item.label} className="flex flex-col gap-0.5 px-4 first:pl-0">
-          <span className="whitespace-nowrap text-xs text-faint">{item.label}</span>
-          <span className="flex items-baseline gap-1">
-            <span
-              className={cn(
-                "text-base font-bold leading-none tabular-nums",
-                item.accent ? "text-brand-ink" : "text-ink",
-              )}
-            >
-              {item.value}
-            </span>
-            {item.unit && <span className="text-xs text-faint">{item.unit}</span>}
-          </span>
-        </div>
-      ))}
-
-      <button type="button" onClick={onReviewClick} className="flex flex-col gap-0.5 px-4 text-left">
-        <span className="whitespace-nowrap text-xs text-hitl-ink">검토 대기</span>
-        <span className="flex items-baseline gap-1">
-          <span className="text-base font-bold leading-none tabular-nums text-hitl-ink underline decoration-hitl-ink/40 underline-offset-4">
-            {data.hitl_total}
-          </span>
-          <span className="text-xs text-faint">건</span>
-        </span>
-      </button>
-    </div>
-  );
 }
 
 export function DashboardShell({
@@ -105,8 +55,6 @@ export function DashboardShell({
   traceRuns,
   reviewLog,
   alerts,
-  rateCandidates,
-  rateRequests,
   documentAccessLog,
   qualityIssues,
   kTaxonomyLeads,
@@ -117,11 +65,8 @@ export function DashboardShell({
   return (
     // 루트 레이아웃에 이미 h-16 헤더가 있으므로 그만큼 뺀 높이로 고정 — 페이지 스크롤 없음
     <div className="flex h-[calc(100vh-4rem)] flex-col overflow-hidden bg-bg">
-      {/* 고정 헤더: KPI 스트립 + 탭 바 */}
+      {/* 고정 헤더: 탭 바 */}
       <div className="flex-shrink-0 bg-surface">
-        <div className="border-b border-line px-6 py-3">
-          <KpiStripCompact data={portfolio} onReviewClick={() => setActiveTab("hitl")} />
-        </div>
         <div className="flex h-11 items-end gap-1 border-b border-line px-6">
           {TABS.map((tab) => (
             <button
@@ -161,19 +106,8 @@ export function DashboardShell({
         )}
 
         {activeTab === "risk" && (
-          <div className="grid h-full grid-cols-1 gap-5 overflow-hidden p-5 lg:grid-cols-2">
-            <div className="min-h-0">
-              <AlertsPanel alerts={alerts} />
-            </div>
-            <div className="min-h-0">
-              <RateCandidates candidates={rateCandidates} />
-            </div>
-          </div>
-        )}
-
-        {activeTab === "approvals" && (
-          <div className="h-full p-4">
-            <ApprovalQueue requests={rateRequests} />
+          <div className="h-full p-5">
+            <AlertsPanel alerts={alerts} />
           </div>
         )}
 

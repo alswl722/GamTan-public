@@ -1,7 +1,6 @@
 """관리자 API — 은행 ESG·여신 담당자용 대시보드 데이터 소스.
 
 - GET   /admin/portfolio                      포트폴리오 금융배출량 집계 + PCAF 등급 분포
-- GET   /admin/rate-candidates                 등급 상승 역산 후보 (우대금리 자격 안내)
 - GET   /admin/k-taxonomy-leads                K택소노미·설비투자 리드 목록 (녹색여신·설비금융 안내 대상)
 - GET   /admin/hitl                           전 기업 담당자 검토 큐 (저신뢰 분류 건)
 - PATCH /admin/classifications/{id}/confirm   그대로 확정
@@ -11,10 +10,8 @@
 - PATCH /admin/classifications/bulk-confirm   여러 건 일괄 확정 (건별 성공/실패 반환)
 - PATCH /admin/classifications/bulk-reject    여러 건 일괄 반려 (건별 성공/실패 반환)
 - GET   /admin/review-log                     담당자 조치 이력(감사 로그) — evidence 누적 기록을 노출
-- GET   /admin/rate-requests                  승인요청 큐 (우대금리·설비금융 — HITL과 분리된 별도 큐)
-- PATCH /admin/rate-requests/{id}/approve     승인요청 승인 (여신 결정 아님 — 안내 대상 확정)
-- PATCH /admin/rate-requests/{id}/reject      승인요청 반려
 - GET   /admin/documents/{id}                 원본문서 열람 (조회 시 접근 로그 자동 기록)
+- GET   /admin/documents/{id}/file            원본문서 파일 바이너리 (PDF, 조회 시 접근 로그 자동 기록)
 - GET   /admin/documents/access-log           원본문서 접근 감사 로그 목록
 - GET   /admin/quality-issues                 품질 이슈 로그 — 업로드 반려·실패 이력 (열람 전용)
 - GET   /admin/audit-package                  감사 대응 근거 패키지 — 기업·기간 지정 시계열 원자료(JSON/CSV/PDF)
@@ -22,23 +19,21 @@
 여신 결정·스코어링은 하지 않는다(CLAUDE.md §9). AI가 1차 스크리닝한 저신뢰 건을
 사람이 최종 확정하는 HITL 마감만 담당 — 금융분야 AI 가이드라인의 보조수단성 구현.
 모든 담당자 조치는 evidence 에 감사 로그로 남긴다(설명가능성 원칙).
-
-HITL 큐(분류 신뢰도 기준 — /admin/hitl)와 승인요청 큐(우대금리·설비금융 안내 —
-/admin/rate-requests)는 서로 다른 데이터·화면이다(v1 §6 2주차). 승인요청의 "승인"도
-여신 결정이 아니라 "안내 대상으로 확인했다"는 은행 담당자의 수동 확인일 뿐이며,
-응답에는 항상 비보장 문구(disclaimer_text)가 동반된다(원칙6).
 """
 import csv
 import io
+import os
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.db import get_session
+from api.document_ingestion import REPO_ROOT
 from api.queries import get_emission_factors, get_hitl_queue, get_unit_prices
 from db.alerts import detect_alerts
 from db.calc_engine import CalcDataGap, ClassifiedItemInput, compute_emission, \
@@ -49,9 +44,7 @@ from db.document_access_log import access_history, record_access, recent_access_
 from db.k_taxonomy import k_taxonomy_leads
 from db.models import Classification, Company, SourceDocument, TraceLog, Voucher
 from db.pcaf import portfolio_summary
-from db.pcaf_quality import quality_rate_upgrade_candidates
 from db.quality_issues import list_ingestion_failures
-from db.rate_approvals import AlreadyProcessedError, list_rate_requests, review_rate_request
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -74,16 +67,6 @@ class BulkAction(BaseModel):
 def portfolio(session: Session = Depends(get_session)):
     """거래 기업 전체의 Scope 1/2 합산 + PCAF 등급 분포 + 기업별 내역."""
     return portfolio_summary(session)
-
-
-@router.get("/rate-candidates")
-def rate_candidates(session: Session = Depends(get_session)):
-    """등급 상승 후보 — 정식 엔진(db/pcaf_quality.py) 기준 Scope별 독립 판정.
-
-    기업마다 최대 2행(Scope1·Scope2 각각)이 나올 수 있다. 여신 결정은 하지 않는다
-    (CLAUDE.md §9) — 우대금리 자격 '안내'까지만 담당.
-    """
-    return {"candidates": quality_rate_upgrade_candidates(session)}
 
 
 @router.get("/k-taxonomy-leads")
@@ -378,93 +361,6 @@ def trace_runs(session: Session = Depends(get_session)):
     return {"runs": runs}
 
 
-# ── 승인요청 큐 (우대금리·설비금융) — HITL 큐와 분리된 별도 데이터·화면 ──────────
-
-class ReviewDecision(BaseModel):
-    """승인/반려 처리자·비고. 아직 별도 인증 체계가 없어 문자열로 직접 받는다
-    (기존 review-log가 evidence 문자열로 조치자를 남기는 것과 같은 관례)."""
-
-    reviewed_by: str
-    note: str | None = None
-
-
-def _serialize_rate_request(req) -> dict:
-    return {
-        "id": req.id,
-        "company_id": req.company_id,
-        "request_type": req.request_type,
-        "scope_group": req.scope_group,
-        "current_grade": req.current_grade,
-        "target_grade": req.target_grade,
-        "missing_summary": req.missing_summary,
-        "disclaimer_text": req.disclaimer_text,
-        "status": req.status,
-        "reviewed_by": req.reviewed_by,
-        "reviewed_at": req.reviewed_at.isoformat() if req.reviewed_at else None,
-        "review_note": req.review_note,
-        "created_at": req.created_at.isoformat() if req.created_at else None,
-    }
-
-
-@router.get("/rate-requests")
-def rate_requests(status: str | None = None, session: Session = Depends(get_session)):
-    """승인요청 큐 — 사장님이 우대금리/설비금융 안내를 요청한 건.
-
-    HITL 큐(분류 신뢰도)와 별개 데이터다 — GET /admin/hitl과 혼동하지 말 것.
-    """
-    requests = list_rate_requests(session, status=status)
-    company_names = {
-        c.id: c.name
-        for c in session.execute(select(Company)).scalars().all()
-    }
-    return {
-        "requests": [
-            {**_serialize_rate_request(r), "company_name": company_names.get(r.company_id)}
-            for r in requests
-        ]
-    }
-
-
-@router.patch("/rate-requests/{request_id}/approve")
-def approve_rate_request(
-    request_id: int, decision: ReviewDecision, session: Session = Depends(get_session)
-):
-    """승인 — 여신 결정이 아니라 "안내 대상으로 확인했다"는 담당자 수동 확인(CLAUDE.md §9).
-    응답에는 항상 disclaimer_text(비보장 문구)가 동반된다(원칙6).
-
-    이미 처리된 요청은 새 decision이 이전과 같아도(예: 이미 승인된 걸 다시 승인) 항상
-    409다 — 원래 처리자 정보를 조용히 덮어쓰지 않고, 두 번째 호출자에게 자기 처리가
-    반영되지 않았음을 명확히 알린다(리뷰 지적사항, PR #28).
-    """
-    try:
-        req = review_rate_request(
-            session, request_id, decision="approved",
-            reviewed_by=decision.reviewed_by, note=decision.note,
-        )
-    except AlreadyProcessedError as e:
-        raise HTTPException(status_code=409, detail=f"이미 {e.request.status} 처리된 요청입니다")
-    if req is None:
-        raise HTTPException(status_code=404, detail=f"request_id={request_id} 없음")
-    return _serialize_rate_request(req)
-
-
-@router.patch("/rate-requests/{request_id}/reject")
-def reject_rate_request(
-    request_id: int, decision: ReviewDecision, session: Session = Depends(get_session)
-):
-    """반려 — 사유는 review_note에 남긴다. 이미 처리된 요청은 항상 409(approve와 동일 규칙)."""
-    try:
-        req = review_rate_request(
-            session, request_id, decision="rejected",
-            reviewed_by=decision.reviewed_by, note=decision.note,
-        )
-    except AlreadyProcessedError as e:
-        raise HTTPException(status_code=409, detail=f"이미 {e.request.status} 처리된 요청입니다")
-    if req is None:
-        raise HTTPException(status_code=404, detail=f"request_id={request_id} 없음")
-    return _serialize_rate_request(req)
-
-
 # ── 원본문서 열람 + 접근 감사 로그 ───────────────────────────────────────────
 # 주의: "/documents/access-log"가 "/documents/{document_id}"보다 먼저 등록돼야 한다.
 # FastAPI는 등록 순서대로 매칭하므로, {document_id}가 먼저면 "access-log"라는
@@ -482,8 +378,8 @@ def view_document(
 ):
     """원본문서 열람 — 조회할 때마다 접근 로그를 남긴다(v1 §6 2주차).
 
-    viewed_by는 쿼리 파라미터로 받는다(별도 인증 체계 미도입 — 위 ReviewDecision과
-    같은 관례). 열람 자체는 조치가 아니므로 별도 confirm 없이 GET 시점에 즉시 기록한다.
+    viewed_by는 쿼리 파라미터로 받는다(별도 인증 체계 미도입). 열람 자체는 조치가
+    아니므로 별도 confirm 없이 GET 시점에 즉시 기록한다.
     """
     doc = session.get(SourceDocument, document_id)
     if doc is None:
@@ -504,6 +400,40 @@ def view_document(
             for a in access_history(session, document_id)
         ],
     }
+
+
+@router.get("/documents/{document_id}/file")
+def download_document_file(
+    document_id: int, viewed_by: str, session: Session = Depends(get_session)
+):
+    """원본문서 파일 바이너리 — <iframe>/<embed>가 직접 src로 거는 엔드포인트.
+
+    view_document(메타데이터 JSON)와 분리한다 — 브라우저가 PDF를 렌더링하려면
+    이 URL을 그대로 src에 꽂아야 하므로 JSON을 반환하는 엔드포인트와 섞지 않는다.
+    열람 시점에 즉시 접근 로그를 남기는 관례는 view_document와 동일.
+    """
+    doc = session.get(SourceDocument, document_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"document_id={document_id} 없음")
+    if not doc.file_path:
+        raise HTTPException(status_code=404, detail="원본 파일이 저장되어 있지 않습니다")
+
+    abs_path = os.path.normpath(os.path.join(REPO_ROOT, doc.file_path))
+    if not os.path.isfile(abs_path):
+        raise HTTPException(status_code=404, detail="원본 파일을 찾을 수 없습니다")
+
+    record_access(session, document_id, viewed_by)
+
+    # filename= 인자를 쓰면 FileResponse가 Content-Disposition: attachment로 강제해
+    # 브라우저가 다운로드를 시도한다 — <iframe>이 인라인 렌더링하도록 명시적으로
+    # inline을 지정한다. HTTP 헤더는 latin-1만 허용해 한글 파일명을 그대로 못
+    # 넣으므로, filename*=UTF-8''(RFC 6266) 형식으로 퍼센트 인코딩한다.
+    display_name = quote(doc.original_filename or "document.pdf")
+    return FileResponse(
+        abs_path,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"inline; filename*=UTF-8''{display_name}"},
+    )
 
 
 # ── 품질 이슈 로그 (v1 Tier 2, owner-admin-flow-spec.md §7) ────────────────────

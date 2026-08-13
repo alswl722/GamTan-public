@@ -42,6 +42,9 @@ export interface HitlItem {
   evidence: string | null;
   method: "rule" | "llm";
   month: number;
+  source_document_id: number | null;
+  /** 기업이 직접 체크한 연료 목록(FUEL_OPTIONS 라벨) — null이면 아직 체크 전이라 필터링하지 않는다. */
+  company_fuel_types: string[] | null;
 }
 
 /** 담당자 교정 입력 — 분류 필드만. */
@@ -113,39 +116,6 @@ export interface KTaxonomyLeadItem {
   item_description: string;
   voucher_month: number;
   gap_count: number;
-}
-
-/** 등급 상승 역산 후보 — GET /admin/rate-candidates 응답 항목. */
-export interface RateCandidateItem {
-  company_id: number;
-  company_name: string;
-  scope_group: "scope_1" | "scope_2";
-  current_grade: number;
-  target_grade: number;
-  missing: string;
-  benefit: string;
-}
-
-/**
- * 승인요청 큐 항목 — GET /admin/rate-requests 응답. HITL 큐(분류 신뢰도, HitlItem)와는
- * 완전히 다른 데이터: 여기 status는 사장님 요청에 대한 은행 담당자의 승인/반려 상태이고,
- * 승인도 여신 결정이 아니라 "안내 대상 확인"일 뿐이다(disclaimer_text가 항상 동반).
- */
-export interface RateApprovalRequestItem {
-  id: number;
-  company_id: number;
-  company_name: string;
-  request_type: "rate_upgrade" | "equipment_finance";
-  scope_group: "scope_1" | "scope_2" | null;
-  current_grade: number | null;
-  target_grade: number | null;
-  missing_summary: string | null;
-  disclaimer_text: string;
-  status: "pending" | "approved" | "rejected";
-  reviewed_by: string | null;
-  reviewed_at: string | null;
-  review_note: string | null;
-  created_at: string | null;
 }
 
 /** 원본문서 접근 감사 로그 한 건 — GET /admin/documents/access-log 응답 항목. */
