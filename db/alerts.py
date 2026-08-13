@@ -91,7 +91,7 @@ def _trend_signal(totals: dict[int, float]) -> dict | None:
             "severity": "high",
             "month": latest,
             "ratio": round(ratio, 2),
-            "message": f"{latest}월 배출량이 최근 {TREND_WINDOW}개월 평균의 {ratio:.1f}배로 급등",
+            "message": f"{latest}월 배출량이 최근 {TREND_WINDOW}개월 평균보다 {ratio:.1f}배 늘었어요",
         }
     if ratio <= DROP_RATIO:
         return {
@@ -99,7 +99,7 @@ def _trend_signal(totals: dict[int, float]) -> dict | None:
             "severity": "medium",
             "month": latest,
             "ratio": round(ratio, 2),
-            "message": f"{latest}월 배출량이 최근 {TREND_WINDOW}개월 평균의 {ratio:.1f}배로 급감 — 가동률 하락 의심",
+            "message": f"{latest}월 배출량이 최근 {TREND_WINDOW}개월 평균보다 {ratio:.1f}배 줄었어요. 가동률이 낮아진 건 아닌지 확인해보세요",
         }
     return None
 
@@ -121,7 +121,7 @@ def _gap_signal(totals: dict[int, float]) -> dict | None:
             "severity": "medium",
             "month": last_reported,
             "missing_months": missing,
-            "message": f"{last_reported}월 이후 {len(missing)}개월 연속 전표 미연동 — 데이터 공백",
+            "message": f"{last_reported}월 이후 {len(missing)}개월째 전표가 연동되지 않았어요",
         }
     return None
 
