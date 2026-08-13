@@ -27,9 +27,10 @@ const FAILURE_REASON_CLS: Record<QualityIssueEntry["failure_reason"], string> = 
 
 const PAGE_SIZE = 50;
 
-export function QualityIssueLog() {
+/** companyName을 넘기면 검색창 없이 그 기업으로 고정 필터한다 — 기업 상세 탭이 사용. */
+export function QualityIssueLog({ companyName: fixedCompanyName }: { companyName?: string } = {}) {
   const { data, loading, error, page, setPage, searchInput, setSearchInput, retry } =
-    usePaginatedLog<{ issues: QualityIssueEntry[] }>(getQualityIssues, PAGE_SIZE);
+    usePaginatedLog<{ issues: QualityIssueEntry[] }>(getQualityIssues, PAGE_SIZE, fixedCompanyName);
 
   const issues = data?.issues ?? [];
 
@@ -40,13 +41,15 @@ export function QualityIssueLog() {
           <h2 className="text-base font-semibold text-ink">품질 이슈 로그</h2>
           <p className="mt-0.5 text-xs text-faint">업로드 반려·실패 이력 — 열람 전용, 최근 순</p>
         </div>
-        <input
-          type="text"
-          value={searchInput}
-          onChange={(e) => setSearchInput(e.target.value)}
-          placeholder="기업명 검색"
-          className="w-40 rounded-md border border-line bg-surface px-2.5 py-1.5 text-xs text-ink placeholder:text-faint transition-colors focus:outline-none focus:ring-1 focus:ring-brand"
-        />
+        {fixedCompanyName === undefined && (
+          <input
+            type="text"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="기업명 검색"
+            className="w-40 rounded-md border border-line bg-surface px-2.5 py-1.5 text-xs text-ink placeholder:text-faint transition-colors focus:outline-none focus:ring-1 focus:ring-brand"
+          />
+        )}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">

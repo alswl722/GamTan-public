@@ -69,9 +69,10 @@ function LogRow({ entry }: { entry: ReviewLogEntry }) {
 
 const PAGE_SIZE = 50;
 
-export function AuditLog() {
+/** companyName을 넘기면 검색창 없이 그 기업으로 고정 필터한다 — 기업 상세 탭이 사용. */
+export function AuditLog({ companyName: fixedCompanyName }: { companyName?: string } = {}) {
   const { data, loading, error, page, setPage, searchInput, setSearchInput, retry } =
-    usePaginatedLog<{ entries: ReviewLogEntry[] }>(getReviewLog, PAGE_SIZE);
+    usePaginatedLog<{ entries: ReviewLogEntry[] }>(getReviewLog, PAGE_SIZE, fixedCompanyName);
   // 상태(확정/반려) 필터는 서버 파라미터로 넘기지 않고 현재 페이지 안에서만 적용한다 —
   // 기업명 검색(서버사이드)과 달리 필터 결과가 페이지 경계를 넘나들 필요가 적은 보조 필터.
   const [filterStatus, setFilterStatus] = useState("전체");
@@ -93,13 +94,15 @@ export function AuditLog() {
           <p className="mt-0.5 text-xs text-faint">담당자 확정·반려 조치 — 최근 조치순</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <input
-            type="text"
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            placeholder="기업명 검색"
-            className="w-40 rounded-md border border-line bg-surface px-2.5 py-1.5 text-xs text-ink placeholder:text-faint transition-colors focus:outline-none focus:ring-1 focus:ring-brand"
-          />
+          {fixedCompanyName === undefined && (
+            <input
+              type="text"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="기업명 검색"
+              className="w-40 rounded-md border border-line bg-surface px-2.5 py-1.5 text-xs text-ink placeholder:text-faint transition-colors focus:outline-none focus:ring-1 focus:ring-brand"
+            />
+          )}
           <select className={selectCls} value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
             <option value="전체">상태 전체</option>
             <option value="confirmed">확정</option>

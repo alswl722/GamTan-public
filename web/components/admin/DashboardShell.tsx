@@ -6,16 +6,17 @@ import { cn } from "@/lib/utils";
 import { AlertsPanel } from "@/components/admin/AlertsPanel";
 import { AuditLog } from "@/components/admin/AuditLog";
 import { AuditPackage } from "@/components/admin/AuditPackage";
+import { CompanyDetail } from "@/components/admin/CompanyDetail";
 import { CompanyGradeList } from "@/components/admin/CompanyGradeList";
 import { DocumentAccessLog } from "@/components/admin/DocumentAccessLog";
 import { GradeDonut } from "@/components/admin/GradeDonut";
 import { HitlWorkspace } from "@/components/admin/HitlWorkspace";
 import { QualityIssueLog } from "@/components/admin/QualityIssueLog";
 import { TraceHistory } from "@/components/admin/TraceHistory";
-import { VerificationBadge } from "@/components/admin/VerificationBadge";
 
 const TABS = [
   { id: "hitl", label: "담당자 검토" },
+  { id: "company", label: "기업" },
   { id: "grades", label: "등급 분포" },
   { id: "risk", label: "여신 리스크" },
   { id: "trace", label: "실행 이력" },
@@ -74,16 +75,13 @@ export function DashboardShell({ portfolio, hitlQueue, traceRuns, alerts }: Dash
           </div>
         )}
 
+        {activeTab === "company" && (
+          <CompanyDetail companies={portfolio.companies} traceRuns={traceRuns} />
+        )}
+
         {activeTab === "grades" && (
           <div className="h-full space-y-5 overflow-y-auto p-5">
-            <div className="grid grid-cols-1 items-stretch gap-5 lg:grid-cols-3">
-              <div className="lg:col-span-2">
-                <GradeDonut data={portfolio} />
-              </div>
-              <div className="lg:col-span-1">
-                <VerificationBadge />
-              </div>
-            </div>
+            <GradeDonut data={portfolio} />
             <div className="h-[28rem]">
               <CompanyGradeList companies={portfolio.companies} />
             </div>

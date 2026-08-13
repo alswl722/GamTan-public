@@ -1,6 +1,7 @@
 """관리자 API — 은행 ESG·여신 담당자용 대시보드 데이터 소스.
 
 - GET   /admin/portfolio                      포트폴리오 금융배출량 집계 + PCAF 등급 분포
+- GET   /admin/companies/{id}/overview        기업 상세 탭 — 등급·결손·HITL대기·최근알림 요약
 - GET   /admin/hitl                           전 기업 담당자 검토 큐 (저신뢰 분류 건)
 - PATCH /admin/classifications/{id}/confirm   그대로 확정
 - PATCH /admin/classifications/{id}           분류 수정 후 확정 (담당자 교정)
@@ -35,7 +36,7 @@ from sqlalchemy.orm import Session
 
 from api.db import get_session
 from api.document_ingestion import REPO_ROOT
-from api.queries import get_emission_factors, get_hitl_queue, get_unit_prices
+from api.queries import get_coverage, get_emission_factors, get_hitl_queue, get_unit_prices
 from db.alerts import detect_alerts
 from db.calc_engine import CalcDataGap, ClassifiedItemInput, compute_emission, \
     index_emission_factors, index_unit_prices
@@ -43,7 +44,7 @@ from db.audit_package import build_audit_package
 from db.audit_report_pdf import build_audit_report_pdf
 from db.document_access_log import access_history, record_access, recent_access_log
 from db.models import Classification, Company, SourceDocument, TraceLog, Voucher
-from db.pcaf import portfolio_summary
+from db.pcaf import company_pcaf_summary, portfolio_summary
 from db.quality_issues import list_ingestion_failures
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -83,6 +84,43 @@ def alerts(session: Session = Depends(get_session)):
     담당자가 조짐을 먼저 인지하도록 안내하는 조기 경보일 뿐이다.
     """
     return {"alerts": detect_alerts(session)}
+
+
+@router.get("/companies/{company_id}/overview")
+def company_overview(company_id: int, session: Session = Depends(get_session)):
+    """기업 상세 탭 — 등급·측정 여부·결손·HITL 대기·최근 알림을 한 응답으로 묶는다.
+
+    실행 이력(traces)·변경 이력(review-log)·문서 열람(access-log)·품질 이슈는
+    각자 페이지네이션이 있는 기존 엔드포인트를 프론트가 company_id로 필터해
+    재사용한다 — 여기서는 그 자체로 계산이 필요한 항목만 담아 중복 로직을
+    만들지 않는다.
+    """
+    company = session.get(Company, company_id)
+    if company is None:
+        raise HTTPException(status_code=404, detail=f"company_id={company_id} 없음")
+
+    summary = company_pcaf_summary(session, company_id)
+    after = summary["after"]
+    used = after or summary["before"]
+
+    hitl_count = session.execute(
+        select(func.count(Classification.id))
+        .join(Voucher, Classification.voucher_id == Voucher.id)
+        .where(Voucher.company_id == company_id, Classification.status == "review_required")
+    ).scalar_one()
+
+    return {
+        "company_id": company.id,
+        "company_name": company.name,
+        "industry_name": company.industry_name,
+        "grade": used["grade"],
+        "measured": after is not None,
+        "scope1": round(used.get("scope1", 0.0) or 0.0, 2),
+        "scope2": round(used.get("scope2", 0.0) or 0.0, 2),
+        "hitl_count": hitl_count,
+        "coverage": get_coverage(session, company_id),
+        "alerts": detect_alerts(session, company_id=company_id),
+    }
 
 
 def _load_reviewable(session: Session, voucher_id: int) -> Classification:

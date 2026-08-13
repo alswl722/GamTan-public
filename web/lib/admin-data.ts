@@ -6,6 +6,7 @@ import type {
   AlertItem,
   BulkActionResult,
   ClassificationEdit,
+  CompanyOverview,
   DocumentAccessLogEntry,
   HitlItem,
   PageMeta,
@@ -82,6 +83,11 @@ export function getTraceSteps(sessionId: string): Promise<TraceStep[]> {
 
 export function getAlerts(): Promise<AlertItem[]> {
   return apiGet<{ alerts: AlertItem[] }>("/admin/alerts").then((r) => r.alerts);
+}
+
+/** 기업 상세 탭 — 등급·결손·HITL대기·최근알림 요약. */
+export function getCompanyOverview(companyId: number): Promise<CompanyOverview> {
+  return apiGet(`/admin/companies/${companyId}/overview`);
 }
 
 /** 원본문서 접근 감사 로그 — 열람 이벤트 자체의 기록(review-log와 다른 축). */

@@ -19,9 +19,16 @@ const DOCUMENT_TYPE_LABEL: Record<string, string> = {
 
 const PAGE_SIZE = 50;
 
-export function DocumentAccessLog() {
+/** companyName을 넘기면 검색창 없이 그 기업으로 고정 필터한다 — 기업 상세 탭이 사용. */
+export function DocumentAccessLog({
+  companyName: fixedCompanyName,
+}: { companyName?: string } = {}) {
   const { data, loading, error, page, setPage, searchInput, setSearchInput, retry } =
-    usePaginatedLog<{ entries: DocumentAccessLogEntry[] }>(getDocumentAccessLog, PAGE_SIZE);
+    usePaginatedLog<{ entries: DocumentAccessLogEntry[] }>(
+      getDocumentAccessLog,
+      PAGE_SIZE,
+      fixedCompanyName,
+    );
 
   const entries = data?.entries ?? [];
 
@@ -32,13 +39,15 @@ export function DocumentAccessLog() {
           <h2 className="text-base font-semibold text-ink">원본문서 접근 로그</h2>
           <p className="mt-0.5 text-xs text-faint">담당자가 원본 증빙을 열람한 이력 — 최근 순</p>
         </div>
-        <input
-          type="text"
-          value={searchInput}
-          onChange={(e) => setSearchInput(e.target.value)}
-          placeholder="기업명 검색"
-          className="w-40 rounded-md border border-line bg-surface px-2.5 py-1.5 text-xs text-ink placeholder:text-faint transition-colors focus:outline-none focus:ring-1 focus:ring-brand"
-        />
+        {fixedCompanyName === undefined && (
+          <input
+            type="text"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="기업명 검색"
+            className="w-40 rounded-md border border-line bg-surface px-2.5 py-1.5 text-xs text-ink placeholder:text-faint transition-colors focus:outline-none focus:ring-1 focus:ring-brand"
+          />
+        )}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">

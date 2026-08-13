@@ -36,6 +36,26 @@ export interface PortfolioResponse {
   companies: Company[];
 }
 
+/** 월(1~12) × 연료 대분류 존재 여부 매트릭스 + 결손 목록 — get_coverage() 응답. */
+export interface CoverageInfo {
+  matrix: Record<string, Record<string, number>>;
+  gaps: { fuel: string; missing_months: number[] }[];
+}
+
+/** 기업 상세 탭 — GET /admin/companies/{id}/overview 응답. */
+export interface CompanyOverview {
+  company_id: number;
+  company_name: string;
+  industry_name: string | null;
+  grade: number;
+  measured: boolean;
+  scope1: number;
+  scope2: number;
+  hitl_count: number;
+  coverage: CoverageInfo;
+  alerts: AlertItem[];
+}
+
 export interface HitlItem {
   voucher_id: number;
   company_id: number;

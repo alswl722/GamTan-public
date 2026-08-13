@@ -543,6 +543,40 @@ def test_traces_groups_runs_with_badges(db, client):
     assert runs["s-1"]["status"] == "완료"
 
 
+# ── 기업 상세 탭 (GET /admin/companies/{id}/overview) ─────────────────────────
+def test_company_overview_returns_grade_coverage_hitl_and_alerts(db, client):
+    """기업 상세 탭 — 등급·결손·HITL대기·알림을 한 응답에 담는다."""
+    session, cid = db
+    company = session.get(Company, cid)
+    company.fuel_types_json = {
+        "electricity": False, "diesel": False, "gasoline": False,
+        "city_gas": True, "lpg": "no",
+    }
+    session.commit()
+
+    _add(session, cid, 1, "도시가스 요금", scope=1, emission=1000.0, status="auto",
+         fuel_type="도시가스")
+    _add(session, cid, 2, "유류대금", scope=1, emission=0.0, status="review_required")
+
+    res = client.get(f"/admin/companies/{cid}/overview")
+    assert res.status_code == 200, res.text
+    body = res.json()
+
+    assert body["company_id"] == cid
+    assert body["company_name"] == "○○정밀"
+    assert body["measured"] is True
+    assert body["hitl_count"] == 1
+    # 도시가스만 체크했으니 결손 대상도 가스 하나뿐 — 1월만 채워졌으니 나머지 11개월 결손
+    gap_fuels = {g["fuel"] for g in body["coverage"]["gaps"]}
+    assert gap_fuels == {"가스"}
+    assert isinstance(body["alerts"], list)
+
+
+def test_company_overview_404_for_unknown_company(db, client):
+    res = client.get("/admin/companies/99999/overview")
+    assert res.status_code == 404
+
+
 # /admin/k-taxonomy-leads(관리자측 K택소노미 리드 탭)는 팀원 커밋 ae1df7e
 # ("K택소노미 리드 탭 제거, 등급 분포 탭에 기업별 등급 리스트 추가")로 제거됐다.
 # 원천 함수 db/k_taxonomy.py::k_taxonomy_leads_for_company와 사장님측

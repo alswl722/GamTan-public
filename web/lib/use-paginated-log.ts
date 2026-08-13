@@ -12,10 +12,12 @@ const SEARCH_DEBOUNCE_MS = 300;
 export function usePaginatedLog<T>(
   fetcher: (params: PageParams) => Promise<T & PageMeta>,
   pageSize = 50,
+  /** 넘기면 검색창 대신 이 기업명으로 고정 필터한다 — 기업 상세 탭이 사용. */
+  fixedCompanyName?: string,
 ) {
   const [page, setPage] = useState(1);
   const [searchInput, setSearchInput] = useState("");
-  const [companyName, setCompanyName] = useState("");
+  const [companyName, setCompanyName] = useState(fixedCompanyName ?? "");
   const [data, setData] = useState<(T & PageMeta) | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -24,13 +26,22 @@ export function usePaginatedLog<T>(
   fetcherRef.current = fetcher;
 
   // 검색어 입력을 debounce해 companyName(실제 조회 트리거)에 반영 — 1페이지로 리셋.
+  // 고정 필터 모드(fixedCompanyName)에서는 검색창 자체가 없으니 이 effect가 불필요.
   useEffect(() => {
+    if (fixedCompanyName !== undefined) return;
     const timer = setTimeout(() => {
       setPage(1);
       setCompanyName(searchInput);
     }, SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [searchInput]);
+  }, [searchInput, fixedCompanyName]);
+
+  // 고정 필터 대상 기업이 바뀌면(다른 기업 선택) 1페이지로 리셋해 재조회.
+  useEffect(() => {
+    if (fixedCompanyName === undefined) return;
+    setPage(1);
+    setCompanyName(fixedCompanyName);
+  }, [fixedCompanyName]);
 
   const load = (targetPage: number, name: string) => {
     const id = ++requestId.current;
