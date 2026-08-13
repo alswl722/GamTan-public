@@ -51,14 +51,14 @@ def client(db):
     app.dependency_overrides.clear()
 
 
-def _add(session, cid, month, item, *, scope, emission, status, conf=0.9):
+def _add(session, cid, month, item, *, scope, emission, status, conf=0.9, fuel_type="도시가스"):
     v = Voucher(company_id=cid, source="hometax", year=2025, month=month,
                 supplier_name="테스트", item_description=item,
                 supply_amount_krw=100000, raw_json={"quantity": 100})
     session.add(v)
     session.flush()
     session.add(Classification(
-        voucher_id=v.id, scope=scope, category="고정연소", fuel_type="도시가스",
+        voucher_id=v.id, scope=scope, category="고정연소", fuel_type=fuel_type,
         amount_krw=100000, emission_co2e=emission, confidence=conf,
         evidence="테스트", method="rule", status=status,
     ))
@@ -86,6 +86,109 @@ def test_portfolio_matches_per_company_summary(db):
     assert sum(summ["grade_distribution"].values()) == summ["company_count"]
     assert summ["total"] == pytest.approx(
         summ["scope1_total"] + summ["scope2_total"], abs=0.01
+    )
+
+
+def test_by_fuel_breaks_down_measured_emissions_by_fuel_bucket(db):
+    """리포트 항목별 상세 재료 — 연료별 실측 배출량이 세분류가 아니라
+    get_coverage와 같은 3대분류(전기/가스/경유·유류)로 묶여 나와야 한다."""
+    session, cid = db
+    # 연료 체크를 전부 꺼서 결손 보정이 끼어들지 않게 하고(순수 실측 집계만 검증),
+    # None(체크 전) 상태로 두면 get_coverage가 모든 연료를 결손 대상으로 봐서
+    # 5~12월분이 업종 평균으로 잡혀 들어와 이 테스트의 의도(측정치만 비교)가 흐려진다.
+    company = session.get(Company, cid)
+    company.fuel_types_json = {
+        "electricity": False, "diesel": False, "gasoline": False,
+        "city_gas": False, "lpg": "no",
+    }
+    session.commit()
+
+    _add(session, cid, 1, "도시가스 요금", scope=1, emission=1000.0, status="auto",
+         fuel_type="도시가스")
+    _add(session, cid, 2, "경유 구매", scope=1, emission=2000.0, status="auto",
+         fuel_type="경유")
+    _add(session, cid, 3, "휘발유 구매", scope=1, emission=500.0, status="auto",
+         fuel_type="휘발유")
+    _add(session, cid, 4, "전기요금", scope=2, emission=3000.0, status="auto",
+         fuel_type="전기")
+
+    after = company_pcaf_summary(session, cid)["after"]
+    by_fuel = {row["fuel"]: row for row in after["by_fuel"]}
+
+    assert by_fuel["가스"]["measured_tco2e"] == pytest.approx(1.0, abs=0.01)
+    # 경유 + 휘발유가 같은 "경유/유류" 버킷으로 합산돼야 한다
+    assert by_fuel["경유/유류"]["measured_tco2e"] == pytest.approx(2.5, abs=0.01)
+    assert by_fuel["전기"]["measured_tco2e"] == pytest.approx(3.0, abs=0.01)
+    # 결손 보정이 없는 상황이라 추정분은 0
+    assert by_fuel["전기"]["estimated_tco2e"] == 0.0
+    # 배출량 큰 순 정렬(경유/유류 2.5 > 전기 3.0 이므로 전기가 1위)
+    assert after["by_fuel"][0]["fuel"] == "전기"
+
+
+def test_monthly_grid_has_all_12_months_and_excludes_rejected(db):
+    """리포트 월별 추이 차트 재료 — 자료 없는 달은 0으로 비어있고, 반려된 분류는
+    집계에서 빠져야 한다(담당자가 신뢰 못 한다고 판단한 값이니까)."""
+    session, cid = db
+    company = session.get(Company, cid)
+    company.fuel_types_json = {
+        "electricity": False, "diesel": False, "gasoline": False,
+        "city_gas": False, "lpg": "no",
+    }
+    session.commit()
+
+    _add(session, cid, 1, "도시가스 요금", scope=1, emission=1000.0, status="auto",
+         fuel_type="도시가스")
+    _add(session, cid, 1, "전기요금", scope=2, emission=500.0, status="auto",
+         fuel_type="전기")
+    _add(session, cid, 7, "경유 구매 급증분", scope=1, emission=9000.0, status="auto",
+         fuel_type="경유")
+    _add(session, cid, 9, "반려된 건", scope=1, emission=5000.0, status="rejected",
+         fuel_type="경유")
+
+    monthly = company_pcaf_summary(session, cid)["after"]["monthly"]
+    assert len(monthly) == 12
+    assert [row["month"] for row in monthly] == list(range(1, 13))
+
+    jan = next(r for r in monthly if r["month"] == 1)
+    assert jan["total_tco2e"] == pytest.approx(1.5, abs=0.01)
+    assert jan["by_fuel"]["가스"] == pytest.approx(1.0, abs=0.01)
+    assert jan["by_fuel"]["전기"] == pytest.approx(0.5, abs=0.01)
+
+    jul = next(r for r in monthly if r["month"] == 7)
+    assert jul["total_tco2e"] == pytest.approx(9.0, abs=0.01)
+
+    # 반려 건이 들어간 9월은 집계에서 제외돼 0이어야 한다
+    sep = next(r for r in monthly if r["month"] == 9)
+    assert sep["total_tco2e"] == 0.0
+    assert sep["by_fuel"] == {}
+
+    # 자료 자체가 없는 달(예: 3월)은 0
+    mar = next(r for r in monthly if r["month"] == 3)
+    assert mar["total_tco2e"] == 0.0
+
+
+def test_by_fuel_includes_gap_estimated_bucket_even_without_measured_data(db):
+    """결손월만 있고 실측이 아예 없는 연료도 by_fuel에 추정치로 잡혀야 한다
+    (연료 체크는 됐는데 서류가 아예 없는 "전면 미제출" 케이스, C004 시나리오와 동일)."""
+    session, cid = db
+    company = session.get(Company, cid)
+    company.fuel_types_json = {
+        "electricity": False, "diesel": False, "gasoline": False,
+        "city_gas": True, "lpg": "no",
+    }
+    session.commit()
+    # 도시가스 전표를 아예 넣지 않아 12개월 전부 결손 → 업종 평균으로 보정된 추정치만 생김
+    _add(session, cid, 1, "전기요금(도시가스 아님, 등급 산정용 더미)", scope=2,
+         emission=100.0, status="auto", fuel_type="전기")
+
+    after = company_pcaf_summary(session, cid)["after"]
+    by_fuel = {row["fuel"]: row for row in after["by_fuel"]}
+
+    assert "가스" in by_fuel
+    assert by_fuel["가스"]["measured_tco2e"] == 0.0
+    assert by_fuel["가스"]["estimated_tco2e"] > 0
+    assert by_fuel["가스"]["total_tco2e"] == pytest.approx(
+        by_fuel["가스"]["estimated_tco2e"], abs=0.01
     )
 
 

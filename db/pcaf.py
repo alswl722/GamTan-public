@@ -88,6 +88,21 @@ def _reviewed_today(session: Session) -> int:
 # get_coverage 의 연료 대분류 → Scope 매핑 (결손 보정 시 어느 Scope 에 얹을지)
 _FUEL_BUCKET_SCOPE = {"전기": 2, "가스": 1, "경유/유류": 1}
 
+# Classification.fuel_type(세분류, api/agent/llm_classify.py 스키마) → get_coverage와
+# 같은 3대분류로 묶는다 — 리포트의 "항목별 상세"가 결손 보정 문구("2월 전기 고지서…")와
+# 같은 용어를 쓰게 하기 위함(새 분류체계를 따로 만들지 않음).
+_FUEL_TYPE_TO_BUCKET = {
+    "전기": "전기",
+    "도시가스": "가스",
+    "경유": "경유/유류",
+    "휘발유": "경유/유류",
+    "LPG": "경유/유류",
+}
+
+
+def _fuel_bucket(fuel_type: str | None) -> str:
+    return _FUEL_TYPE_TO_BUCKET.get(fuel_type or "", "기타")
+
 
 def _clip_grade(g: float) -> int:
     return max(1, min(5, round(g)))
@@ -126,6 +141,41 @@ def _before_baseline(company, dist1, dist2) -> dict:
     }
 
 
+def _monthly_by_fuel(session: Session, company_id: int) -> list[dict]:
+    """월(1~12) × 연료 대분류 실측 배출량 그리드 — 리포트 월별 추이 차트 재료.
+
+    결손 보정치는 섞지 않는다. 자료가 없는 달은 그대로 0으로 비워서 결손 자체가
+    차트에 드러나게 한다(업종평균 추정을 실측인 것처럼 섞어 보여주지 않음 —
+    §5-1 LLM 산수 금지와 같은 결의 "숫자를 지어내지 않는다" 원칙).
+    """
+    rows = session.execute(
+        select(Voucher.month, Classification.fuel_type, Classification.emission_co2e)
+        .join(Classification, Classification.voucher_id == Voucher.id)
+        .where(
+            Voucher.company_id == company_id,
+            Classification.scope.in_((1, 2)),
+            Classification.status != "rejected",
+        )
+    ).all()
+
+    by_month_bucket_kg: dict[int, dict[str, float]] = {m: {} for m in range(1, 13)}
+    for month, fuel_type, emission in rows:
+        if emission is None:
+            continue
+        bucket = _fuel_bucket(fuel_type)
+        bucket_totals = by_month_bucket_kg[int(month)]
+        bucket_totals[bucket] = bucket_totals.get(bucket, 0.0) + float(emission)
+
+    return [
+        {
+            "month": m,
+            "total_tco2e": round(sum(by_month_bucket_kg[m].values()) / 1000.0, 2),
+            "by_fuel": {k: round(v / 1000.0, 2) for k, v in by_month_bucket_kg[m].items()},
+        }
+        for m in range(1, 13)
+    ]
+
+
 def _after_measured(session, company_id, dist1, dist2) -> dict | None:
     """전표 기반 실측 — 저장된 Classification 집계 + 결손월 업종 평균 보정.
 
@@ -149,14 +199,18 @@ def _after_measured(session, company_id, dist1, dist2) -> dict | None:
     if not scored:
         return None
 
-    # 실측분 — Scope 별 합산(kg→t)과 등급 가중용 누적.
+    # 실측분 — Scope 별 합산(kg→t)과 등급 가중용 누적. 연료 대분류별로도 같이 쌓아
+    # "항목별 상세"(리포트 화면)의 재료로 쓴다.
     # 등급: 전표 실측 수량 기반=2 / 금액 추정(spend-based)=3 (HITL은 emission 0이라 가중 제외).
     measured_kg = {1: 0.0, 2: 0.0}
+    measured_by_bucket_kg: dict[str, float] = {}
     grade_weight = 0.0   # Σ(등급 × 배출량)
     total_weight = 0.0   # Σ(배출량)
     for c, v in scored:
         kg = float(c.emission_co2e)
         measured_kg[c.scope] += kg
+        bucket = _fuel_bucket(c.fuel_type)
+        measured_by_bucket_kg[bucket] = measured_by_bucket_kg.get(bucket, 0.0) + kg
         item_grade = 2 if (v.raw_json or {}).get("quantity") else 3
         grade_weight += item_grade * kg
         total_weight += kg
@@ -164,6 +218,7 @@ def _after_measured(session, company_id, dist1, dist2) -> dict | None:
     # 결손월 보정 — 없는 월은 업종 중앙값을 12분배해 5등급으로 가산
     coverage = get_coverage(session, company_id)
     gap_kg = {1: 0.0, 2: 0.0}
+    gap_by_bucket_kg: dict[str, float] = {}
     gap_detail = []
     for gap in coverage["gaps"]:
         scope = _FUEL_BUCKET_SCOPE.get(gap["fuel"])
@@ -174,9 +229,25 @@ def _after_measured(session, company_id, dist1, dist2) -> dict | None:
         # dist median 은 tCO2e → kg 로 환산(×1000) 후 12분배
         est_kg = (dist["median"] * 1000.0 / 12.0) * len(months)
         gap_kg[scope] += est_kg
+        gap_by_bucket_kg[gap["fuel"]] = gap_by_bucket_kg.get(gap["fuel"], 0.0) + est_kg
         grade_weight += 5 * est_kg
         total_weight += est_kg
         gap_detail.append({"fuel": gap["fuel"], "missing_months": months})
+
+    by_fuel = [
+        {
+            "fuel": bucket,
+            "measured_tco2e": round(measured_by_bucket_kg.get(bucket, 0.0) / 1000.0, 2),
+            "estimated_tco2e": round(gap_by_bucket_kg.get(bucket, 0.0) / 1000.0, 2),
+            "total_tco2e": round(
+                (measured_by_bucket_kg.get(bucket, 0.0) + gap_by_bucket_kg.get(bucket, 0.0)) / 1000.0, 2
+            ),
+        }
+        for bucket in sorted(
+            set(measured_by_bucket_kg) | set(gap_by_bucket_kg),
+            key=lambda b: -(measured_by_bucket_kg.get(b, 0.0) + gap_by_bucket_kg.get(b, 0.0)),
+        )
+    ]
 
     s1_t = (measured_kg[1] + gap_kg[1]) / 1000.0
     s2_t = (measured_kg[2] + gap_kg[2]) / 1000.0
@@ -201,6 +272,8 @@ def _after_measured(session, company_id, dist1, dist2) -> dict | None:
         "hitl_count": hitl_count,
         "gap_months": gap_detail,
         "projected_grade": projected_grade,
+        "by_fuel": by_fuel,
+        "monthly": _monthly_by_fuel(session, company_id),
     }
 
 
