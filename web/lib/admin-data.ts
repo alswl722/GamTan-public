@@ -121,3 +121,9 @@ export function auditPackageCsvUrl(companyId: number, year: number): string {
   const base = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
   return `${base}/admin/audit-package?company_id=${companyId}&year=${year}&format=csv`;
 }
+
+/** 감사 대응 근거 패키지 PDF(서술형 감사보고서) 내보내기 URL — 다운로드 링크로 그대로 사용. */
+export function auditPackagePdfUrl(companyId: number, year: number): string {
+  const base = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+  return `${base}/admin/audit-package?company_id=${companyId}&year=${year}&format=pdf`;
+}

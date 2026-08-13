@@ -1,13 +1,14 @@
 "use client";
 
-// 실API: GET /admin/audit-package?company_id=&year=&format=json|csv
+// 실API: GET /admin/audit-package?company_id=&year=&format=json|csv|pdf
 //
 // 기업·기간을 지정하면 trace_logs + classifications.evidence + 원본 전표를
 // 시계열로 조회한다(v1 Tier 2, owner-admin-flow-spec.md §8). 신규 계산 로직 없음 —
-// 기존 3개 테이블을 조인·정렬만 한다. CSV는 원자료 재검증용(서술형 PDF는 별도 범위).
+// 기존 3개 테이블을 조인·정렬만 한다. CSV는 원자료 재검증용, PDF는 서술형 감사보고서
+// (둘 다 재계산 없이 같은 원자료를 그대로 직렬화).
 
 import { useState } from "react";
-import { auditPackageCsvUrl } from "@/lib/admin-data";
+import { auditPackageCsvUrl, auditPackagePdfUrl } from "@/lib/admin-data";
 import { apiGet } from "@/lib/api";
 import type { Company } from "@/lib/admin-types";
 
@@ -130,12 +131,20 @@ export function AuditPackage({ companies }: { companies: Company[] }) {
             {busy ? "조회 중…" : "조회"}
           </button>
           {companyId !== "" && (
-            <a
-              href={auditPackageCsvUrl(companyId, year)}
-              className="rounded-md border border-line bg-surface px-3 py-1.5 text-xs font-semibold text-muted hover:text-ink"
-            >
-              CSV 내보내기
-            </a>
+            <>
+              <a
+                href={auditPackageCsvUrl(companyId, year)}
+                className="rounded-md border border-line bg-surface px-3 py-1.5 text-xs font-semibold text-muted hover:text-ink"
+              >
+                CSV 내보내기
+              </a>
+              <a
+                href={auditPackagePdfUrl(companyId, year)}
+                className="rounded-md border border-line bg-surface px-3 py-1.5 text-xs font-semibold text-muted hover:text-ink"
+              >
+                PDF 보고서
+              </a>
+            </>
           )}
         </div>
         {error && <p className="mt-2 text-[11px] text-hitl-ink">{error}</p>}

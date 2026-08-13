@@ -17,7 +17,7 @@
 - GET   /admin/documents/{id}                 원본문서 열람 (조회 시 접근 로그 자동 기록)
 - GET   /admin/documents/access-log           원본문서 접근 감사 로그 목록
 - GET   /admin/quality-issues                 품질 이슈 로그 — 업로드 반려·실패 이력 (열람 전용)
-- GET   /admin/audit-package                  감사 대응 근거 패키지 — 기업·기간 지정 시계열 원자료 CSV
+- GET   /admin/audit-package                  감사 대응 근거 패키지 — 기업·기간 지정 시계열 원자료(JSON/CSV/PDF)
 
 여신 결정·스코어링은 하지 않는다(CLAUDE.md §9). AI가 1차 스크리닝한 저신뢰 건을
 사람이 최종 확정하는 HITL 마감만 담당 — 금융분야 AI 가이드라인의 보조수단성 구현.
@@ -44,6 +44,7 @@ from db.alerts import detect_alerts
 from db.calc_engine import CalcDataGap, ClassifiedItemInput, compute_emission, \
     index_emission_factors, index_unit_prices
 from db.audit_package import build_audit_package
+from db.audit_report_pdf import build_audit_report_pdf
 from db.document_access_log import access_history, record_access, recent_access_log
 from db.k_taxonomy import k_taxonomy_leads
 from db.models import Classification, Company, SourceDocument, TraceLog, Voucher
@@ -526,8 +527,9 @@ def audit_package(
     session: Session = Depends(get_session),
 ):
     """기업·기간을 지정하면 trace_logs + classifications.evidence + 원본 전표를
-    시계열로 묶어 반환한다. format=csv면 원자료 재검증용 CSV로 내려준다
-    (서술형 PDF 감사보고서는 별도 범위, 이번엔 미구현).
+    시계열로 묶어 반환한다. format=csv는 원자료 재검증용, format=pdf는 서술형
+    감사보고서(요약 통계 + 판단 근거 시계열 표)를 내려준다. 둘 다 build_audit_package()가
+    만든 package를 그대로 직렬화할 뿐 재계산하지 않는다.
     """
     company = session.get(Company, company_id)
     if company is None:
@@ -554,6 +556,15 @@ def audit_package(
         return StreamingResponse(
             iter([buffer.getvalue()]),
             media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    if format == "pdf":
+        pdf_bytes = build_audit_report_pdf(package, company.name)
+        filename = f"audit-report-{company_id}-{year}.pdf"
+        return StreamingResponse(
+            iter([pdf_bytes]),
+            media_type="application/pdf",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
