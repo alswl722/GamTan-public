@@ -38,13 +38,12 @@ Scope: 2026년 8월 v1 구현·검증·시연 일정
 >   리스트), PR #42(정식 엔진 교체 — 조직경계 자동 생성 + 사장님용 리포트 래퍼 + 프론트
 >   재설계), 후속 UI 다듬기 PR #40·#43~#47(우대금리 후보 판정 정식 엔진 정렬 포함).
 >   **2주차 Tier 1이 전부 끝났다.** 상세는 §6-6 참고.
-> - `dev` 최신 기준 `pytest` 224 passed, 3 skipped, **1 failed**(회귀 아님 — 별도 이슈,
->   아래 참고).
-> - ⚠️ **새로 발견된 이슈**: `test_backfill_assigns_default_institution_to_all_existing_vouchers`
->   실패 — company_id=6 전표 1건이 `financial_institution_id` NULL로 남아 있음(2026-08-13
->   05:49 생성, 최근 세션의 신규 데모/테스트 기업으로 추정). PR #30에서 같은 유형의
->   문제를 한 번 백필했던 이력이 있음 — `db/seed_mock.py`류 시드 스크립트가 여전히
->   기관 귀속 없이 전표를 만드는 경로가 남아 있을 가능성. 원인 조사·백필 필요.
+> - `dev` 최신 기준 `pytest` 225 passed, 3 skipped(회귀 없음).
+> - ~~`test_backfill_assigns_default_institution_to_all_existing_vouchers` 실패~~ —
+>   **해소.** 원인 조사 결과 코드 버그가 아니라 공유 Supabase DB에 스크립트 경로 밖에서
+>   수동으로 만들어진 테스트 전표 1건(company_id=10 "임시기업", "태양광 설비 설치",
+>   `institution_borrowers`엔 정상 귀속이 있었음)이 원인 — 그 귀속값으로 UPDATE 백필해
+>   해결(사용자 확인 후 진행). PR #30과 달리 코드 수정은 불필요했음.
 
 > 기준 브랜치: `dev` (병합 대상: `feat/db-alembic-migration`)
 >
