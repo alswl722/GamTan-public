@@ -13,6 +13,7 @@ import type { Company, CompanyOverview, TraceRunItem } from "@/lib/admin-types";
 import { gradeColor } from "@/lib/grade-colors";
 import { AlertsPanel } from "@/components/admin/AlertsPanel";
 import { AuditLog } from "@/components/admin/AuditLog";
+import { CompanyCombobox } from "@/components/admin/CompanyCombobox";
 import { DocumentAccessLog } from "@/components/admin/DocumentAccessLog";
 import { TraceHistory } from "@/components/admin/TraceHistory";
 
@@ -114,8 +115,6 @@ export function CompanyDetail({
       .finally(() => setLoading(false));
   }, [companyId]);
 
-  const selectedCompanyName =
-    companyId === "" ? undefined : companies.find((c) => c.company_id === companyId)?.company_name;
   const companyTraceRuns =
     companyId === "" ? [] : traceRuns.filter((r) => r.company_id === companyId);
 
@@ -124,18 +123,7 @@ export function CompanyDetail({
       <div className="flex-shrink-0 border-b border-line bg-surface px-6 py-4">
         <div className="flex items-center gap-2">
           <h2 className="text-base font-semibold text-ink">기업 상세</h2>
-          <select
-            value={companyId}
-            onChange={(e) => setCompanyId(e.target.value ? Number(e.target.value) : "")}
-            className="rounded-md border border-line bg-surface px-2.5 py-1.5 text-xs text-muted focus:outline-none focus:ring-1 focus:ring-brand"
-          >
-            <option value="">기업 선택</option>
-            {companies.map((c) => (
-              <option key={c.company_id} value={c.company_id}>
-                {c.company_name}
-              </option>
-            ))}
-          </select>
+          <CompanyCombobox companies={companies} value={companyId} onChange={setCompanyId} />
         </div>
         <p className="mt-1 text-xs text-faint">
           기업을 선택하면 등급·결손·검토 대기·알림·실행 이력·변경 이력을 한 화면에서 볼 수 있습니다
@@ -172,10 +160,10 @@ export function CompanyDetail({
 
             <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
               <div className="h-96">
-                <AuditLog companyName={selectedCompanyName} />
+                <AuditLog companyId={overview.company_id} />
               </div>
               <div className="h-96">
-                <DocumentAccessLog companyName={selectedCompanyName} />
+                <DocumentAccessLog companyId={overview.company_id} />
               </div>
             </div>
           </div>

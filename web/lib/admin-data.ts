@@ -15,16 +15,20 @@ import type {
   TraceStep,
 } from "@/lib/admin-types";
 
-/** 서버사이드 페이지네이션 요청 공통 파라미터 — review-log/access-log 공유. */
+/** 서버사이드 페이지네이션 요청 공통 파라미터 — review-log/access-log 공유.
+ * companyId(정확일치)와 companyName(부분일치 검색)은 동시에 넘기지 않는다 —
+ * "기업" 탭은 companyId로 정확히 좁히고, "변경 이력" 탭 검색창은 companyName을 쓴다. */
 export interface PageParams {
   page?: number;
   pageSize?: number;
   companyName?: string;
+  companyId?: number;
 }
 
-function pageQuery({ page = 1, pageSize = 50, companyName }: PageParams): string {
+function pageQuery({ page = 1, pageSize = 50, companyName, companyId }: PageParams): string {
   const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
-  if (companyName?.trim()) params.set("company_name", companyName.trim());
+  if (companyId != null) params.set("company_id", String(companyId));
+  else if (companyName?.trim()) params.set("company_name", companyName.trim());
   return params.toString();
 }
 

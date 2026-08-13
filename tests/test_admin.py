@@ -379,6 +379,36 @@ def test_review_log_lists_reviewed_entries_most_recent_first(db, client):
     assert by_id[v1]["reviewed_at"] is not None
 
 
+def test_review_log_company_id_filters_exactly_unlike_name_substring_match(db, client):
+    """company_id는 정확일치 — 이름이 서로를 포함하는 두 기업(예: "○○정밀" /
+    "○○정밀유통")이어도 company_name 부분일치와 달리 서로 섞이지 않아야 한다.
+    "기업" 탭이 company_id로 넘기는 것과 같은 경로."""
+    session, cid = db
+    other = Company(
+        name="○○정밀유통", industry_code="G462", industry_name="기계장비 도매업",
+    )
+    session.add(other)
+    session.commit()
+
+    v1 = _add(session, cid, 1, "도시가스", scope=1, emission=0.0,
+              status="review_required", conf=0.5)
+    v2 = _add(session, other.id, 2, "경유", scope=1, emission=0.0,
+              status="review_required", conf=0.5)
+    assert client.patch(f"/admin/classifications/{v1}/confirm").status_code == 200
+    assert client.patch(f"/admin/classifications/{v2}/confirm").status_code == 200
+
+    res = client.get(f"/admin/review-log?company_id={cid}")
+    assert res.status_code == 200, res.text
+    entries = res.json()["entries"]
+    assert [e["voucher_id"] for e in entries] == [v1]
+
+    # 이름 부분일치였다면 "○○정밀"이 "○○정밀유통"에도 매치돼 두 건 다 나왔을 것 —
+    # company_id 필터는 그 문제가 없어야 한다.
+    res_name = client.get("/admin/review-log?company_name=○○정밀")
+    names = {e["company_name"] for e in res_name.json()["entries"]}
+    assert names == {"○○정밀", "○○정밀유통"}, "부분일치 검색은 여전히 둘 다 찾아야 한다(검색창 용도)"
+
+
 # ── 이상 신호 알림 (db/alerts.py, 결정론적 배수 계산) ─────────────────────────
 def _add_month_total(session, cid, month, emission, *, scope=1, status="auto"):
     """월별 배출량 합계 하나를 만들기 위한 최소 전표+분류 1건."""
