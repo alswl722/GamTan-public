@@ -7,16 +7,13 @@ import { AlertsPanel } from "@/components/admin/AlertsPanel";
 import { AuditLog } from "@/components/admin/AuditLog";
 import { AuditPackage } from "@/components/admin/AuditPackage";
 import { CompanyDetail } from "@/components/admin/CompanyDetail";
-import { CompanyGradeList } from "@/components/admin/CompanyGradeList";
 import { DocumentAccessLog } from "@/components/admin/DocumentAccessLog";
-import { GradeDonut } from "@/components/admin/GradeDonut";
 import { HitlWorkspace } from "@/components/admin/HitlWorkspace";
 import { TraceHistory } from "@/components/admin/TraceHistory";
 
 const TABS = [
   { id: "hitl", label: "담당자 검토" },
   { id: "company", label: "기업" },
-  { id: "grades", label: "등급 분포" },
   { id: "risk", label: "여신 리스크" },
   { id: "trace", label: "실행 이력" },
   { id: "audit", label: "변경 이력" },
@@ -75,15 +72,6 @@ export function DashboardShell({ portfolio, hitlQueue, traceRuns, alerts }: Dash
 
         {activeTab === "company" && (
           <CompanyDetail companies={portfolio.companies} traceRuns={traceRuns} />
-        )}
-
-        {activeTab === "grades" && (
-          <div className="h-full space-y-5 overflow-y-auto p-5">
-            <GradeDonut data={portfolio} />
-            <div className="h-[28rem]">
-              <CompanyGradeList companies={portfolio.companies} />
-            </div>
-          </div>
         )}
 
         {activeTab === "risk" && (

@@ -1,6 +1,6 @@
 /**
  * PCAF 등급 색상 — 브랜드 민트 단일 색조의 순차 램프 (1등급=진함/실측 상위, 5등급=흐림/추정 하위).
- * 등급 분포(GradeDonut) 등 등급을 표시하는 모든 곳에서 공유한다.
+ * 기업 상세(CompanyDetail) 등 등급을 표시하는 모든 곳에서 공유한다.
  */
 export const GRADE_COLORS: Record<string, string> = {
   "1": "#006b5b",
