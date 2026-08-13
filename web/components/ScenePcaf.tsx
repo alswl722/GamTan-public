@@ -4,26 +4,24 @@ import { useEffect, useState } from "react";
 import { apiGet, apiPost, getCompanyId } from "@/lib/api";
 import type { AlertItem } from "@/lib/admin-types";
 
-/** 장면 ④ — PCAF Before/After + 벤치마킹. /pcaf/{id} 실데이터만 사용.
- *  API 실패 시 목업으로 위장하지 않고 에러 배너 + 재시도를 표시한다(실패 가시성). */
+/** 장면 ⑤ — PCAF 정식 엔진(db/pcaf_quality.py) 리포트. GET /owner/{id}/quality-report
+ *  실데이터만 사용. API 실패 시 목업으로 위장하지 않고 에러 배너 + 재시도를 표시한다
+ *  (실패 가시성). 월별 배출 추이만 예외로 구 엔진(/pcaf/{id})의 monthly를 그대로
+ *  재사용한다 — Classification 원자료를 월별로 집계하는 독립 로직이라 엔진 교체와
+ *  무관하다. */
 
-type Before = {
-  grade: number;
-  scope1: number;
-  scope2: number;
-  emission_tco2e: number;
-};
-type After = {
-  grade: number;
-  scope1: number;
-  scope2: number;
-  total: number;
-  measured_tco2e: number;
-  estimated_gap_tco2e: number;
-  hitl_count: number;
-  gap_months: { fuel: string; missing_months: number[] }[];
-  by_fuel: { fuel: string; measured_tco2e: number; estimated_tco2e: number; total_tco2e: number }[];
-  monthly: { month: number; total_tco2e: number; by_fuel: Record<string, number> }[];
+type ScopeQuality = {
+  scope_group: "scope_1" | "scope_2";
+  emission_tco2e: number | null;
+  candidate_score: number | null;
+  option_code: string | null;
+  activity_data_basis: string | null;
+  completeness_pct: number | null;
+  basis: string[];
+  limitations: string[];
+  status: string;
+  version: number;
+  bank_review_required: boolean;
 };
 type Benchmark = {
   industry_code: string;
@@ -36,7 +34,16 @@ type Benchmark = {
   max: number | null;
   percentile_pct: number | null;
 };
-type PcafResponse = { before: Before; after: After | null; benchmark: Benchmark };
+type QualityReportResponse = {
+  reporting_year: number;
+  scope_1: ScopeQuality;
+  scope_2: ScopeQuality;
+  benchmark: Benchmark;
+};
+
+// 월별 배출 추이 전용 — 구 엔진(/pcaf/{id})의 after.monthly만 재사용(위 주석 참고).
+type MonthlyRow = { month: number; total_tco2e: number; by_fuel: Record<string, number> };
+type LegacyPcafResponse = { after: { monthly: MonthlyRow[] } | null };
 
 // GET /owner/{company_id}/rate-candidate — db/pcaf.py::upgrade_candidate_for_company와
 // 은행 쪽 GET /admin/rate-candidates가 같은 판정 로직을 공유한다(중복 없음).
@@ -60,165 +67,33 @@ type RateRequestResponse = {
 
 const fmt = (n: number) => n.toFixed(1);
 
-// PCAF 등급은 1(최정확)~5(최부정확)의 순서형 데이터라, 배출량 수치 크기가 아니라
-// "5칸 중 어디에 있는지"를 직접 그려야 등급 개선이 왜곡 없이 보인다(과거엔 tCO2e
-// 막대 길이로 표현했는데, 실측치가 추정치보다 큰 경우엔 등급이 좋아져도 막대가
-// 짧아 보이는 모순이 있었다). 왼쪽(5등급, 최하)에서 오른쪽(1등급, 최상)으로 이동한
-// 칸 수를 마커 이동 애니메이션으로 직접 보여준다.
+// PCAF 품질점수는 1(최정확)~5(최부정확)의 순서형 데이터라, 배출량 수치 크기가 아니라
+// "5칸 중 어디에 있는지"를 직접 그린다. 정식 엔진은 Scope별 단일 값만 주므로(구
+// 엔진의 "매출추정 → 실측" before/after 개념 없음) 애니메이션은 마운트 시 0에서
+// 실제 위치로 슬라이드하는 것만 남긴다.
 const GRADE_TICKS = [5, 4, 3, 2, 1] as const;
 const posOfGrade = (g: number) => ((5 - g) / 4) * 100;
 
-// 매출액 추정 vs 전표 기반 실측 — 카드형 Before/After 비교(값을 화살표 문장 대신
-// 두 박스로 나란히 놓고, 오른쪽 박스 위에 변화율 배지를 단다).
-const EMISSION_BOX_MAX_H = 56;
-const EMISSION_BOX_MIN_H = 22;
-
-function EmissionBoxCompare({ beforeValue, afterValue }: { beforeValue: number; afterValue: number }) {
-  const pct = beforeValue > 0 ? Math.round(((afterValue - beforeValue) / beforeValue) * 100) : 0;
-  const pctLabel = `${pct > 0 ? "+" : ""}${pct}%`;
-
-  // 박스 높이 자체를 값에 비례시켜 "줄었다/늘었다"가 숫자를 안 읽어도 바로
-  // 보이게 한다 — 둘 다 고정 높이면 변화가 안 느껴진다. 최소 높이는 변화율
-  // 배지 텍스트가 박스 안에 들어갈 만큼은 확보한다.
-  const maxValue = Math.max(beforeValue, afterValue, 0.001);
-  const beforeH = Math.max(EMISSION_BOX_MIN_H, Math.round((beforeValue / maxValue) * EMISSION_BOX_MAX_H));
-  const afterH = Math.max(EMISSION_BOX_MIN_H, Math.round((afterValue / maxValue) * EMISSION_BOX_MAX_H));
-
-  // 값 배지(pill)·라벨은 항상 같은 위치에 고정하고, 막대만 고정 높이 트랙
-  // 안에서 아래를 기준으로 자라게 한다 — 그래야 막대 높이가 바뀌어도 글씨가
-  // 같이 밀려 올라가지/내려가지 않는다.
-  return (
-    <div className="flex flex-1 flex-col justify-center gap-2">
-      <div className="flex gap-2">
-        <div className="flex-1 text-center">
-          <span className="inline-block rounded-full bg-line px-2 py-0.5 text-[10px] font-bold text-muted">
-            {fmt(beforeValue)}t
-          </span>
-          <div
-            className="mt-1.5 flex items-end justify-center"
-            style={{ height: EMISSION_BOX_MAX_H }}
-          >
-            <div className="w-full rounded-xl bg-line" style={{ height: beforeH }} />
-          </div>
-          <div className="mt-1.5 text-[10px] font-semibold text-faint">측정 전</div>
-        </div>
-        <div className="flex-1 text-center">
-          <span className="inline-block rounded-full bg-line px-2 py-0.5 text-[10px] font-bold text-muted">
-            {fmt(afterValue)}t
-          </span>
-          <div
-            className="mt-1.5 flex items-end justify-center"
-            style={{ height: EMISSION_BOX_MAX_H }}
-          >
-            <div
-              className="flex w-full items-center justify-center rounded-xl bg-brand"
-              style={{ height: afterH }}
-            >
-              <span className="text-[10px] font-bold text-white">{pctLabel}</span>
-            </div>
-          </div>
-          <div className="mt-1.5 text-[10px] font-semibold text-muted">측정 후</div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Scope1/2 + 검토 예정 건수를 세로로 쌓아 EmissionBoxCompare 옆에 컴팩트하게 배치.
-function ScopeCompact({
-  scope1,
-  scope2,
-  hitlCount,
-}: {
-  scope1: number;
-  scope2: number;
-  hitlCount: number;
-}) {
-  return (
-    <div className="flex flex-1 flex-col justify-center rounded-xl bg-bg p-3">
-      <div className="space-y-2 text-[11.5px]">
-        <div className="flex items-center justify-between">
-          <span className="flex items-center gap-1.5 text-muted">
-            <span className="h-2 w-2 rounded-full bg-scope1" /> Scope1
-          </span>
-          <span className="font-semibold text-ink">{fmt(scope1)}</span>
-        </div>
-        <div className="flex items-center justify-between">
-          <span className="flex items-center gap-1.5 text-muted">
-            <span className="h-2 w-2 rounded-full bg-scope2" /> Scope2
-          </span>
-          <span className="font-semibold text-ink">{fmt(scope2)}</span>
-        </div>
-      </div>
-      {hitlCount > 0 && (
-        <div className="mt-2 rounded-md bg-hitl/25 px-2 py-1 text-center text-[10px] font-semibold text-hitl-ink">
-          검토 예정 {hitlCount}건
-        </div>
-      )}
-    </div>
-  );
-}
-
-function GradeLadder({
-  before,
-  after,
-  improvedBy,
-}: {
-  before: number;
-  after: number;
-  improvedBy: number;
-}) {
-  const beforePct = posOfGrade(before);
-  const afterPct = posOfGrade(after);
-
-  const [animPct, setAnimPct] = useState(beforePct);
+function ScoreMarker({ score }: { score: number }) {
+  const pct = posOfGrade(score);
+  const [animPct, setAnimPct] = useState(0);
   useEffect(() => {
-    const id = requestAnimationFrame(() => setAnimPct(afterPct));
+    const id = requestAnimationFrame(() => setAnimPct(pct));
     return () => cancelAnimationFrame(id);
-  }, [afterPct]);
-
-  const fillLeft = Math.min(beforePct, animPct);
-  const fillWidth = Math.abs(animPct - beforePct);
+  }, [pct]);
 
   return (
     <div>
-      <div className="flex items-center justify-center gap-2">
-        <span className="rounded-full bg-line px-2.5 py-1 text-[13px] font-bold text-muted">
-          {before}등급
-        </span>
-        <span className="text-faint">→</span>
-        <span className="rounded-full bg-brand px-2.5 py-1 text-[15px] font-extrabold text-white">
-          {after}등급
-        </span>
-        {improvedBy > 0 && (
-          <span className="rounded-full bg-brand-soft px-2 py-1 text-[11px] font-bold text-brand-ink">
-            {improvedBy}단계 개선
-          </span>
-        )}
-      </div>
-
-      <div className="relative mt-6 h-2 rounded-full bg-bg">
-        {fillWidth > 0 && (
-          <div
-            className="absolute inset-y-0 rounded-full bg-brand-soft transition-all duration-700 ease-out"
-            style={{ left: `${fillLeft}%`, width: `${fillWidth}%` }}
-          />
-        )}
+      <div className="relative mt-3 h-2 rounded-full bg-bg">
         <div className="absolute inset-0 flex items-center justify-between">
           {GRADE_TICKS.map((g) => (
             <span key={g} className="h-2.5 w-2.5 rounded-full bg-line" />
           ))}
         </div>
         <div
-          className="absolute -top-1 h-4 w-4 -translate-x-1/2 rounded-full border-2 border-white bg-faint shadow"
-          style={{ left: `${beforePct}%` }}
+          className="absolute -top-1 h-4 w-4 -translate-x-1/2 rounded-full border-2 border-white bg-brand shadow transition-[left] duration-700 ease-out"
+          style={{ left: `${animPct}%` }}
         />
-        {afterPct !== beforePct && (
-          <div
-            className="absolute -top-1 h-4 w-4 -translate-x-1/2 rounded-full border-2 border-white bg-brand shadow transition-[left] duration-700 ease-out"
-            style={{ left: `${animPct}%` }}
-          />
-        )}
       </div>
       <div className="mt-1.5 flex justify-between text-[10px] font-semibold text-faint">
         {GRADE_TICKS.map((g) => (
@@ -229,39 +104,69 @@ function GradeLadder({
   );
 }
 
-// 리포트가 "이 숫자 어떻게 나온 거야?"에 답하는 부분 — 총량 중 실측 대 추정
-// 보정 비율, 연료별 내역까지 보여준다. db/pcaf.py::_after_measured가 이미
-// 계산해 둔 measured_tco2e/estimated_gap_tco2e/by_fuel을 그대로 쓴다.
-function FuelBreakdown({ after }: { after: After }) {
-  const measuredPct = after.total > 0 ? Math.round((after.measured_tco2e / after.total) * 100) : 0;
-  const estimatedPct = Math.max(0, 100 - measuredPct);
+const SCOPE_LABEL: Record<string, string> = { scope_1: "Scope 1", scope_2: "Scope 2" };
 
+// Scope별 카드 — 품질점수 사다리 + 배출량 + 데이터 완전성 + 판정 근거(basis)를
+// 한 카드에 담는다. basis/limitations는 db/pcaf_quality.py가 이미 완결된 한국어
+// 문장으로 만들어 저장해두므로(코드가 유일한 명세), 프론트에서 옵션코드→설명
+// 매핑을 따로 두지 않고 그대로 나열한다.
+function ScopeQualityCard({ data }: { data: ScopeQuality }) {
   return (
-    <div className="flex-1 rounded-2xl bg-surface p-4">
-      <div className="text-[13px] font-semibold text-ink">항목별 상세</div>
-
-      <div className="mt-2.5 flex h-2 overflow-hidden rounded-full bg-bg">
-        <div className="h-full bg-brand" style={{ width: `${measuredPct}%` }} />
-        {estimatedPct > 0 && <div className="h-full bg-line" style={{ width: `${estimatedPct}%` }} />}
-      </div>
-      <div className="mt-1 text-[10px] leading-relaxed text-faint">
-        실측 {fmt(after.measured_tco2e)}
-        {after.estimated_gap_tco2e > 0 && <> · 추정 {fmt(after.estimated_gap_tco2e)}</>}
+    <div className="mt-3 rounded-2xl bg-surface p-5">
+      <div className="flex items-center justify-between">
+        <span className="text-[13px] font-semibold text-ink">{SCOPE_LABEL[data.scope_group]}</span>
+        {data.candidate_score != null && (
+          <span className="rounded-full bg-brand px-2.5 py-1 text-[13px] font-extrabold text-white">
+            {data.candidate_score}등급
+          </span>
+        )}
       </div>
 
-      <div className="mt-3 space-y-1.5 border-t border-line pt-2.5">
-        {after.by_fuel.map((row) => (
-          <div key={row.fuel} className="flex items-center justify-between text-[11.5px]">
-            <span className="text-muted">{row.fuel}</span>
+      {data.candidate_score != null ? (
+        <>
+          <ScoreMarker score={data.candidate_score} />
+
+          <div className="mt-4 flex items-center justify-between border-t border-line pt-3 text-[11.5px] text-muted">
+            <span>배출량</span>
             <span className="font-semibold text-ink">
-              {fmt(row.total_tco2e)}
-              {row.estimated_tco2e > 0 && <span className="text-faint">*</span>}
+              {data.emission_tco2e != null ? `${fmt(data.emission_tco2e)}tCO₂e` : "미산정"}
             </span>
           </div>
-        ))}
-      </div>
-      {after.by_fuel.some((row) => row.estimated_tco2e > 0) && (
-        <div className="mt-2 text-[9.5px] text-faint">* 추정 보정 포함</div>
+
+          {data.completeness_pct != null && (
+            <div className="mt-2.5">
+              <div className="flex items-center justify-between text-[10.5px] text-faint">
+                <span>데이터 완전성</span>
+                <span>{Math.round(data.completeness_pct)}%</span>
+              </div>
+              <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-bg">
+                <div
+                  className="h-full rounded-full bg-brand"
+                  style={{ width: `${data.completeness_pct}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          {data.basis.length > 0 && (
+            <ul className="mt-3 space-y-1 text-[11px] leading-relaxed text-muted">
+              {data.basis.map((b, i) => (
+                <li key={i}>· {b}</li>
+              ))}
+            </ul>
+          )}
+          {data.limitations.length > 0 && (
+            <ul className="mt-2 space-y-1 text-[10.5px] leading-relaxed text-faint">
+              {data.limitations.map((l, i) => (
+                <li key={i}>· {l}</li>
+              ))}
+            </ul>
+          )}
+        </>
+      ) : (
+        <div className="mt-3 rounded-xl border-2 border-dashed border-line p-4 text-center text-[12.5px] text-muted">
+          {data.limitations[0] ?? "아직 산정할 수 없어요"}
+        </div>
       )}
     </div>
   );
@@ -280,7 +185,7 @@ const FUEL_BAR_COLOR: Record<string, string> = {
 const FUEL_ORDER = ["전기", "가스", "경유/유류", "기타"];
 const CHART_HEIGHT_PX = 96;
 
-function MonthlyTrendChart({ monthly }: { monthly: After["monthly"] }) {
+function MonthlyTrendChart({ monthly }: { monthly: MonthlyRow[] }) {
   const maxTotal = Math.max(...monthly.map((m) => m.total_tco2e), 0.001);
   const fuelsPresent = new Set(monthly.flatMap((m) => Object.keys(m.by_fuel)));
   const fuels = FUEL_ORDER.filter((f) => fuelsPresent.has(f));
@@ -345,9 +250,6 @@ function DistributionTrack({
   // 배출량이 적을수록 "상위" → 트랙은 진한(상위) → 연한(하위) 순으로 좌에서 우로 흐름
   const valuePct = Math.min(100, Math.max(0, ((value - min) / span) * 100));
 
-  // 마운트 시 0%에서 시작해 실제 위치로 스윽 슬라이드 — transition은 값이
-  // "변할 때"만 트리거되므로, 첫 페인트는 0%로 그린 뒤 다음 프레임에 목표
-  // 위치로 옮겨 애니메이션을 강제로 발생시킨다.
   const [animatedPct, setAnimatedPct] = useState(0);
   useEffect(() => {
     const id = requestAnimationFrame(() => setAnimatedPct(valuePct));
@@ -380,7 +282,6 @@ function DistributionTrack({
   );
 }
 
-// 항목별 상세와 좌우로 짝지어지는 컴팩트 벤치마크 카드.
 function BenchmarkCard({
   benchmark,
   hasDistribution,
@@ -389,21 +290,16 @@ function BenchmarkCard({
   hasDistribution: boolean;
 }) {
   return (
-    <div className="flex flex-1 flex-col rounded-2xl bg-surface p-4">
+    <div className="mt-3 rounded-2xl bg-surface p-5">
       {hasDistribution ? (
         <>
           <p className="truncate text-[13px] font-semibold text-ink">
             동종 {benchmark.industry_name ?? benchmark.industry_code} 대비
           </p>
-          {/* 제목은 항목별 상세와 같은 높이(맨 위)에 고정하고, 나머지(퍼센트+막대)는
-              남는 세로 공간 안에서 가운데로 — 그래야 옆 카드가 더 길어도 막대가
-              카드 위쪽에 붕 떠 있지 않는다. */}
-          <div className="flex flex-1 flex-col justify-center">
-            <p className="text-[14px] font-bold text-ink">
-              상위 <span className="text-brand-ink">{benchmark.percentile_pct}%</span>
-            </p>
-            <DistributionTrack min={benchmark.min!} max={benchmark.max!} value={benchmark.value!} />
-          </div>
+          <p className="mt-0.5 text-[14px] font-bold text-ink">
+            상위 <span className="text-brand-ink">{benchmark.percentile_pct}%</span>
+          </p>
+          <DistributionTrack min={benchmark.min!} max={benchmark.max!} value={benchmark.value!} />
         </>
       ) : (
         <>
@@ -418,7 +314,8 @@ function BenchmarkCard({
 }
 
 export function ScenePcaf() {
-  const [data, setData] = useState<PcafResponse | null>(null);
+  const [data, setData] = useState<QualityReportResponse | null>(null);
+  const [monthly, setMonthly] = useState<MonthlyRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [rateCandidate, setRateCandidate] = useState<RateCandidateResponse | null>(null);
@@ -447,7 +344,7 @@ export function ScenePcaf() {
     setError(null);
     try {
       const cid = await getCompanyId();
-      const res = await apiGet<PcafResponse>(`/pcaf/${cid}`);
+      const res = await apiGet<QualityReportResponse>(`/owner/${cid}/quality-report`);
       setData(res);
       // 이상 신호는 은행 담당자와 동일한 판정 로직(GET /admin/alerts와 같은
       // db/alerts.py::detect_alerts)을 자기 기업분만 조회 — 은행이 먼저 알고
@@ -459,9 +356,14 @@ export function ScenePcaf() {
       apiGet<RateCandidateResponse>(`/owner/${cid}/rate-candidate`)
         .then((r) => setRateCandidate(r))
         .catch((err) => console.error("우대금리 후보 조회 실패(부가 정보라 화면은 계속 진행):", err));
+      // 월별 배출 추이만 구 엔진에서 재사용(파일 상단 주석 참고) — 부가 정보라
+      // 실패해도 리포트 본문(Scope 품질 후보)은 그대로 보여준다.
+      apiGet<LegacyPcafResponse>(`/pcaf/${cid}`)
+        .then((r) => setMonthly(r.after?.monthly ?? null))
+        .catch((err) => console.error("월별 추이 조회 실패(부가 정보라 화면은 계속 진행):", err));
     } catch (err) {
       // 목업으로 위장하지 않는다 — 실패는 실패로 표시
-      console.error("PCAF 조회 실패:", err);
+      console.error("PCAF 품질 조회 실패:", err);
       setData(null);
       setError("산정 결과를 불러오지 못했습니다. 서버 연결 상태를 확인한 뒤 다시 시도해 주세요.");
     }
@@ -504,53 +406,36 @@ export function ScenePcaf() {
     );
   }
 
-  const { before, after, benchmark } = data;
-  const gradeUp = after ? before.grade - after.grade : 0;
+  const { scope_1, scope_2, benchmark } = data;
   const hasDistribution =
     benchmark.value !== null &&
     benchmark.min !== null &&
     benchmark.median !== null &&
     benchmark.max !== null;
+  const bankReviewRequired = scope_1.bank_review_required || scope_2.bank_review_required;
 
   return (
     <section>
       <h2 className="text-[17px] font-bold leading-snug text-ink">
         측정이 끝났어요
       </h2>
-
-      {/* 등급 사다리 — 결과의 핵심이라 원래 크기(전체 폭)를 유지한다. */}
-      <div className="mt-5 space-y-4 rounded-2xl bg-surface p-5">
-        {after ? (
-          <GradeLadder before={before.grade} after={after.grade} improvedBy={gradeUp} />
-        ) : (
-          <>
-            <div className="flex items-center justify-center">
-              <span className="rounded-full bg-line px-2.5 py-1 text-[13px] font-bold text-muted">
-                {before.grade}등급 · 매출액 통계 추정
-              </span>
-            </div>
-            <div className="rounded-xl border-2 border-dashed border-line p-4 text-center text-[12.5px] text-muted">
-              ③ AI 분류를 먼저 실행하면 실측 배출량이 표시됩니다
-            </div>
-          </>
+      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+        {bankReviewRequired && (
+          <span className="rounded-full bg-hitl/25 px-2 py-0.5 text-[10.5px] font-semibold text-hitl-ink">
+            은행 검토 대기
+          </span>
         )}
-        {after && (
-          <div className="flex gap-3 border-t border-line pt-3">
-            <EmissionBoxCompare beforeValue={before.emission_tco2e} afterValue={after.total} />
-            <ScopeCompact scope1={after.scope1} scope2={after.scope2} hitlCount={after.hitl_count} />
-          </div>
-        )}
+        <span className="text-[11px] text-faint">
+          {data.reporting_year}년 기준 · 담당자 승인 전까지는 후보 값이에요
+        </span>
       </div>
 
-      {/* 벤치마크 + 항목별 상세를 좌우로 배치해 한 화면에 같이 들어오게 한다.
-          항목별 상세는 분류 실행 전엔 보여줄 게 없어 그때는 벤치마크 카드
-          (아직 산출 전 안내) 혼자 폭을 채운다. */}
-      <div className="mt-3 flex gap-3">
-        <BenchmarkCard benchmark={benchmark} hasDistribution={hasDistribution} />
-        {after && <FuelBreakdown after={after} />}
-      </div>
+      <ScopeQualityCard data={scope_1} />
+      <ScopeQualityCard data={scope_2} />
 
-      {after && <MonthlyTrendChart monthly={after.monthly} />}
+      <BenchmarkCard benchmark={benchmark} hasDistribution={hasDistribution} />
+
+      {monthly && <MonthlyTrendChart monthly={monthly} />}
 
       {alerts.length > 0 && (
         <div className="mt-3 space-y-2 rounded-2xl bg-surface p-5">
@@ -619,8 +504,7 @@ export function ScenePcaf() {
             우대금리 대상 안내
           </div>
           <p className="mt-1 text-[12.5px] text-muted">
-            PCAF {after ? after.grade : before.grade}등급 기준, 담당 은행원과의
-            상담을 통해 우대금리 자격을 확인할 수 있어요.
+            담당 은행원과의 상담을 통해 우대금리 자격을 확인할 수 있어요.
           </p>
         </div>
       )}

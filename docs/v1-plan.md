@@ -2,7 +2,7 @@
 
 ```text
 Status: active-plan
-Last updated: 2026-08-12
+Last updated: 2026-08-13
 Superseded by: 없음
 Merge note: 2026-08-05판(PCAF Business Loans 정식 산정)과 2026-08-09판(ESG 우대금리·K택소노미)을
             층위로 분리해 병합. feat/db-alembic-migration 브랜치의 기 구현 스키마를 기반 레이어로
@@ -32,10 +32,12 @@ Scope: 2026년 8월 v1 구현·검증·시연 일정
 >   상세는 §7-1 참고. CSV만 우선 구현, PDF 서술형 감사보고서는 범위 밖.
 > - 개발자 B: 2주차 A 항목(K택소노미·설비투자 필드) 백엔드만 대신 착수 — `Classification`에
 >   4개 필드 추가, 회계 매핑표(Excel)와 기존 룰 매칭(R051~R058, R031, R032)을 연결
->   **구현 완료, PR 대기**. 프론트(리드 리스트)와 `ScenePcaf.tsx` 정식 엔진 교체는 이번
->   스코프에서 제외(사용자 지시) — 여전히 미착수. 상세는 §6-5 참고.
-> - `dev` 최신 기준 `pytest` 207 passed, 3 skipped(라이브 DB 파괴적 테스트만 스킵, 회귀 없음.
->   `pdfplumber`·`reportlab` 신규 의존성은 `pip install -r requirements.txt` 재실행 필요).
+>   **완료·병합** — PR #39(`feat/k-taxonomy-equipment-fields` → `dev`). 상세는 §6-5 참고.
+> - 개발자 A: 2주차 A 항목의 남은 프론트 2건 — K택소노미 리드 리스트(관리자)와
+>   `ScenePcaf.tsx` 정식 엔진(`db/pcaf_quality.py`) 교체 — **완료·병합**. PR #41(리드
+>   리스트), 이어서 조직경계 자동 생성 + 사장님용 리포트 래퍼 + 프론트 재설계.
+>   **2주차 Tier 1이 전부 끝났다.** 상세는 §6-6 참고.
+> - `dev` 최신 기준 `pytest` 222 passed, 3 skipped(라이브 DB 파괴적 테스트만 스킵, 회귀 없음).
 
 > 기준 브랜치: `dev` (병합 대상: `feat/db-alembic-migration`)
 >
@@ -268,13 +270,14 @@ alembic upgrade head                  # 빈 DB에서 마이그레이션 성공 �
 > 병합 계획보다 앞서 반영돼 있다. B 항목("승인요청 큐(우대금리·설비금융, 비보장 문구)"를
 > 기존 HITL 큐와 명확히 분리)은 PR #28·#29로 완료·병합됐다. 이어서 owner 쪽 버튼 UI(PR #31),
 > pre-existing 테스트 3건 정리(PR #30), 인벤토리 집계(PR #32)까지 마무리됐다 — 상세는
-> §6-1·§6-2·§6-3. **2주차 백엔드는 모두 끝났다** — K택소노미·설비투자 필드(원래 A 담당)는
-> 개발자 B가 대신 백엔드만 착수해 완료(§6-5, PR 대기). 남은 건 프론트(리드 리스트,
-> `ScenePcaf.tsx` 정식 엔진 교체)뿐이며 이번엔 의도적으로 스코프 밖(사용자 지시).
+> §6-1·§6-2·§6-3. **2주차 Tier 1이 전부 끝났다** — K택소노미·설비투자 필드(원래 A 담당)는
+> 개발자 B가 대신 백엔드만 착수해 완료(§6-5, PR #39). 남은 프론트 2건(리드 리스트,
+> `ScenePcaf.tsx` 정식 엔진 교체)도 완료됐다(§6-6, PR #41 + 후속).
 
 | 담당 | 작업                                                                                                                                  | 검증                                                  | 상태 |
 | ---- | ------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- | ---- |
-| A/B  | K택소노미·설비투자 필드를 classification 테이블에 추가(신규 Alembic revision), LLM 분류 프롬프트 확장 여부 검토. ~~결손 감지에 연료유형 필터 반영~~은 PR #26에서 선행 완료(`api/queries.py::get_coverage()`) | 기존 classification 회귀 테스트 통과 + 신규 필드 검증 | ✅ **백엔드 완료, PR 대기** — 브랜치 `feat/k-taxonomy-equipment-fields`. LLM 프롬프트 확장은 불필요로 결론(§6-5). 프론트·`ScenePcaf.tsx` 교체는 별도 작업으로 남음(아래 노트) |
+| A/B  | K택소노미·설비투자 필드를 classification 테이블에 추가(신규 Alembic revision), LLM 분류 프롬프트 확장 여부 검토. ~~결손 감지에 연료유형 필터 반영~~은 PR #26에서 선행 완료(`api/queries.py::get_coverage()`) | 기존 classification 회귀 테스트 통과 + 신규 필드 검증 | ✅ 완료 — PR #39 병합(§6-5). LLM 프롬프트 확장은 불필요로 결론 |
+| A    | K택소노미 리드 리스트(관리자 화면) + `ScenePcaf.tsx`를 구 엔진(`db/pcaf.py`)에서 정식 엔진(`db/pcaf_quality.py`)으로 교체 | 관리자 대시보드 새 탭 렌더 확인, 사장님 리포트 Scope별 품질점수 실데이터 확인 | ✅ 완료 — PR #41 + 조직경계 자동생성/리포트 래퍼/프론트 재설계(§6-6) |
 | B    | 관리자 대시보드: HITL 큐(분류 신뢰도, 기 구현)와 승인요청 큐(우대금리·설비금융, 비보장 문구 포함, 신규)를 명확히 분리, 원본문서 접근 감사 로그 확장 | 두 큐 혼동 없음, 반려 로그 자동/담당자 구분           | ✅ 완료 — PR #28·#29 병합(§6-1) |
 | 회계 | 정답지 라벨링, PCAF 품질 규칙 검수                                                                                                    | —                                                     | ✅ 진행 중 — `data/감탄_데이터준비_샘플.xlsx` 확장(I042~I050, R051~R058, K택소노미/설비 신규 시트 8개) 반영 확인. `README_확장내역` 시트 참고 |
 
@@ -290,7 +293,7 @@ alembic upgrade head                  # 빈 DB에서 마이그레이션 성공 �
 
 ### 2주차 완료조건
 
-- K택소노미·설비투자 필드가 기존 계산 로직을 깨지 않는다. — ✅ 완료(§6-5, 테스트로 검증). 단 프론트(리드 리스트, `ScenePcaf.tsx` 교체)는 별도 작업
+- K택소노미·설비투자 필드가 기존 계산 로직을 깨지 않는다. — ✅ 완료(§6-5, 테스트로 검증). 프론트(리드 리스트, `ScenePcaf.tsx` 교체)도 완료(§6-6)
 - 안내 문구에 항상 비보장 고지가 포함된다. — ✅ 완료(테스트로 검증, §6-1)
 - HITL 큐와 승인요청 큐가 분리된 데이터·화면으로 존재한다. — ✅ 완료(§6-1)
 
@@ -398,9 +401,60 @@ PR: https://github.com/noeyish/GamTan/pull/31 (`feat/owner-rate-request-ui` → 
   그대로 동작함을 테스트로 확인.
 - 테스트: `tests/test_k_taxonomy.py` 10건(매핑표 무결성 2 + 순수 로직 4 + `classify_vouchers()`
   통합 4). 전체 `pytest` 207 passed.
-- **이번 스코프 제외(프론트)**: 리드 리스트 화면, `ScenePcaf.tsx` 정식 엔진(`db/pcaf_quality.py`)
-  교체 — 둘 다 별도 작업으로 남음.
-- PR: 아직 미생성 — 브랜치 `feat/k-taxonomy-equipment-fields`.
+- PR: https://github.com/noeyish/GamTan/pull/39 (`feat/k-taxonomy-equipment-fields` → `dev`, **병합 완료**)
+
+### 6-6. K택소노미 리드 리스트 + `ScenePcaf.tsx` 정식 엔진 교체 — 남은 프론트 2건 (PR #41 + 후속)
+
+§6-5에서 스코프 밖으로 남겨뒀던 프론트 2건(원래 개발자 A 담당) — 이번에 A가 이어받아 완료.
+
+**K택소노미 리드 리스트 (PR #41)**
+
+- `db/k_taxonomy.py::k_taxonomy_leads()` 신규 — `finance_lead_type`이 채워진 분류 건을
+  전 기업에서 모아 반환. 정렬은 데이터 완전성(결손 개수)만 사용(원칙7 — 감축 실적 기반
+  순위 금지), 담당자 반려 건 제외.
+- `GET /admin/k-taxonomy-leads` 신규(기존 `/admin/rate-candidates`와 같은 패턴).
+- `web/components/admin/KTaxonomyLeads.tsx` 신규(`RateCandidates.tsx` 구조 재사용),
+  관리자 대시보드에 "K택소노미 리드" 탭 추가.
+- 테스트: `tests/test_admin.py` 골든 케이스 3건.
+
+**`ScenePcaf.tsx` 정식 엔진 교체**
+
+⚠️ 단순 API 교체가 아니었다 — 정식 엔진(`db/pcaf_quality.py`)은 `OrganizationalBoundary`
+사전 등록을 전제로 설계됐고(없으면 409), Before(매출추정) 기준선·동종업계 벤치마크
+필드 자체가 없으며, Scope1·2를 각각 독립적으로 평가한다(구 엔진의 단일 "등급" 개념과
+다름). 조사 후 재설계 방향으로 진행.
+
+- `db/organizational_boundary.py::ensure_organizational_boundary()` 신규 — 조직경계가
+  없으면 **간이화 가정**(`boundary_type='operational_control'`, `consolidation_scope='separate'`,
+  대상이 대부분 자회사 없는 단일법인 소기업이라는 전제)으로 자동 생성. ⚠️ **회계 검수
+  필요** — 실제로 연결대상이 있는 차주가 생기면 이 가정은 깨지므로 은행 담당자가 정식
+  등록하는 절차로 교체돼야 한다. 정식 등록 레코드가 이미 있으면 그대로 존중(재생성 안 함).
+- `db/pcaf_quality.py::save_quality_assessment_version()` 신규 — 한 Scope의 평가·저장
+  로직을 은행 담당자용 evaluate 엔드포인트와 사장님용 리포트 래퍼가 공유(중복 제거,
+  `api/routers/quality.py::evaluate_quality_assessment`도 이 함수를 쓰도록 리팩터링).
+- `api/routers/owner_quality.py` 신규 — `GET /owner/{company_id}/quality-report?year=`.
+  조직경계 자동 생성 → 최신 평가 없으면 1회 자동 산정·저장 → 재조회는 저장된 버전을
+  그대로 반환(조회할 때마다 새 버전 안 만듦). `year` 생략 시 달력상 올해가 아니라 **그
+  기업 전표가 실제로 존재하는 가장 최근 연도**를 기본값으로 씀(결산 데이터가 항상
+  "올해"일 필요는 없고, "올해"로 고정하면 데이터가 과거 연도뿐인 기업은 리포트가 늘
+  비어 보이는 문제가 있었다).
+- `db/pcaf.py::benchmark_against_industry()`(구 `_benchmark`, 공개 함수로 개명) — 배출량
+  총량 하나만 받는 순수함수로 시그니처를 다듬어 신·구 엔진 어느 쪽 결과든 재사용 가능.
+- `web/components/ScenePcaf.tsx` 전면 재설계 — Scope1·2 각각 카드로 분리해 품질점수
+  사다리(1~5, 구 엔진의 grade 사다리 UI를 Scope별 단일 마커로 단순화)·배출량·데이터
+  완전성(`completeness_pct`)·판정 근거(`basis`/`limitations`, `db/pcaf_quality.py`가
+  이미 한국어 문장으로 완결해 저장 — 프론트에 별도 매핑 안 둠)를 표시. "은행 검토 대기"
+  배지 상시 노출. 벤치마크 카드는 데이터 모양이 그대로라 재사용. **월별 배출 추이만
+  예외로 구 엔진(`/pcaf/{id}`)의 `monthly`를 계속 재사용** — Classification 원자료를
+  월별 집계하는 독립 로직이라 엔진 교체와 무관.
+- **폐기**: Before/After 박스 비교(before 값 자체가 없음), 실측/추정 비율 바(측정치
+  개념이 다름 — `completeness_pct`로 대체).
+- 테스트: `tests/test_owner_quality.py` 9건(조직경계 자동생성 3 + API 통합 6, 연도
+  기본값 회귀 케이스 포함). 전체 `pytest` 222 passed.
+- 공유 Supabase DB에 `pcaf_quality_rules` 시드가 안 돼 있던 것도 이번에 확인해 채움
+  (7행, 사용자 확인 후 진행) — PR #25 이후 로컬 `db/init_db.py` 재실행이 안 됐던 것으로
+  보임.
+- PR: (작성 예정) 브랜치 `feat/scenepcaf-quality-engine`.
 
 ---
 
@@ -525,7 +579,9 @@ ELSE: 귀속계수 = 대출잔액 / 분모, 금융배출량 = 귀속계수 × �
 | 부수 | owner "우대금리 안내 요청" 버튼 실데이터 연동 | B | #31 | §6-4. 2주차 B 잔여 UI |
 | 부수 | Docker 이미지 경량화 (api 412MB→395MB, 캐시 재빌드 대폭 단축) | B | #28에 포함 | §6-1 병행 처리 |
 | Tier 2 | 품질 이슈 로그 + 감사 대응 근거 패키지(CSV) | B | #37 | §7-1. Tier 2 조기 착수, PDF는 범위 밖 |
-| Tier 1 | K택소노미·설비투자 필드 (백엔드만) | B | PR 대기 | §6-5. 원래 A 담당, B가 백엔드만 대신 착수. 프론트는 별도 작업 |
+| Tier 1 | K택소노미·설비투자 필드 (백엔드만) | B | #39 | §6-5. 원래 A 담당, B가 백엔드만 대신 착수 |
+| Tier 1 | K택소노미 리드 리스트(관리자 화면) | A | #41 | §6-6 |
+| Tier 1 | `ScenePcaf.tsx` 정식 엔진(`db/pcaf_quality.py`) 교체 + 조직경계 자동생성 | A | (작성 예정) | §6-6. `feat/scenepcaf-quality-engine` |
 
 ---
 
@@ -538,9 +594,9 @@ ELSE: 귀속계수 = 대출잔액 / 분모, 금융배출량 = 귀속계수 × �
 | 티어 | 항목 | 담당 | 상태 | 참고 |
 | --- | --- | --- | --- | --- |
 | Tier 1 | 검증 3수치 확정 (분류 정확도, 트랙A MAPE, 트랙B 실물대조 오차) | 회계 | ⬜ 미착수 | §2 Tier 1-1. 발표·Q&A 근거로 반드시 필요 |
-| Tier 1 | K택소노미·설비투자 필드 — 백엔드 | B | ✅ 구현 완료, PR 대기 | §6-5. 회계 매핑표를 기존 룰 매칭에 연결, 새 매칭 로직 없음 |
-| Tier 1 | K택소노미 리드 리스트 — 프론트 (owner-admin-flow-spec.md §5) | 미배정 | ⬜ 미착수 | 백엔드 필드는 §6-5로 준비됨, 화면만 남음 |
-| Tier 1 | `ScenePcaf.tsx` 구 엔진(`db/pcaf.py`) → 정식 엔진(`db/pcaf_quality.py`) 교체 | 미배정 | ⬜ 미착수 | §6, 프론트 작업이라 §6-5에서 명시적으로 제외됨 |
+| Tier 1 | K택소노미·설비투자 필드 — 백엔드 | B | ✅ 완료 | §6-5, PR #39. 회계 매핑표를 기존 룰 매칭에 연결, 새 매칭 로직 없음 |
+| Tier 1 | K택소노미 리드 리스트 — 프론트 (owner-admin-flow-spec.md §5) | A | ✅ 완료 | §6-6, PR #41 |
+| Tier 1 | `ScenePcaf.tsx` 구 엔진(`db/pcaf.py`) → 정식 엔진(`db/pcaf_quality.py`) 교체 | A | ✅ 완료 | §6-6. 조직경계 자동생성(간이화 가정, 회계 검수 필요)·사장님용 리포트 래퍼 신규 |
 | Tier 2 | 우대금리·설비금융 "안내" (비보장 문구) | B | ✅ 완료 | §6-1·§6-4, PR #28·#29·#31 |
 | Tier 2 | PCAF 데이터 품질 실시간 지표화 (초안→확정 알림) | 미배정 | ⬜ 미착수 | §2 Tier 2-9 |
 | Tier 2 | 되묻는 HITL (사장님이 물량·연료 정보 직접 보완) | 미배정 | ⬜ 미결정 | `docs/hitl-owner-action.md` — 옵션 A/B 중 팀 결정 필요, 결정 전엔 착수 불가 |
@@ -557,7 +613,7 @@ ELSE: 귀속계수 = 대출잔액 / 분모, 금융배출량 = 귀속계수 × �
 | Tier 3 | 월간 AI 브리핑 / 장비개선 시뮬레이터 / 지역집중 리스크 히트맵 / 그린 임팩트 예금 | 미배정 | ⬜ 자를 후보 | §2 Tier 3-12, 비전 슬라이드용으로만 유지 |
 | 4주차 | 기능 동결·장애 주입 리허설·통주 녹화 | A+B+회계 | ⬜ 미착수 | §8, 3주차 완료 후 착수 |
 
-**요약**: 2주차 백엔드는 전부 끝났다. 남은 건 프론트 몫(K택소노미 리드 리스트,
-`ScenePcaf.tsx` 정식 엔진 교체 — 둘 다 담당 미배정)과 회계 몫(검증 3수치 — 발표 자료의
-핵심 근거라 늦어도 3주차 전에는 확정돼야 한다)이다. "되묻는 HITL"은 코드가 아니라 팀
-결정이 먼저 필요한 유일한 항목.
+**요약**: 2주차 Tier 1이 전부 끝났다. 남은 건 회계 몫(검증 3수치 — 발표 자료의 핵심
+근거라 늦어도 3주차 전에는 확정돼야 한다)과 Tier 2 이후 항목들이다. "되묻는 HITL"은
+코드가 아니라 팀 결정이 먼저 필요한 유일한 항목. 조직경계 간이화 가정(§6-6)은 회계
+검수가 필요한 임시 정책으로 남아 있다.
