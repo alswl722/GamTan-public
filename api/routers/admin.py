@@ -2,6 +2,7 @@
 
 - GET   /admin/portfolio                      포트폴리오 금융배출량 집계 + PCAF 등급 분포
 - GET   /admin/rate-candidates                 등급 상승 역산 후보 (우대금리 자격 안내)
+- GET   /admin/k-taxonomy-leads                K택소노미·설비투자 리드 목록 (녹색여신·설비금융 안내 대상)
 - GET   /admin/hitl                           전 기업 담당자 검토 큐 (저신뢰 분류 건)
 - PATCH /admin/classifications/{id}/confirm   그대로 확정
 - PATCH /admin/classifications/{id}           분류 수정 후 확정 (담당자 교정)
@@ -44,6 +45,7 @@ from db.calc_engine import CalcDataGap, ClassifiedItemInput, compute_emission, \
     index_emission_factors, index_unit_prices
 from db.audit_package import build_audit_package
 from db.document_access_log import access_history, record_access, recent_access_log
+from db.k_taxonomy import k_taxonomy_leads
 from db.models import Classification, Company, SourceDocument, TraceLog, Voucher
 from db.pcaf import portfolio_summary, rate_upgrade_candidates
 from db.quality_issues import list_ingestion_failures
@@ -79,6 +81,16 @@ def rate_candidates(session: Session = Depends(get_session)):
     여신 결정은 하지 않는다(CLAUDE.md §9) — 우대금리 자격 '안내'까지만 담당.
     """
     return {"candidates": rate_upgrade_candidates(session)}
+
+
+@router.get("/k-taxonomy-leads")
+def k_taxonomy_leads_endpoint(session: Session = Depends(get_session)):
+    """K택소노미·설비투자 리드 목록 — 전 기업에서 finance_lead_type이 채워진 분류 건.
+
+    여신 결정이 아니라 안내 대상 목록이다(CLAUDE.md §9). 정렬은 데이터 완전성만
+    사용한다(원칙7).
+    """
+    return {"leads": k_taxonomy_leads(session)}
 
 
 @router.get("/hitl")

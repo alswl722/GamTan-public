@@ -10,6 +10,7 @@ import {
   getAlerts,
   getDocumentAccessLog,
   getHitl,
+  getKTaxonomyLeads,
   getPortfolio,
   getQualityIssues,
   getRateCandidates,
@@ -21,6 +22,7 @@ import type {
   AlertItem,
   DocumentAccessLogEntry,
   HitlItem,
+  KTaxonomyLeadItem,
   PortfolioResponse,
   QualityIssueEntry,
   RateApprovalRequestItem,
@@ -40,6 +42,7 @@ type Data = {
   rateRequests: RateApprovalRequestItem[];
   documentAccessLog: DocumentAccessLogEntry[];
   qualityIssues: QualityIssueEntry[];
+  kTaxonomyLeads: KTaxonomyLeadItem[];
 };
 
 export default function AdminPage() {
@@ -59,6 +62,7 @@ export default function AdminPage() {
       getRateRequests(),
       getDocumentAccessLog(),
       getQualityIssues(),
+      getKTaxonomyLeads(),
     ])
       .then(
         ([
@@ -71,6 +75,7 @@ export default function AdminPage() {
           rateRequests,
           documentAccessLog,
           qualityIssues,
+          kTaxonomyLeads,
         ]) =>
           setData({
             portfolio,
@@ -82,6 +87,7 @@ export default function AdminPage() {
             rateRequests,
             documentAccessLog,
             qualityIssues,
+            kTaxonomyLeads,
           }),
       )
       .catch((err) => {
@@ -135,6 +141,7 @@ export default function AdminPage() {
       rateRequests={data.rateRequests}
       documentAccessLog={data.documentAccessLog}
       qualityIssues={data.qualityIssues}
+      kTaxonomyLeads={data.kTaxonomyLeads}
       onReviewed={refreshReviewLog}
     />
   );

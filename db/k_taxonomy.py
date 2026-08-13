@@ -10,7 +10,12 @@ category='감축투자 후보'류 룰이 매칭됐을 때만 의미가 있고, �
 """
 from functools import lru_cache
 
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from api.queries import get_coverage
 from db.excel_loader import load_k_taxonomy_mapping
+from db.models import Classification, Company, Voucher
 
 
 @lru_cache(maxsize=1)
@@ -46,3 +51,47 @@ def _empty_fields() -> dict:
         "finance_lead_type": None,
         "k_taxonomy_hitl_required": False,
     }
+
+
+def k_taxonomy_leads(session: Session) -> list[dict]:
+    """K택소노미·설비투자 리드 — finance_lead_type이 채워진 분류 건을 전 기업에서 모은다.
+
+    관리자 화면(§13 "K택소노미 리드 리스트")용. 여신 결정이 아니라 안내 대상 목록일
+    뿐이다(CLAUDE.md §9). 정렬은 데이터 완전성(결손 개수)만 사용한다 — 감축 실적·
+    배출량 기반 순위는 금지한다(CLAUDE.md 원칙7). 담당자가 반려한 건(status='rejected')은
+    신뢰할 수 없는 분류라 제외한다(다른 집계와 동일 규칙, db/pcaf.py::_after_measured 참고).
+    """
+    rows = session.execute(
+        select(Classification, Voucher, Company)
+        .join(Voucher, Classification.voucher_id == Voucher.id)
+        .join(Company, Voucher.company_id == Company.id)
+        .where(
+            Classification.finance_lead_type.isnot(None),
+            Classification.status != "rejected",
+        )
+        .order_by(Voucher.company_id, Classification.classified_at.desc())
+    ).all()
+
+    gap_count_by_company: dict[int, int] = {}
+    leads = []
+    for c, v, co in rows:
+        if co.id not in gap_count_by_company:
+            gap_count_by_company[co.id] = len(get_coverage(session, co.id)["gaps"])
+        leads.append(
+            {
+                "company_id": co.id,
+                "company_name": co.name,
+                "industry_name": co.industry_name,
+                "finance_lead_type": c.finance_lead_type,
+                "k_taxonomy_candidate_type": c.k_taxonomy_candidate_type,
+                "k_taxonomy_facility_type": c.k_taxonomy_facility_type,
+                "k_taxonomy_hitl_required": c.k_taxonomy_hitl_required,
+                "item_description": v.item_description,
+                "voucher_month": v.month,
+                "gap_count": gap_count_by_company[co.id],
+            }
+        )
+
+    # 결손 적은(데이터 완전성 높은) 기업 우선 — 원칙7: 데이터 완전성만 정렬 기준.
+    leads.sort(key=lambda lead: (lead["gap_count"], lead["company_id"]))
+    return leads
