@@ -142,6 +142,27 @@ def get_classifications(session: Session, company_id: int) -> list[dict]:
     ]
 
 
+def _selected_hitl_fuel_labels(fuel_types: dict | None) -> list[str] | None:
+    """companies.fuel_types_json → HITL 연료 드롭다운(FUEL_OPTIONS)에 쓸 세부 연료명 목록.
+
+    None(연료 체크 전 상태)이면 필터를 걸지 않는다 — get_coverage와 동일한 원칙
+    (체크하지 않은 연료의 결손은 알림 대상에서 제외, CLAUDE.md §5 원칙6)을
+    드롭다운 필터링에도 그대로 적용한다. "전기"는 항상 필수 취급이라 무조건 포함.
+    """
+    if fuel_types is None:
+        return None
+    selected: list[str] = ["전기"]
+    if fuel_types.get("diesel"):
+        selected.append("경유")
+    if fuel_types.get("gasoline"):
+        selected.append("휘발유")
+    if fuel_types.get("city_gas"):
+        selected.append("도시가스")
+    if fuel_types.get("lpg") in ("yes", "unsure"):
+        selected.append("LPG")
+    return selected
+
+
 def get_hitl_queue(session: Session) -> list[dict]:
     """전 기업의 HITL 대기 건(status='review_required') — 관리자 검토 큐.
 
@@ -171,6 +192,8 @@ def get_hitl_queue(session: Session) -> list[dict]:
             "evidence": c.evidence,
             "method": c.method,
             "month": v.month,
+            "source_document_id": c.source_document_id,
+            "company_fuel_types": _selected_hitl_fuel_labels(co.fuel_types_json),
         }
         for c, v, co in rows
     ]

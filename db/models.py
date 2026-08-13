@@ -342,6 +342,7 @@ class SourceDocument(Base):
     period_end = Column(DateTime(timezone=True))
     file_hash = Column(String(64))   # SHA256, 중복 적재 방지
     original_filename = Column(String(255))
+    file_path = Column(String(500))  # data/uploads/ 하위 상대경로, nullable(구 레코드엔 없음)
     extracted_json = Column(JSON)
     verification_status = Column(String(20), default="unverified")
     created_at = Column(DateTime(timezone=True), default=now)

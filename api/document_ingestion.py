@@ -5,6 +5,7 @@ vouchers는 기존 classify_vouchers()/calc_engine.py 파이프라인을 무수�
 (감탄 v1 1주차 아키텍처 결정 — docs 미반영, 채팅 계획 참고).
 """
 import hashlib
+import os
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -15,6 +16,9 @@ from api.queries import resolve_institution_borrower
 from db.document_extraction import extract_document
 from db.hometax_excel_parser import parse_hometax_excel
 from db.models import SourceDocument, Voucher
+
+REPO_ROOT = os.path.dirname(os.path.dirname(__file__))
+UPLOADS_DIR = os.path.join(REPO_ROOT, "data", "uploads")
 
 DOCUMENT_TYPE_TO_VOUCHER_SOURCE = {
     "tax_invoice": "tax_invoice",
@@ -36,6 +40,20 @@ class MissingInstitutionAttributionError(ValueError):
 
 def _file_hash(file_bytes: bytes) -> str:
     return hashlib.sha256(file_bytes).hexdigest()
+
+
+def _save_file(company_id: int, file_hash: str, filename: str, file_bytes: bytes) -> str:
+    """data/uploads/{company_id}/ 아래 원본 저장, DB엔 저장소 루트 기준 상대경로만 기록.
+
+    file_hash를 파일명 접두어로 넣어 동일 파일 재업로드 시 충돌을 피하고, 디버깅 시
+    파일과 DB 레코드를 서로 대조하기 쉽게 한다.
+    """
+    company_dir = os.path.join(UPLOADS_DIR, str(company_id))
+    os.makedirs(company_dir, exist_ok=True)
+    abs_path = os.path.join(company_dir, f"{file_hash}_{filename}")
+    with open(abs_path, "wb") as f:
+        f.write(file_bytes)
+    return os.path.relpath(abs_path, REPO_ROOT)
 
 
 def _parse_issue_date(value: str | None) -> datetime | None:
@@ -77,6 +95,8 @@ def ingest_uploaded_document(
     if _existing_document(session, company_id, file_hash) is not None:
         raise DuplicateDocumentError("이미 업로드된 파일입니다")
 
+    file_path = _save_file(company_id, file_hash, filename, file_bytes)
+
     ib = resolve_institution_borrower(session, company_id)
     if ib is None:
         raise MissingInstitutionAttributionError(
@@ -104,6 +124,7 @@ def ingest_uploaded_document(
         source_system=source_system,
         original_filename=filename,
         file_hash=file_hash,
+        file_path=file_path,
         extracted_json=extracted,
         verification_status="unverified",
     )
