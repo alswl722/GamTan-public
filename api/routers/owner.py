@@ -107,8 +107,6 @@ async def upload_document(
     file: UploadFile = File(...),
     document_type: str = Form(...),
     mode: str = Form("ocr"),
-    year: int | None = Form(None),
-    month: int | None = Form(None),
     session: Session = Depends(get_session),
 ):
     """3단계(세금계산서 OCR|엑셀 택1)·4단계(전기·도시가스고지서 OCR) 공용 업로드.
@@ -123,15 +121,15 @@ async def upload_document(
         raise HTTPException(status_code=400, detail=f"invalid mode: {mode}")
     if mode == "excel" and document_type != "tax_invoice":
         raise HTTPException(status_code=400, detail="엑셀 업로드는 세금계산서만 지원합니다")
-    # year/month는 더 이상 필수가 아니다 — 문서 자체(PDF 텍스트)에서 날짜를 읽어낸다
-    # (db/document_text_extractor.py). 못 읽으면 422로 명확히 실패한다.
+    # 문서 자체(PDF 텍스트)에서 날짜를 읽어낸다(db/document_text_extractor.py).
+    # 못 읽으면 합성값으로 가리지 않고 422로 명확히 실패한다(실패 가시성 원칙).
 
     file_bytes = await file.read()
     filename = file.filename or "upload"
     try:
         return ingest_uploaded_document(
             session, company_id, file_bytes, filename,
-            document_type, mode=mode, year=year, month=month,
+            document_type, mode=mode,
         )
     except DuplicateDocumentError as e:
         record_ingestion_failure(

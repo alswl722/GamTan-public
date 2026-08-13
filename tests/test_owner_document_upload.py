@@ -4,12 +4,51 @@ import io
 import openpyxl
 import pytest
 from fastapi.testclient import TestClient
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+from reportlab.pdfgen import canvas
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from api.db import get_session
 from api.main import app
 from db.models import Base, Company, FinancialInstitution, InstitutionBorrower
+
+pdfmetrics.registerFont(UnicodeCIDFont("HYGothic-Medium"))
+
+
+def _minimal_pdf(lines: list[str]) -> bytes:
+    """테스트 전용 — 합성 mock이 사라졌으므로 OCR 성공 케이스는 실제로 파싱되는
+    최소 텍스트 PDF가 있어야 한다(tests/test_document_extraction.py와 동일 패턴)."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf)
+    c.setFont("HYGothic-Medium", 11)
+    y = 700
+    for line in lines:
+        c.drawString(50, y, line)
+        y -= 20
+    c.save()
+    return buf.getvalue()
+
+
+def _electric_bill_pdf(*, month="03", amount=987_654, quantity=1234) -> bytes:
+    return _minimal_pdf([
+        "전기요금 고지서",
+        "고객명(사업장): 테스트기업 (경북 구미)",
+        f"청구월: 2025-{month} 계약종별: 산업용(을) 고압A",
+        f"사용량(kWh) {quantity}",
+        f"청구금액(원) {amount}",
+    ])
+
+
+def _gas_bill_pdf(*, month="04", amount=555_555, quantity=321) -> bytes:
+    return _minimal_pdf([
+        "도시가스 요금고지서",
+        "고객명(사업장): 테스트기업 (경북 구미)",
+        f"사용월: 2025-{month}",
+        f"사용량(m³) {quantity}",
+        f"청구금액(원) {amount}",
+    ])
 
 
 @pytest.fixture()
@@ -46,8 +85,8 @@ def test_ocr_upload_electric_bill_succeeds(db, client):
     _, company_id = db
     res = client.post(
         f"/owner/{company_id}/documents/upload",
-        files={"file": ("고지서.jpg", b"fake-bytes", "image/jpeg")},
-        data={"document_type": "electric_bill", "mode": "ocr", "year": "2025", "month": "3"},
+        files={"file": ("고지서.pdf", _electric_bill_pdf(), "application/pdf")},
+        data={"document_type": "electric_bill", "mode": "ocr"},
     )
     assert res.status_code == 200, res.text
     assert res.json()["vouchers_created"] == 1
@@ -74,10 +113,10 @@ def test_excel_upload_tax_invoice_succeeds(db, client):
 
 def test_duplicate_upload_returns_409(db, client):
     _, company_id = db
-    files = {"file": ("고지서.jpg", b"same-bytes", "image/jpeg")}
-    data = {"document_type": "gas_bill", "mode": "ocr", "year": "2025", "month": "4"}
+    files = {"file": ("고지서.pdf", _gas_bill_pdf(month="04"), "application/pdf")}
+    data = {"document_type": "gas_bill", "mode": "ocr"}
     first = client.post(f"/owner/{company_id}/documents/upload", files=files, data=data)
-    assert first.status_code == 200
+    assert first.status_code == 200, first.text
     second = client.post(f"/owner/{company_id}/documents/upload", files=files, data=data)
     assert second.status_code == 409
 
@@ -88,8 +127,8 @@ def test_duplicate_upload_is_recorded_as_quality_issue(db, client):
     from db.models import DocumentIngestionFailure
 
     session, company_id = db
-    files = {"file": ("고지서.jpg", b"same-bytes-2", "image/jpeg")}
-    data = {"document_type": "gas_bill", "mode": "ocr", "year": "2025", "month": "6"}
+    files = {"file": ("고지서.pdf", _gas_bill_pdf(month="06"), "application/pdf")}
+    data = {"document_type": "gas_bill", "mode": "ocr"}
     client.post(f"/owner/{company_id}/documents/upload", files=files, data=data)
     client.post(f"/owner/{company_id}/documents/upload", files=files, data=data)
 
@@ -103,7 +142,7 @@ def test_invalid_document_type_returns_400(db, client):
     res = client.post(
         f"/owner/{company_id}/documents/upload",
         files={"file": ("x.jpg", b"x", "image/jpeg")},
-        data={"document_type": "not_a_real_type", "mode": "ocr", "year": "2025", "month": "1"},
+        data={"document_type": "not_a_real_type", "mode": "ocr"},
     )
     assert res.status_code == 400
 
@@ -118,9 +157,9 @@ def test_excel_mode_rejected_for_non_tax_invoice(db, client):
     assert res.status_code == 400
 
 
-def test_ocr_non_pdf_without_year_month_returns_422(db, client):
-    """year/month는 더 이상 필수가 아니다(문서 자체에서 날짜를 읽는다) — 대신
-    PDF가 아니라 실 추출도 안 되고 폴백용 year/month도 없으면 422로 명확히 실패한다."""
+def test_ocr_non_pdf_returns_422(db, client):
+    """PDF가 아니거나 실 추출이 안 되는 파일은 합성값으로 가리지 않고 422로
+    명확히 실패한다(실패 가시성 원칙, 합성 mock 폴백 없음)."""
     _, company_id = db
     res = client.post(
         f"/owner/{company_id}/documents/upload",
@@ -130,12 +169,13 @@ def test_ocr_non_pdf_without_year_month_returns_422(db, client):
     assert res.status_code == 422
 
 
-def test_ocr_non_pdf_with_year_month_falls_back_to_synthetic(db, client):
-    """year/month가 주어지면(개발 편의) 임의 파일도 여전히 합성 mock으로 통과한다."""
+def test_ocr_pdf_with_unrecognized_format_returns_422(db, client):
+    """PDF는 맞지만 알려진 서식이 아니면(제목 줄 불일치 등) 값을 지어내지 않고
+    422로 실패한다 — 예전엔 year/month가 있으면 합성값으로 통과했었다."""
     _, company_id = db
     res = client.post(
         f"/owner/{company_id}/documents/upload",
-        files={"file": ("x.jpg", b"x", "image/jpeg")},
-        data={"document_type": "electric_bill", "mode": "ocr", "year": "2025", "month": "5"},
+        files={"file": ("x.pdf", _minimal_pdf(["아무 문서", "관련 없는 내용"]), "application/pdf")},
+        data={"document_type": "electric_bill", "mode": "ocr"},
     )
-    assert res.status_code == 200, res.text
+    assert res.status_code == 422

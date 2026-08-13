@@ -62,13 +62,12 @@ def ingest_uploaded_document(
     filename: str,
     document_type: str,
     mode: str = "ocr",
-    year: int | None = None,
-    month: int | None = None,
 ) -> dict:
     """업로드 1건 처리 → {"source_document_id", "vouchers_created"} 반환.
 
     mode="excel"은 document_type="tax_invoice"에서만 의미가 있다(여러 행 → 여러
-    voucher). 그 외에는 항상 OCR mock 1건 → voucher 1건.
+    voucher). 그 외에는 항상 PDF 실 추출 1건 → voucher 1건 — 실패하면 값을
+    지어내지 않고 DocumentParseError를 그대로 던진다(db/document_extraction.py).
     """
     if document_type not in DOCUMENT_TYPE_TO_VOUCHER_SOURCE:
         raise ValueError(f"알 수 없는 document_type: {document_type}")
@@ -90,9 +89,7 @@ def ingest_uploaded_document(
         extracted: dict = {"rows": rows, "skipped_rows": skipped_rows}
         source_system = "upload:excel"
     else:
-        # year/month는 이제 선택값이다 — 문서 자체(PDF 텍스트)에서 날짜를 읽어낸다.
-        # 실 추출이 안 되는 파일에서만 폴백용으로 쓰인다(db/document_extraction.py).
-        row = extract_document(file_bytes, document_type, year=year, month=month)
+        row = extract_document(file_bytes, document_type)
         rows = [row]
         extracted = row
         source_system = "upload:ocr"
