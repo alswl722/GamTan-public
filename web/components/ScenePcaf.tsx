@@ -132,22 +132,6 @@ function ScopeQualitySection({ data }: { data: ScopeQuality }) {
               {data.emission_tco2e != null ? `${fmt(data.emission_tco2e)}tCO₂e` : "미산정"}
             </span>
           </div>
-
-          {data.completeness_pct != null && (
-            <div className="mt-2.5">
-              <div className="flex items-center justify-between text-[10.5px] text-faint">
-                <span>데이터 완전성</span>
-                <span>{Math.round(data.completeness_pct)}%</span>
-              </div>
-              <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-bg">
-                <div
-                  className="h-full rounded-full bg-brand"
-                  style={{ width: `${data.completeness_pct}%` }}
-                />
-              </div>
-            </div>
-          )}
-
         </>
       ) : (
         <div className="mt-3 rounded-xl border-2 border-dashed border-line p-4 text-center text-[12.5px] text-muted">
@@ -171,36 +155,81 @@ const FUEL_BAR_COLOR: Record<string, string> = {
 const FUEL_ORDER = ["전기", "가스", "경유/유류", "기타"];
 const CHART_HEIGHT_PX = 96;
 
+// 점들을 부드러운 곡선으로 잇는 SVG path — 각 구간을 다음 점과의 중점까지
+// 2차 베지어(Q)로 그리고, 마지막만 실제 마지막 점까지 부드럽게 이어지도록(T)
+// 마무리한다. 외부 차트 라이브러리 없이 표준적인 "점 중점 스무딩" 기법.
+function smoothLinePath(pts: { x: number; y: number }[]): string {
+  if (pts.length === 0) return "";
+  if (pts.length === 1) return `M ${pts[0].x},${pts[0].y} L ${pts[0].x},${pts[0].y}`;
+  let d = `M ${pts[0].x},${pts[0].y}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const curr = pts[i];
+    const next = pts[i + 1];
+    const midX = (curr.x + next.x) / 2;
+    const midY = (curr.y + next.y) / 2;
+    d += ` Q ${curr.x},${curr.y} ${midX},${midY}`;
+  }
+  const last = pts[pts.length - 1];
+  d += ` T ${last.x},${last.y}`;
+  return d;
+}
+
 function MonthlyTrendChart({ monthly }: { monthly: MonthlyRow[] }) {
   const maxTotal = Math.max(...monthly.map((m) => m.total_tco2e), 0.001);
   const fuelsPresent = new Set(monthly.flatMap((m) => Object.keys(m.by_fuel)));
   const fuels = FUEL_ORDER.filter((f) => fuelsPresent.has(f));
+
+  // 막대 맨 위 중앙 좌표 — 꺾은선 오버레이용. x는 컨테이너 폭 대비 %(반응형 폭에
+  // 맞춰 자동으로 따라감), y는 CHART_HEIGHT_PX 기준 고정 px(컨테이너 높이가
+  // 고정값이라 DOM 측정 없이 계산 가능).
+  const points = monthly.map((m, i) => {
+    const barHeight = Math.max(2, Math.round((m.total_tco2e / maxTotal) * CHART_HEIGHT_PX));
+    return { x: ((i + 0.5) / monthly.length) * 100, y: CHART_HEIGHT_PX - barHeight, barHeight };
+  });
+
+  const linePath = smoothLinePath(points);
 
   return (
     <div className="mt-3 rounded-2xl bg-surface p-5">
       <div className="text-[13px] font-semibold text-ink">월별 배출 추이</div>
 
       <div
-        className="mt-4 flex items-end justify-between gap-1"
+        className="relative mt-4 flex items-end justify-between gap-1"
         style={{ height: CHART_HEIGHT_PX }}
       >
-        {monthly.map((m) => {
-          const barHeight = Math.max(2, Math.round((m.total_tco2e / maxTotal) * CHART_HEIGHT_PX));
-          return (
-            <div key={m.month} className="flex flex-1 flex-col items-center justify-end">
-              <div
-                className="flex w-full flex-col-reverse overflow-hidden rounded-[3px] bg-line"
-                style={{ height: barHeight }}
-              >
-                {fuels.map((f) => {
-                  const v = m.by_fuel[f] || 0;
-                  if (v <= 0) return null;
-                  return <div key={f} className={FUEL_BAR_COLOR[f]} style={{ flexGrow: v }} />;
-                })}
-              </div>
+        {monthly.map((m, i) => (
+          <div key={m.month} className="flex flex-1 flex-col items-center justify-end">
+            <div
+              className="flex w-full flex-col-reverse overflow-hidden rounded-[3px] bg-line"
+              style={{ height: points[i].barHeight }}
+            >
+              {fuels.map((f) => {
+                const v = m.by_fuel[f] || 0;
+                if (v <= 0) return null;
+                return <div key={f} className={FUEL_BAR_COLOR[f]} style={{ flexGrow: v }} />;
+              })}
             </div>
-          );
-        })}
+          </div>
+        ))}
+
+        {/* 꺾은선 오버레이 — 부드러운 곡선으로 막대 맨 위를 이어 총량 추이를
+            한눈에 보여준다. */}
+        <svg
+          className="pointer-events-none absolute left-0 top-0 block"
+          style={{ width: "100%", height: "100%" }}
+          preserveAspectRatio="none"
+          viewBox={`0 0 100 ${CHART_HEIGHT_PX}`}
+        >
+          <path
+            d={linePath}
+            fill="none"
+            stroke="var(--color-brand)"
+            strokeWidth={1.75}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            vectorEffect="non-scaling-stroke"
+          />
+        </svg>
       </div>
       <div className="mt-1 flex justify-between text-[9px] text-faint">
         {monthly.map((m) => (
@@ -276,7 +305,7 @@ function BenchmarkCard({
   hasDistribution: boolean;
 }) {
   return (
-    <div className="mt-3 rounded-2xl bg-surface p-5">
+    <div className="flex-1 rounded-2xl bg-surface p-4">
       {hasDistribution ? (
         <>
           <p className="truncate text-[13px] font-semibold text-ink">
@@ -295,6 +324,71 @@ function BenchmarkCard({
           </p>
         </>
       )}
+    </div>
+  );
+}
+
+// 데이터 완전성을 막대 대신 원형 게이지로 — 채워진 비율이 링 형태로 한눈에
+// "확" 들어오게 한다. 마운트 시 0%에서 실제 값까지 슬라이드.
+const RING_SIZE = 64;
+const RING_STROKE = 6;
+const RING_RADIUS = (RING_SIZE - RING_STROKE) / 2;
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
+
+function CompletenessRing({ label, pct }: { label: string; pct: number }) {
+  const [animPct, setAnimPct] = useState(0);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setAnimPct(pct));
+    return () => cancelAnimationFrame(id);
+  }, [pct]);
+  const offset = RING_CIRCUMFERENCE * (1 - animPct / 100);
+
+  return (
+    <div className="flex flex-col items-center gap-1.5">
+      <div className="relative" style={{ width: RING_SIZE, height: RING_SIZE }}>
+        <svg width={RING_SIZE} height={RING_SIZE} className="-rotate-90">
+          <circle
+            cx={RING_SIZE / 2}
+            cy={RING_SIZE / 2}
+            r={RING_RADIUS}
+            fill="none"
+            stroke="var(--color-line)"
+            strokeWidth={RING_STROKE}
+          />
+          <circle
+            cx={RING_SIZE / 2}
+            cy={RING_SIZE / 2}
+            r={RING_RADIUS}
+            fill="none"
+            stroke="var(--color-brand)"
+            strokeWidth={RING_STROKE}
+            strokeLinecap="round"
+            strokeDasharray={RING_CIRCUMFERENCE}
+            strokeDashoffset={offset}
+            className="transition-[stroke-dashoffset] duration-700 ease-out"
+          />
+        </svg>
+        <div className="absolute inset-0 flex items-center justify-center text-[12.5px] font-extrabold text-ink">
+          {Math.round(pct)}%
+        </div>
+      </div>
+      <span className="text-[10.5px] font-semibold text-muted">{label}</span>
+    </div>
+  );
+}
+
+function CompletenessCard({ scope1, scope2 }: { scope1: ScopeQuality; scope2: ScopeQuality }) {
+  return (
+    <div className="flex-1 rounded-2xl bg-surface p-4">
+      <div className="text-[13px] font-semibold text-ink">데이터 완전성</div>
+      <div className="mt-3 flex items-center justify-around">
+        {scope1.completeness_pct != null && (
+          <CompletenessRing label="Scope1" pct={scope1.completeness_pct} />
+        )}
+        {scope2.completeness_pct != null && (
+          <CompletenessRing label="Scope2" pct={scope2.completeness_pct} />
+        )}
+      </div>
     </div>
   );
 }
@@ -411,9 +505,6 @@ export function ScenePcaf() {
             은행 검토 대기
           </span>
         )}
-        <span className="text-[11px] text-faint">
-          {data.reporting_year}년 기준 · 담당자 승인 전까지는 후보 값이에요
-        </span>
       </div>
 
       <div className="mt-3 flex gap-3">
@@ -425,7 +516,10 @@ export function ScenePcaf() {
         </div>
       </div>
 
-      <BenchmarkCard benchmark={benchmark} hasDistribution={hasDistribution} />
+      <div className="mt-3 flex gap-3">
+        <BenchmarkCard benchmark={benchmark} hasDistribution={hasDistribution} />
+        <CompletenessCard scope1={scope_1} scope2={scope_2} />
+      </div>
 
       {monthly && <MonthlyTrendChart monthly={monthly} />}
 
