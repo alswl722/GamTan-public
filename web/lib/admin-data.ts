@@ -3,7 +3,6 @@
  */
 import { apiGet, apiPatch, BASE_URL } from "@/lib/api";
 import type {
-  AlertItem,
   BulkActionResult,
   ClassificationEdit,
   CompanyOverview,
@@ -78,10 +77,6 @@ export function getTraceRuns(): Promise<TraceRunItem[]> {
 /** 실행 이력 드릴다운 — 기존 /trace/{session_id} 재사용. */
 export function getTraceSteps(sessionId: string): Promise<TraceStep[]> {
   return apiGet<{ steps: TraceStep[] }>(`/trace/${sessionId}`).then((r) => r.steps);
-}
-
-export function getAlerts(): Promise<AlertItem[]> {
-  return apiGet<{ alerts: AlertItem[] }>("/admin/alerts").then((r) => r.alerts);
 }
 
 /** 기업 상세 탭 — 등급·결손·HITL대기·최근알림 요약. */

@@ -1,15 +1,10 @@
 "use client";
 
 // 실API: GET /admin/traces (실행 이력 목록) + GET /trace/{session_id} (드릴다운 스텝)
-// + GET /admin/alerts (이상 신호 — 우측 고정 폭 패널로 통합. 예전 별도 "여신 리스크"
-//   탭은 클릭·필터가 없는 단순 세로 리스트라 화면 밀도가 낮았고, 알림이 뜨는 이유가
-//   결국 이 실행 이력의 판단 근거라 같은 탭에 두는 게 자연스러워 합쳤다. 배지를
-//   가로로 나열하면 알림이 많아질 때 줄바꿈이 계속 늘어 테이블 공간을 잠식하므로,
-//   좌(실행 이력 테이블)·우(알림 세로 리스트, 자체 스크롤) 고정폭 분할로 둔다.)
 
 import { useEffect, useMemo, useState } from "react";
 import { getTraceSteps } from "@/lib/admin-data";
-import type { AlertItem, TraceRunItem, TraceStep } from "@/lib/admin-types";
+import type { TraceRunItem, TraceStep } from "@/lib/admin-types";
 import { cn } from "@/lib/utils";
 import { DateText } from "@/lib/use-formatted-date";
 
@@ -24,52 +19,6 @@ const BADGE_MAP: Record<string, string> = {
   "결손 발견": "bg-hitl/20 text-hitl-ink",
   "재검증 실패": "bg-hitl/20 text-hitl-ink",
 };
-
-const SEVERITY_MAP: Record<AlertItem["severity"], { label: string; cls: string }> = {
-  high: { label: "긴급", cls: "bg-hitl/20 text-hitl-ink border-hitl/40" },
-  medium: { label: "주의", cls: "bg-bg text-muted border-line" },
-  low: { label: "정보", cls: "bg-bg text-faint border-line" },
-};
-
-function AlertSidebar({ alerts }: { alerts: AlertItem[] }) {
-  return (
-    <div className="flex w-64 flex-shrink-0 flex-col border-l border-line">
-      <div className="flex-shrink-0 border-b border-line bg-bg px-4 py-3">
-        <span className="text-xs font-semibold text-ink">이상 신호</span>
-        <span className="ml-1.5 text-[11px] text-faint">{alerts.length}건</span>
-      </div>
-      <div className="min-h-0 flex-1 divide-y divide-line overflow-y-auto">
-        {alerts.length === 0 ? (
-          <div className="flex h-24 items-center justify-center text-xs text-faint">
-            이상 신호 없음
-          </div>
-        ) : (
-          alerts.map((a) => {
-            const sev = SEVERITY_MAP[a.severity];
-            return (
-              <div key={`${a.company_id}-${a.type}-${a.month}`} className="px-4 py-2.5">
-                <div className="flex items-center gap-1.5">
-                  <span
-                    className={cn(
-                      "flex-shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-bold",
-                      sev.cls,
-                    )}
-                  >
-                    {sev.label}
-                  </span>
-                  <span className="truncate text-xs font-semibold text-ink">
-                    {a.company_name}
-                  </span>
-                </div>
-                <p className="mt-1 text-[11px] leading-relaxed text-muted">{a.message}</p>
-              </div>
-            );
-          })
-        )}
-      </div>
-    </div>
-  );
-}
 
 // 색이 아니라 아이콘 모양 + 텍스트 라벨로만 구분 (owner 장면② 트레이스 뷰와 동일 원칙)
 const STEP_ICON: Record<string, string> = { 계획: "◇", 관찰: "◎", 행동: "▶" };
@@ -227,15 +176,7 @@ function presetRange(preset: Preset): { from: number | null; to: number | null }
   return { from: from.getTime(), to };
 }
 
-export function TraceHistory({
-  runs,
-  alerts,
-}: {
-  runs: TraceRunItem[];
-  /** 넘기지 않으면 이상 신호 사이드바 자체를 숨긴다 — CompanyDetail은 자체 AlertsPanel
-   * 카드가 있어 중복 표시를 피한다. */
-  alerts?: AlertItem[];
-}) {
+export function TraceHistory({ runs }: { runs: TraceRunItem[] }) {
   const [selected, setSelected] = useState<TraceRunItem | null>(null);
   const [preset, setPreset] = useState<Preset>("전체");
   // 프리셋이 아닌 "직접 설정"일 때만 쓰는 수동 기간 입력
@@ -269,10 +210,8 @@ export function TraceHistory({
       <div className="flex h-full flex-col overflow-hidden rounded-md border border-line bg-surface shadow-card">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-6 py-4">
           <div>
-            <h2 className="text-base font-semibold text-ink">실행 이력</h2>
-            <p className="mt-0.5 text-xs text-faint">
-              에이전트 실행 기록·이상 신호 — 행 클릭 시 단계 드릴다운
-            </p>
+            <h2 className="text-base font-semibold text-ink">트레이스 실행 이력</h2>
+            <p className="mt-0.5 text-xs text-faint">에이전트 실행 기록 — 행 클릭 시 단계 드릴다운</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <div className="flex items-center gap-0.5 rounded-md border border-line bg-bg p-0.5">
@@ -320,76 +259,72 @@ export function TraceHistory({
           </div>
         </div>
 
-        <div className="flex min-h-0 flex-1 overflow-hidden">
-          <div className="min-h-0 flex-1 overflow-auto">
-            {filtered.length === 0 ? (
-              <div className="flex h-40 items-center justify-center text-sm text-faint">
-                {runs.length === 0 ? "실행 이력이 없습니다" : "선택한 기간에 실행 이력이 없습니다"}
-              </div>
-            ) : (
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-line bg-bg">
-                    {["기업명", "실행 시각", "단계 수", "결과", "상태"].map((h) => (
-                      <th
-                        key={h}
-                        className="whitespace-nowrap px-5 py-3 text-left text-xs font-semibold tracking-wide text-faint"
-                      >
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-line">
-                  {filtered.map((run) => (
-                    <tr
-                      key={run.session_id}
-                      onClick={() => setSelected(run)}
-                      className="cursor-pointer transition-colors hover:bg-bg"
+        <div className="min-h-0 flex-1 overflow-auto">
+          {filtered.length === 0 ? (
+            <div className="flex h-40 items-center justify-center text-sm text-faint">
+              {runs.length === 0 ? "실행 이력이 없습니다" : "선택한 기간에 실행 이력이 없습니다"}
+            </div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-line bg-bg">
+                  {["기업명", "실행 시각", "단계 수", "결과", "상태"].map((h) => (
+                    <th
+                      key={h}
+                      className="whitespace-nowrap px-5 py-3 text-left text-xs font-semibold tracking-wide text-faint"
                     >
-                      <td className="whitespace-nowrap px-5 py-3.5 font-medium text-ink">
-                        {run.company_name}
-                      </td>
-                      <td className="whitespace-nowrap px-5 py-3.5 text-muted">
-                        <DateText
-                          iso={run.ran_at}
-                          opts={{ month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }}
-                        />
-                      </td>
-                      <td className="px-5 py-3.5 tabular-nums text-muted">{run.step_count}단계</td>
-                      <td className="px-5 py-3.5">
-                        <div className="flex flex-wrap gap-1">
-                          {run.result_badges.map((b) => (
-                            <span
-                              key={b}
-                              className={cn(
-                                "rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
-                                BADGE_MAP[b] ?? "bg-bg text-faint",
-                              )}
-                            >
-                              {b}
-                            </span>
-                          ))}
-                        </div>
-                      </td>
-                      <td className="px-5 py-3.5">
-                        <span
-                          className={cn(
-                            "rounded-full border px-2 py-0.5 text-[11px] font-semibold",
-                            STATUS_MAP[run.status] ?? "bg-bg text-faint",
-                          )}
-                        >
-                          {run.status}
-                        </span>
-                      </td>
-                    </tr>
+                      {h}
+                    </th>
                   ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-
-          {alerts !== undefined && <AlertSidebar alerts={alerts} />}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-line">
+                {filtered.map((run) => (
+                  <tr
+                    key={run.session_id}
+                    onClick={() => setSelected(run)}
+                    className="cursor-pointer transition-colors hover:bg-bg"
+                  >
+                    <td className="whitespace-nowrap px-5 py-3.5 font-medium text-ink">
+                      {run.company_name}
+                    </td>
+                    <td className="whitespace-nowrap px-5 py-3.5 text-muted">
+                      <DateText
+                        iso={run.ran_at}
+                        opts={{ month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }}
+                      />
+                    </td>
+                    <td className="px-5 py-3.5 tabular-nums text-muted">{run.step_count}단계</td>
+                    <td className="px-5 py-3.5">
+                      <div className="flex flex-wrap gap-1">
+                        {run.result_badges.map((b) => (
+                          <span
+                            key={b}
+                            className={cn(
+                              "rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
+                              BADGE_MAP[b] ?? "bg-bg text-faint",
+                            )}
+                          >
+                            {b}
+                          </span>
+                        ))}
+                      </div>
+                    </td>
+                    <td className="px-5 py-3.5">
+                      <span
+                        className={cn(
+                          "rounded-full border px-2 py-0.5 text-[11px] font-semibold",
+                          STATUS_MAP[run.status] ?? "bg-bg text-faint",
+                        )}
+                      >
+                        {run.status}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
 

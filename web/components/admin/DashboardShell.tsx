@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { AlertItem, HitlItem, PortfolioResponse, TraceRunItem } from "@/lib/admin-types";
+import type { HitlItem, PortfolioResponse, TraceRunItem } from "@/lib/admin-types";
 import { cn } from "@/lib/utils";
 import { AuditLog } from "@/components/admin/AuditLog";
 import { AuditPackage } from "@/components/admin/AuditPackage";
@@ -24,10 +24,9 @@ export interface DashboardShellProps {
   portfolio: PortfolioResponse;
   hitlQueue: HitlItem[];
   traceRuns: TraceRunItem[];
-  alerts: AlertItem[];
 }
 
-export function DashboardShell({ portfolio, hitlQueue, traceRuns, alerts }: DashboardShellProps) {
+export function DashboardShell({ portfolio, hitlQueue, traceRuns }: DashboardShellProps) {
   const [activeTab, setActiveTab] = useState<TabId>("hitl");
   // AuditLog는 자체 서버사이드 페이지네이션으로 데이터를 관리해 부모가 직접 갱신할 수
   // 없다 — HITL 확정/반려 직후 최신 변경 이력을 보여주려면 key를 바꿔 리마운트한다.
@@ -74,7 +73,7 @@ export function DashboardShell({ portfolio, hitlQueue, traceRuns, alerts }: Dash
 
         {activeTab === "trace" && (
           <div className="h-full p-4">
-            <TraceHistory runs={traceRuns} alerts={alerts} />
+            <TraceHistory runs={traceRuns} />
           </div>
         )}
 
