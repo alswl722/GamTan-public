@@ -129,7 +129,7 @@ export function RateProductCard({ companyId }: { companyId: number | null }) {
                     {c.target_grade}등급
                   </span>
                 </div>
-                <p className="mt-1.5 text-[12.5px] leading-relaxed text-muted">{c.missing}</p>
+                <p className="mt-1.5 whitespace-pre-line text-[12.5px] leading-relaxed text-muted">{c.missing}</p>
               </div>
             ))}
           </div>

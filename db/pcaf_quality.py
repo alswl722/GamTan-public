@@ -545,10 +545,10 @@ def quality_upgrade_candidate(
 
     parts = []
     if missing_count:
-        parts.append(f"{fuels} 고지서 {missing_count}개월분을 업로드해주세요")
+        parts.append(f"{fuels} 고지서 {missing_count}개월분을 업로드해주세요.")
     if revenue_count:
-        parts.append(f"실측 수량 없는 전표 {revenue_count}건의 수량 데이터를 보완해주세요")
-    missing_text = " 그리고 ".join(parts) if parts else f"{fuels} 전표의 실측 수량 데이터를 보완해주세요"
+        parts.append(f"실측 수량 없는 전표 {revenue_count}건의 수량 데이터를 보완해주세요.")
+    missing_text = "\n".join(parts) if parts else f"{fuels} 전표의 실측 수량 데이터를 보완해주세요."
 
     return {
         "scope_group": scope_group,
