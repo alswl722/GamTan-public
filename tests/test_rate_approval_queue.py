@@ -134,7 +134,8 @@ def test_create_rate_request_unknown_company_raises(db):
 
 
 def test_equipment_finance_request_does_not_require_grade_candidate(db):
-    """설비금융 요청은 K택소노미 필드가 아직 없어 등급 스냅샷 없이도 생성 가능해야 한다."""
+    """설비금융 요청은 등급 후보(rate_upgrade) 판정과 무관하게 등급 스냅샷 없이도
+    생성 가능해야 한다."""
     session, cid = db
     req = create_rate_request(session, cid, request_type="equipment_finance")
     assert req.request_type == "equipment_finance"
@@ -142,6 +143,17 @@ def test_equipment_finance_request_does_not_require_grade_candidate(db):
     assert req.current_grade is None
     assert req.target_grade is None
     assert req.status == "pending"
+
+
+def test_equipment_finance_request_stores_custom_missing_summary(db):
+    """K택소노미 리드 카드가 보내는 missing_summary(설비유형 + 전표 원문)가 그대로
+    스냅샷에 저장된다 — 승인요청 큐에서 담당자가 어떤 설비인지 바로 알 수 있어야 함."""
+    session, cid = db
+    req = create_rate_request(
+        session, cid, request_type="equipment_finance",
+        missing_summary="태양광 설비 · 태양광 설비 설치",
+    )
+    assert req.missing_summary == "태양광 설비 · 태양광 설비 설치"
 
 
 def test_review_rate_request_approve_sets_reviewer_and_timestamp(db):

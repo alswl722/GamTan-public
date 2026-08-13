@@ -1,5 +1,6 @@
 "use client";
 
+import { ChevronDown } from "lucide-react";
 import { useEffect, useState } from "react";
 import { apiGet, apiPost, getCompanyId } from "@/lib/api";
 import type { AlertItem } from "@/lib/admin-types";
@@ -41,6 +42,25 @@ type QualityReportResponse = {
   benchmark: Benchmark;
 };
 
+// GET /owner/{company_id}/emission-detail?scope_group=&year= — Scope 카드를 펼쳤을 때
+// 보여줄 전표 목록. db/pcaf_quality.py::scope_emission_detail과 aggregate_scope_emissions가
+// 같은 필터를 쓰므로 이 목록의 emission_co2e 합은 카드에 보이는 배출량과 항상 일치한다.
+type EmissionDetailItem = {
+  voucher_id: number;
+  month: number;
+  item_description: string;
+  supplier_name: string | null;
+  fuel_type: string | null;
+  supply_amount_krw: number | null;
+  emission_co2e: number;
+  status: string;
+};
+type EmissionDetailResponse = {
+  scope_group: "scope_1" | "scope_2";
+  reporting_year: number;
+  items: EmissionDetailItem[];
+};
+
 // 월별 배출 추이 전용 — 구 엔진(/pcaf/{id})의 after.monthly만 재사용(위 주석 참고).
 type MonthlyRow = { month: number; total_tco2e: number; by_fuel: Record<string, number> };
 type LegacyPcafResponse = { after: { monthly: MonthlyRow[] } | null };
@@ -64,6 +84,20 @@ type RateRequestResponse = {
   status: "pending" | "approved" | "rejected";
   disclaimer_text: string;
 };
+
+// GET /owner/{company_id}/k-taxonomy-leads — db/k_taxonomy.py::k_taxonomy_leads_for_company.
+// 룰 매칭 경로에서만 채워지는 필드라(LLM 분류 경로는 항상 비어 있음) 대다수 기업·기간은
+// 빈 배열이 정상이다 — 섹션 자체를 조건부로 숨긴다.
+type KTaxonomyLead = {
+  k_taxonomy_facility_type: string;
+  k_taxonomy_candidate_type: string | null;
+  finance_lead_type: string;
+  hint: string;
+  item_description: string;
+  voucher_month: number;
+  occurrence_count: number;
+};
+type KTaxonomyLeadsResponse = { leads: KTaxonomyLead[] };
 
 const fmt = (n: number) => n.toFixed(1);
 
@@ -109,8 +143,25 @@ const SCOPE_LABEL: Record<string, string> = { scope_1: "Scope 1", scope_2: "Scop
 // Scope별 카드 — 품질점수 사다리 + 배출량 + 데이터 완전성을 담는다. 판정 근거
 // 원문(basis/limitations, PCAF 옵션코드·Table 10.1-2 인용문)은 은행 담당자용
 // 감사 근거 문장이라 사장님 화면엔 아예 안 보여준다 — API 응답엔 그대로 남아있어
-// 나중에 관리자 화면에서 쓸 수 있다.
-function ScopeQualitySection({ data }: { data: ScopeQuality }) {
+// 나중에 관리자 화면에서 쓸 수 있다. 배출량 행을 누르면 그 숫자를 구성한 전표
+// 목록(월·품목·금액)을 펼쳐 보여준다 — SceneConsent.tsx의 아코디언 패턴 재사용.
+function ScopeQualitySection({
+  data,
+  expanded,
+  onToggleDetail,
+  detail,
+  detailLoading,
+  detailError,
+  onRetryDetail,
+}: {
+  data: ScopeQuality;
+  expanded: boolean;
+  onToggleDetail: () => void;
+  detail: EmissionDetailItem[] | undefined;
+  detailLoading: boolean;
+  detailError: string | null;
+  onRetryDetail: () => void;
+}) {
   return (
     <div>
       <div className="flex items-center justify-between">
@@ -126,12 +177,61 @@ function ScopeQualitySection({ data }: { data: ScopeQuality }) {
         <>
           <ScoreMarker score={data.candidate_score} />
 
-          <div className="mt-4 flex items-center justify-between border-t border-line pt-3 text-[11.5px] text-muted">
-            <span>배출량</span>
+          <button
+            type="button"
+            onClick={onToggleDetail}
+            className="mt-4 flex w-full items-center justify-between border-t border-line pt-3 text-[11.5px] text-muted"
+          >
+            <span className="flex items-center gap-1">
+              배출량
+              <ChevronDown
+                size={13}
+                className={`shrink-0 text-faint transition-transform ${expanded ? "rotate-180" : ""}`}
+              />
+            </span>
             <span className="font-semibold text-ink">
               {data.emission_tco2e != null ? `${fmt(data.emission_tco2e)}tCO₂e` : "미산정"}
             </span>
-          </div>
+          </button>
+
+          {expanded && (
+            <div className="mt-2 space-y-1.5 border-t border-line pt-2.5">
+              {detailLoading ? (
+                <p className="text-[11px] text-faint">불러오는 중…</p>
+              ) : detailError ? (
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[11px] text-red-600">{detailError}</p>
+                  <button
+                    type="button"
+                    onClick={onRetryDetail}
+                    className="shrink-0 text-[11px] font-semibold text-brand-ink"
+                  >
+                    다시 시도
+                  </button>
+                </div>
+              ) : detail && detail.length > 0 ? (
+                detail.map((item) => (
+                  <div key={item.voucher_id} className="text-[11px] leading-relaxed text-muted">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="min-w-0 flex-1 truncate">
+                        {item.month}월 · {item.item_description}
+                        {item.status === "review_required" && (
+                          <span className="ml-1 rounded-full bg-hitl/25 px-1.5 py-0.5 text-[9.5px] font-semibold text-hitl-ink">
+                            검토 중
+                          </span>
+                        )}
+                      </span>
+                      <span className="shrink-0 font-medium text-ink">
+                        {fmt(item.emission_co2e / 1000)}tCO₂e
+                      </span>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <p className="text-[11px] text-faint">상세 내역이 없어요</p>
+              )}
+            </div>
+          )}
         </>
       ) : (
         <div className="mt-3 rounded-xl border-2 border-dashed border-line p-4 text-center text-[12.5px] text-muted">
@@ -405,6 +505,66 @@ export function ScenePcaf({ showHeading = true }: { showHeading?: boolean } = {}
   const [busyScope, setBusyScope] = useState<string | null>(null);
   const [requestError, setRequestError] = useState<{ scope: string; message: string } | null>(null);
 
+  const [expandedScope, setExpandedScope] = useState<"scope_1" | "scope_2" | null>(null);
+  const [detailByScope, setDetailByScope] = useState<Record<string, EmissionDetailItem[]>>({});
+  const [detailLoadingScope, setDetailLoadingScope] = useState<string | null>(null);
+  const [detailError, setDetailError] = useState<{ scope: string; message: string } | null>(null);
+
+  async function loadScopeDetail(scopeGroup: "scope_1" | "scope_2", year: number) {
+    setDetailLoadingScope(scopeGroup);
+    setDetailError((prev) => (prev?.scope === scopeGroup ? null : prev));
+    try {
+      const cid = await getCompanyId();
+      const res = await apiGet<EmissionDetailResponse>(
+        `/owner/${cid}/emission-detail?scope_group=${scopeGroup}&year=${year}`
+      );
+      setDetailByScope((prev) => ({ ...prev, [scopeGroup]: res.items }));
+    } catch (err) {
+      console.error("전표 상세 조회 실패:", err);
+      setDetailError({ scope: scopeGroup, message: "불러오지 못했습니다." });
+    } finally {
+      setDetailLoadingScope(null);
+    }
+  }
+
+  function toggleScopeDetail(scopeGroup: "scope_1" | "scope_2", year: number) {
+    if (expandedScope === scopeGroup) {
+      setExpandedScope(null);
+      return;
+    }
+    setExpandedScope(scopeGroup);
+    // 캐시에 없을 때만 조회 — 다시 펼칠 때 매번 재요청하지 않는다.
+    if (!detailByScope[scopeGroup]) {
+      void loadScopeDetail(scopeGroup, year);
+    }
+  }
+
+  const [kTaxonomyLeads, setKTaxonomyLeads] = useState<KTaxonomyLead[]>([]);
+  // 우대금리 카드와 같은 패턴 — 리드는 설비유형별로 최대 여러 건일 수 있어 요청
+  // 상태도 설비유형(k_taxonomy_facility_type)별로 따로 추적한다.
+  const [leadRequests, setLeadRequests] = useState<Record<string, RateRequestResponse>>({});
+  const [busyLeadKey, setBusyLeadKey] = useState<string | null>(null);
+  const [leadRequestError, setLeadRequestError] = useState<{ key: string; message: string } | null>(null);
+
+  async function submitLeadRequest(lead: KTaxonomyLead) {
+    const key = lead.k_taxonomy_facility_type;
+    setBusyLeadKey(key);
+    setLeadRequestError(null);
+    try {
+      const cid = await getCompanyId();
+      const res = await apiPost<RateRequestResponse>(`/owner/${cid}/rate-requests`, {
+        request_type: "equipment_finance",
+        missing_summary: `${lead.k_taxonomy_facility_type} · ${lead.item_description}`,
+      });
+      setLeadRequests((prev) => ({ ...prev, [key]: res }));
+    } catch (err) {
+      console.error("설비금융 안내 요청 실패:", err);
+      setLeadRequestError({ key, message: "요청에 실패했습니다. 잠시 후 다시 시도해 주세요." });
+    } finally {
+      setBusyLeadKey(null);
+    }
+  }
+
   async function submitRateRequest(scopeGroup: string) {
     setBusyScope(scopeGroup);
     setRequestError(null);
@@ -439,6 +599,10 @@ export function ScenePcaf({ showHeading = true }: { showHeading?: boolean } = {}
       apiGet<RateCandidateResponse>(`/owner/${cid}/rate-candidate`)
         .then((r) => setRateCandidate(r))
         .catch((err) => console.error("우대금리 후보 조회 실패(부가 정보라 화면은 계속 진행):", err));
+      // K택소노미 리드도 부가 정보 — 대다수 기업은 빈 배열이 정상이다.
+      apiGet<KTaxonomyLeadsResponse>(`/owner/${cid}/k-taxonomy-leads`)
+        .then((r) => setKTaxonomyLeads(r.leads))
+        .catch((err) => console.error("K택소노미 리드 조회 실패(부가 정보라 화면은 계속 진행):", err));
       // 월별 배출 추이만 구 엔진에서 재사용(파일 상단 주석 참고) — 부가 정보라
       // 실패해도 리포트 본문(Scope 품질 후보)은 그대로 보여준다.
       apiGet<LegacyPcafResponse>(`/pcaf/${cid}`)
@@ -514,10 +678,26 @@ export function ScenePcaf({ showHeading = true }: { showHeading?: boolean } = {}
 
       <div className="mt-3 flex gap-3">
         <div className="flex-1 rounded-2xl bg-surface p-4">
-          <ScopeQualitySection data={scope_1} />
+          <ScopeQualitySection
+            data={scope_1}
+            expanded={expandedScope === "scope_1"}
+            onToggleDetail={() => toggleScopeDetail("scope_1", data.reporting_year)}
+            detail={detailByScope.scope_1}
+            detailLoading={detailLoadingScope === "scope_1"}
+            detailError={detailError?.scope === "scope_1" ? detailError.message : null}
+            onRetryDetail={() => void loadScopeDetail("scope_1", data.reporting_year)}
+          />
         </div>
         <div className="flex-1 rounded-2xl bg-surface p-4">
-          <ScopeQualitySection data={scope_2} />
+          <ScopeQualitySection
+            data={scope_2}
+            expanded={expandedScope === "scope_2"}
+            onToggleDetail={() => toggleScopeDetail("scope_2", data.reporting_year)}
+            detail={detailByScope.scope_2}
+            detailLoading={detailLoadingScope === "scope_2"}
+            detailError={detailError?.scope === "scope_2" ? detailError.message : null}
+            onRetryDetail={() => void loadScopeDetail("scope_2", data.reporting_year)}
+          />
         </div>
       </div>
 
@@ -543,6 +723,49 @@ export function ScenePcaf({ showHeading = true }: { showHeading?: boolean } = {}
               {a.message}
             </div>
           ))}
+        </div>
+      )}
+
+      {kTaxonomyLeads.length > 0 && (
+        <div className="mt-3 space-y-3 rounded-2xl bg-surface p-5">
+          <div>
+            <div className="text-[13px] font-semibold text-ink">친환경 설비 투자 안내</div>
+            <p className="mt-1 text-[11.5px] leading-relaxed text-faint">
+              전표에서 확인된 친환경·저탄소 설비예요.
+            </p>
+          </div>
+
+          {kTaxonomyLeads.map((lead) => {
+            const key = lead.k_taxonomy_facility_type;
+            return (
+              <div key={key} className="rounded-xl bg-bg p-4">
+                <div className="text-[12.5px] font-semibold text-ink">
+                  {lead.k_taxonomy_facility_type}
+                </div>
+                <p className="mt-1 text-[12.5px] leading-relaxed text-muted">{lead.hint}</p>
+
+                {leadRequests[key] ? (
+                  <div className="mt-3 rounded-xl bg-brand-soft px-3.5 py-2.5 text-center text-[12.5px] font-semibold text-brand-ink">
+                    요청됐어요. 담당 은행원이 확인 후 안내드려요
+                  </div>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => void submitLeadRequest(lead)}
+                      disabled={busyLeadKey === key}
+                      className="btn-cta mt-3 w-full rounded-2xl bg-brand py-3 text-[13.5px] font-bold text-white disabled:opacity-60"
+                    >
+                      {busyLeadKey === key ? "요청하는 중…" : "설비금융 안내 요청"}
+                    </button>
+                    {leadRequestError?.key === key && (
+                      <p className="mt-2 text-[11.5px] text-red-600">{leadRequestError.message}</p>
+                    )}
+                  </>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 

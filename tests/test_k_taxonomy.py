@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from api.agent.tools import classify_vouchers
 from db.excel_loader import load_classification_rules, load_k_taxonomy_mapping
 from db.init_db import seed_emission_factors, seed_industry_distributions, seed_unit_prices
-from db.k_taxonomy import k_taxonomy_fields_for_rule
+from db.k_taxonomy import k_taxonomy_fields_for_rule, k_taxonomy_leads, k_taxonomy_leads_for_company
 from db.models import Base, Classification, Company, Voucher
 
 RULES = load_classification_rules()
@@ -158,3 +158,71 @@ def test_classify_vouchers_normal_fuel_calc_engine_still_works(db):
     c = session.query(Classification).filter_by(voucher_id=v.id).one()
     assert c.scope == 1
     assert c.emission_co2e is not None and c.emission_co2e > 0
+
+
+# ── k_taxonomy_leads() / k_taxonomy_leads_for_company() — 사장님 리포트용 조회 ──────
+def test_k_taxonomy_leads_filters_by_company_id(db):
+    """company_id를 주면 그 기업의 리드만 반환한다 — 관리자용 전체 조회(company_id
+    생략)는 기존 그대로 동작해야 한다(하위호환)."""
+    session, cid = db
+    _add_voucher(session, cid, "태양광 설비 설치")
+
+    other = Company(name="타사", industry_code="C251")
+    session.add(other)
+    session.commit()
+    _add_voucher(session, other.id, "ESS 구매")
+
+    classify_vouchers(session, cid)
+    classify_vouchers(session, other.id)
+
+    all_leads = k_taxonomy_leads(session)
+    assert {lead["company_id"] for lead in all_leads} == {cid, other.id}
+
+    only_cid = k_taxonomy_leads(session, company_id=cid)
+    assert {lead["company_id"] for lead in only_cid} == {cid}
+
+
+def test_k_taxonomy_leads_for_company_groups_same_facility_across_months(db):
+    """같은 설비가 여러 달 전표로 나뉘어 잡혀도 사장님 화면엔 한 건으로 묶인다."""
+    session, cid = db
+    _add_voucher(session, cid, "태양광 설비 설치 1차", month=3)
+    _add_voucher(session, cid, "태양광 설비 설치 2차", month=5)
+    _add_voucher(session, cid, "태양광 설비 설치 3차", month=7)
+
+    classify_vouchers(session, cid)
+
+    leads = k_taxonomy_leads_for_company(session, cid)
+    assert len(leads) == 1
+    lead = leads[0]
+    assert lead["k_taxonomy_facility_type"] == "태양광 설비"
+    assert lead["occurrence_count"] == 3
+    assert lead["voucher_month"] == 7  # 가장 최근 달이 대표값
+    assert lead["item_description"] == "태양광 설비 설치 3차"
+
+
+def test_k_taxonomy_leads_for_company_hint_is_plain_language(db):
+    """finance_lead_type이 은행 내부 어휘 그대로가 아니라 사장님 눈높이 문구(hint)로
+    번역돼 나온다. 은행 내부 신호(hitl_required 등)는 반환 dict에 없어야 한다."""
+    session, cid = db
+    _add_voucher(session, cid, "태양광 설비 설치")
+
+    classify_vouchers(session, cid)
+
+    leads = k_taxonomy_leads_for_company(session, cid)
+    assert len(leads) == 1
+    lead = leads[0]
+    assert lead["finance_lead_type"] == "녹색여신 후보"
+    assert "녹색여신" in lead["hint"]
+    assert "k_taxonomy_hitl_required" not in lead
+    assert "gap_count" not in lead
+    assert "company_id" not in lead
+
+
+def test_k_taxonomy_leads_for_company_empty_for_normal_fuel(db):
+    """K택소노미 매칭이 없는 기업은 빈 리스트 — 대다수 기업의 정상 상태."""
+    session, cid = db
+    _add_voucher(session, cid, "도시가스 요금")
+
+    classify_vouchers(session, cid)
+
+    assert k_taxonomy_leads_for_company(session, cid) == []

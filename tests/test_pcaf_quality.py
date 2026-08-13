@@ -33,6 +33,7 @@ from db.pcaf_quality import (
     assess_borrower_emission_quality,
     assess_inventory_completeness,
     classify_activity_data_method,
+    scope_emission_detail,
 )
 
 YEAR = 2026
@@ -337,6 +338,69 @@ def test_aggregate_scope_emissions_scope3_always_null_not_calculated(db):
     result = aggregate_scope_emissions(session, cid, YEAR, "scope_3")
     assert result["emission_tco2e"] is None
     assert result["scope3_status"] == "not_calculated"
+
+
+# ── scope_emission_detail — 사장님 리포트 Scope 카드 상세보기 ───────────────────
+def test_scope_emission_detail_sums_match_aggregate(db):
+    """상세 목록의 emission_co2e 합(kg)이 aggregate_scope_emissions의 tCO2e 합계와
+    일치한다 — 두 함수가 동일한 필터를 쓰므로 카드 숫자와 상세 목록이 항상 맞아야 함."""
+    session, cid = db
+    for m in range(1, 4):
+        _add_voucher(session, cid, m, "도시가스", quantity=100)
+
+    aggregate = aggregate_scope_emissions(session, cid, YEAR, "scope_1")
+    detail = scope_emission_detail(session, cid, YEAR, "scope_1")
+
+    assert len(detail) == 3
+    detail_sum_tco2e = round(sum(item["emission_co2e"] for item in detail) / 1000.0, 2)
+    assert detail_sum_tco2e == aggregate["emission_tco2e"]
+
+
+def test_scope_emission_detail_excludes_rejected(db):
+    """반려된 건은 카드 합계에서 빠지는 것과 마찬가지로 상세 목록에서도 빠진다."""
+    session, cid = db
+    _add_voucher(session, cid, 1, "도시가스", quantity=100, status="auto")
+    _add_voucher(session, cid, 2, "도시가스", quantity=100, status="rejected")
+
+    detail = scope_emission_detail(session, cid, YEAR, "scope_1")
+    assert len(detail) == 1
+    assert detail[0]["month"] == 1
+
+
+def test_scope_emission_detail_scope1_and_scope2_are_independent(db):
+    session, cid = db
+    _add_voucher(session, cid, 1, "도시가스", quantity=100, scope=1)
+    _add_voucher(session, cid, 1, "전기요금", scope=2)
+
+    scope1 = scope_emission_detail(session, cid, YEAR, "scope_1")
+    scope2 = scope_emission_detail(session, cid, YEAR, "scope_2")
+    assert [item["item_description"] for item in scope1] == ["도시가스"]
+    assert [item["item_description"] for item in scope2] == ["전기요금"]
+
+
+def test_scope_emission_detail_scope3_returns_empty_list(db):
+    """Scope 3는 이 프로젝트가 데이터를 만들지 않으므로 빈 리스트."""
+    session, cid = db
+    for m in range(1, 13):
+        _add_voucher(session, cid, m, "도시가스", quantity=100)
+
+    assert scope_emission_detail(session, cid, YEAR, "scope_3") == []
+
+
+def test_scope_emission_detail_includes_voucher_fields_for_export_reuse(db):
+    """추후 탄소 리포트 내보내기가 재사용할 필드(전표ID·품목·공급자·금액·상태)가 그대로 있다."""
+    session, cid = db
+    _add_voucher(session, cid, 5, "도시가스", quantity=100)
+
+    detail = scope_emission_detail(session, cid, YEAR, "scope_1")
+    assert len(detail) == 1
+    item = detail[0]
+    assert item["voucher_id"] is not None
+    assert item["month"] == 5
+    assert item["item_description"] == "도시가스"
+    assert item["supply_amount_krw"] == 100000
+    assert item["emission_co2e"] == 500.0
+    assert item["status"] == "auto"
 
 
 # ── build_quality_evidence ───────────────────────────────────────────────────

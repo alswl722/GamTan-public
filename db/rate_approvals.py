@@ -52,6 +52,7 @@ def create_rate_request(
     *,
     request_type: str = "rate_upgrade",
     scope_group: str | None = None,
+    missing_summary: str | None = None,
 ) -> RateApprovalRequest:
     """사장님이 안내 카드를 보고 "요청" 버튼을 눌렀을 때 승인요청 큐에 항목을 만든다.
 
@@ -61,11 +62,13 @@ def create_rate_request(
 
     request_type="rate_upgrade"는 정식 엔진(db/pcaf_quality.py) 기준 Scope별 후보
     판정을 쓴다 — 한 기업이 Scope1·Scope2 각각 독립적으로 후보일 수 있어 scope_group을
-    반드시 지정해야 한다(어느 Scope에 대한 요청인지 스냅샷에 남기기 위함).
+    반드시 지정해야 한다(어느 Scope에 대한 요청인지 스냅샷에 남기기 위함). 이 경로는
+    missing_summary를 서버가 candidate에서 계산하므로 인자로 받은 값은 무시한다.
 
-    request_type="equipment_finance"(설비금융)는 K택소노미·설비투자 필드가 아직
-    classification 테이블에 없어(개발자 A 담당, 2주차 병행) 등급 스냅샷 없이도 요청을
-    만들 수 있게 허용한다 — missing_summary는 자유 텍스트로 사장님이 직접 채운다.
+    request_type="equipment_finance"(설비금융)는 등급 스냅샷 없이도 요청을 만들 수 있다
+    — missing_summary는 호출부가 채운다(사장님 리포트의 K택소노미 리드 카드는
+    db/k_taxonomy.py::k_taxonomy_leads_for_company의 설비유형·전표 원문으로 채워서 보낸다,
+    그 외 자유 텍스트로 직접 채우는 경로도 계속 허용).
     """
     company = session.get(Company, company_id)
     if company is None:
@@ -96,6 +99,7 @@ def create_rate_request(
         req = RateApprovalRequest(
             company_id=company_id,
             request_type=request_type,
+            missing_summary=missing_summary,
             disclaimer_text=DISCLAIMER_TEXT,
         )
 
