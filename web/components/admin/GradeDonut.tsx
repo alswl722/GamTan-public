@@ -8,7 +8,7 @@ import { GRADE_COLORS, GRADE_LABELS } from "@/lib/grade-colors";
 
 // 등급은 순서형 → 브랜드 민트 단일 색조의 순차 램프 (진함=실측 상위, 흐림=추정 하위).
 // 인접 슬라이스 구분은 도넛 흰 간격(paddingAngle) + 범례 직접 라벨이 담당.
-// 색상표는 lib/grade-colors — 우대금리 후보(RateCandidates) 등 다른 등급 표시와 공유.
+// 색상표는 lib/grade-colors — 다른 등급 표시와 공유.
 
 function DonutChart({
   title,

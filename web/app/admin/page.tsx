@@ -2,7 +2,7 @@
 
 /**
  * 관리자 대시보드 — 은행 ESG·여신 담당자 화면.
- * 실데이터: 포트폴리오 집계·담당자 검토 큐·실행 이력·이상 신호 알림·등급 상승 후보 (백엔드 실제 응답).
+ * 실데이터: 포트폴리오 집계·담당자 검토 큐·실행 이력·이상 신호 알림 (백엔드 실제 응답).
  * 목업(예시): 검증 오차율 (결선 확장 — 화면에 '예시' 표식).
  */
 import { useCallback, useEffect, useState } from "react";
@@ -10,11 +10,8 @@ import {
   getAlerts,
   getDocumentAccessLog,
   getHitl,
-  getKTaxonomyLeads,
   getPortfolio,
   getQualityIssues,
-  getRateCandidates,
-  getRateRequests,
   getReviewLog,
   getTraceRuns,
 } from "@/lib/admin-data";
@@ -22,11 +19,8 @@ import type {
   AlertItem,
   DocumentAccessLogEntry,
   HitlItem,
-  KTaxonomyLeadItem,
   PortfolioResponse,
   QualityIssueEntry,
-  RateApprovalRequestItem,
-  RateCandidateItem,
   ReviewLogEntry,
   TraceRunItem,
 } from "@/lib/admin-types";
@@ -38,11 +32,8 @@ type Data = {
   traceRuns: TraceRunItem[];
   reviewLog: ReviewLogEntry[];
   alerts: AlertItem[];
-  rateCandidates: RateCandidateItem[];
-  rateRequests: RateApprovalRequestItem[];
   documentAccessLog: DocumentAccessLogEntry[];
   qualityIssues: QualityIssueEntry[];
-  kTaxonomyLeads: KTaxonomyLeadItem[];
 };
 
 export default function AdminPage() {
@@ -58,11 +49,8 @@ export default function AdminPage() {
       getTraceRuns(),
       getReviewLog(),
       getAlerts(),
-      getRateCandidates(),
-      getRateRequests(),
       getDocumentAccessLog(),
       getQualityIssues(),
-      getKTaxonomyLeads(),
     ])
       .then(
         ([
@@ -71,11 +59,8 @@ export default function AdminPage() {
           traceRuns,
           reviewLog,
           alerts,
-          rateCandidates,
-          rateRequests,
           documentAccessLog,
           qualityIssues,
-          kTaxonomyLeads,
         ]) =>
           setData({
             portfolio,
@@ -83,11 +68,8 @@ export default function AdminPage() {
             traceRuns,
             reviewLog,
             alerts,
-            rateCandidates,
-            rateRequests,
             documentAccessLog,
             qualityIssues,
-            kTaxonomyLeads,
           }),
       )
       .catch((err) => {
@@ -137,11 +119,8 @@ export default function AdminPage() {
       traceRuns={data.traceRuns}
       reviewLog={data.reviewLog}
       alerts={data.alerts}
-      rateCandidates={data.rateCandidates}
-      rateRequests={data.rateRequests}
       documentAccessLog={data.documentAccessLog}
       qualityIssues={data.qualityIssues}
-      kTaxonomyLeads={data.kTaxonomyLeads}
       onReviewed={refreshReviewLog}
     />
   );

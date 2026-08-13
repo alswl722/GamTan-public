@@ -29,7 +29,8 @@ Scope: 2026년 8월 v1 구현·검증·시연 일정
 >   확인)으로 해소됨.
 > - 개발자 B: Tier 2 조기 착수 — 품질 이슈 로그(업로드 반려·실패 이력) + 감사 대응 근거
 >   패키지(기업·기간별 시계열 원자료 조회, CSV 내보내기) **완료·병합** — PR #37.
->   상세는 §7-1 참고. CSV만 우선 구현, PDF 서술형 감사보고서는 범위 밖.
+>   PDF 서술형 감사보고서도 후속으로 **완료**(`db/audit_report_pdf.py`, reportlab).
+>   상세는 §7-1 참고.
 > - 개발자 B: 2주차 A 항목(K택소노미·설비투자 필드) 백엔드만 대신 착수 — `Classification`에
 >   4개 필드 추가, 회계 매핑표(Excel)와 기존 룰 매칭(R051~R058, R031, R032)을 연결
 >   **완료·병합** — PR #39(`feat/k-taxonomy-equipment-fields` → `dev`). 상세는 §6-5 참고.
@@ -483,14 +484,22 @@ PR: https://github.com/noeyish/GamTan/pull/31 (`feat/owner-rate-request-ui` → 
 - **감사 대응 근거 패키지**: 신규 테이블 없음 — `db/audit_package.py::build_audit_package()`가
   기존 `trace_logs` + `classifications.evidence` + `vouchers`를 기업·연도(월 범위 옵션)
   기준으로 조인해 시계열(`entries`)로 반환. `GET /admin/audit-package?company_id=&year=`
-  (JSON), `&format=csv`로 원자료 CSV 다운로드. **PDF 서술형 감사보고서는 이번 범위 밖**
-  (reportlab은 이미 requirements에 있어 후속 작업으로 부담 적음).
+  (JSON), `&format=csv`로 원자료 CSV 다운로드.
+- **PDF 서술형 감사보고서 (완료, 후속 PR)**: `db/audit_report_pdf.py::build_audit_report_pdf(package, company_name)`가
+  `build_audit_package()`의 반환값을 재계산 없이 그대로 서술형 PDF로 직렬화(reportlab
+  platypus). 한글은 별도 폰트 파일 없이 내장 CID 폰트(`HYGothic-Medium`)로 렌더링.
+  구성: 제목·기업/기간/생성일시 → 요약(전표 건수·검토대기 건수·trace 건수·집계
+  배출량tCO2e, "여신 결정 아님" 비보장 문구) → 페이지 나눔 → 판단 근거 시계열 표
+  (전표 evidence + trace 계획/관찰/행동). `GET /admin/audit-package?...&format=pdf`로
+  다운로드(`Content-Disposition: attachment`). CSV와 마찬가지로 원자료를 재해석하지
+  않고 그대로 옮겨 적는다 — 감사 대응 문서로서 원자료와 항상 일치해야 하기 때문.
 - 관리자 대시보드에 탭 2개 신설: "품질 이슈"(`QualityIssueLog.tsx`), "감사 대응"
-  (`AuditPackage.tsx` — 기업 선택 드롭다운 + 연도 입력 + 조회 + CSV 다운로드 링크).
-- 테스트: `tests/test_quality_issue_and_audit_package.py` 15건(순수 로직 8 + API 라우터 4
-  + 통합 3) + 기존 `test_owner_document_upload.py`에 실패 기록 검증 1건 추가. 전체
-  `pytest` 185 passed. 프론트 `tsc --noEmit`·`next build` 통과.
-- PR: https://github.com/noeyish/GamTan/pull/37 (`feat/quality-issue-log-and-audit-package` → `dev`, **병합 완료**)
+  (`AuditPackage.tsx` — 기업 선택 드롭다운 + 연도 입력 + 조회 + CSV/PDF 다운로드 링크).
+- 테스트: `tests/test_quality_issue_and_audit_package.py` 21건(순수 로직 8 + API 라우터 5
+  + PDF 6 + 통합 2) + 기존 `test_owner_document_upload.py`에 실패 기록 검증 1건 추가.
+  전체 `pytest` 228 passed. 프론트 `tsc --noEmit`·`next build` 통과.
+- PR: https://github.com/noeyish/GamTan/pull/37 (`feat/quality-issue-log-and-audit-package` → `dev`, **병합 완료**),
+  PDF는 `feat/audit-package-pdf` (PR 작성 예정)
 
 ---
 
@@ -589,7 +598,8 @@ ELSE: 귀속계수 = 대출잔액 / 분모, 금융배출량 = 귀속계수 × �
 | 부수 | pre-existing 테스트 실패 3건 정리 (룰 매칭 카운트, I050 중복 케이스, 마이그레이션 백필 누락) | B | #30 | §6-2 |
 | 부수 | owner "우대금리 안내 요청" 버튼 실데이터 연동 | B | #31 | §6-4. 2주차 B 잔여 UI |
 | 부수 | Docker 이미지 경량화 (api 412MB→395MB, 캐시 재빌드 대폭 단축) | B | #28에 포함 | §6-1 병행 처리 |
-| Tier 2 | 품질 이슈 로그 + 감사 대응 근거 패키지(CSV) | B | #37 | §7-1. Tier 2 조기 착수, PDF는 범위 밖 |
+| Tier 2 | 품질 이슈 로그 + 감사 대응 근거 패키지(CSV) | B | #37 | §7-1. Tier 2 조기 착수 |
+| Tier 2 | 감사 대응 근거 패키지 — PDF 서술형 감사보고서 | B | #37 후속 (PR 작성 예정) | §7-1. `db/audit_report_pdf.py`, reportlab, 원자료 재계산 없이 직렬화 |
 | Tier 1 | K택소노미·설비투자 필드 (백엔드만) | B | #39 | §6-5. 원래 A 담당, B가 백엔드만 대신 착수 |
 | Tier 1 | K택소노미 리드 리스트(관리자 화면) | A | #41 | §6-6 |
 | Tier 1 | `ScenePcaf.tsx` 정식 엔진(`db/pcaf_quality.py`) 교체 + 조직경계 자동생성 | A | #42 | §6-6 |
@@ -617,7 +627,7 @@ ELSE: 귀속계수 = 대출잔액 / 분모, 금융배출량 = 귀속계수 × �
 | Tier 2 | 청중별 통역 / 탄소 신용카드(QR) | 미배정 | ⬜ 미착수 | §2 Tier 2-9, 상세 스펙 미작성 |
 | Tier 2 | 품질 이슈 로그 (업로드 반려·실패 이력) | B | ✅ 완료 | §7-1, PR #37 |
 | Tier 2 | 감사 대응 근거 패키지 — CSV | B | ✅ 완료 | §7-1, PR #37 |
-| Tier 2 | 감사 대응 근거 패키지 — PDF 서술형 감사보고서 | 미배정 | ⬜ 미착수 | §7-1에서 범위 밖으로 명시. reportlab 이미 requirements에 있어 착수 부담 적음 |
+| Tier 2 | 감사 대응 근거 패키지 — PDF 서술형 감사보고서 | B | ✅ 완료 | §7-1, PR #37 후속(PR 작성 예정). `db/audit_report_pdf.py`, reportlab |
 | Tier 2 | 포트폴리오 뷰 확장 — 히트맵·연동 우선순위 Top10 | 미배정 | ⬜ 미착수 | `docs/owner-admin-flow-spec.md` §5 |
 | Tier 2 | 규제 대응 리포트 (금감원 4단계 구조 자동 섹션) | 미배정 | ⬜ 미착수 | `docs/owner-admin-flow-spec.md` §6 |
 | 부수 | 룰 우선순위 충돌 정리 (표현 변형이 엉뚱한 룰에 오매칭되는 문제) | 미배정 | ⬜ 미착수 | §6-5 "부수 발견" — K택소노미 작업 중 발견, `분류_기준표_확장` 시트 전체 이슈라 별도 분리 |

@@ -5,7 +5,7 @@
   - 품질 이슈 로그는 열람 전용(GET만) — 반려 사유별로 그대로 노출한다.
   - 감사 대응 근거 패키지는 trace_logs + classifications.evidence + vouchers를
     기업·기간 기준으로 시계열 조합한다(신규 계산 로직 없음, 조회·조합만).
-  - CSV 내보내기는 JSON과 같은 데이터를 그대로 직렬화한다.
+  - CSV·PDF 내보내기는 JSON과 같은 데이터를 그대로 직렬화한다 — 재계산하지 않는다.
 """
 import io
 
@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from api.db import get_session
 from api.main import app
 from db.audit_package import build_audit_package
+from db.audit_report_pdf import build_audit_report_pdf
 from db.models import (
     Base,
     Classification,
@@ -233,3 +234,40 @@ def test_audit_package_endpoint_csv_export(db, client):
 def test_audit_package_endpoint_unknown_company_returns_404(db, client):
     res = client.get(f"/admin/audit-package?company_id=99999&year={YEAR}")
     assert res.status_code == 404
+
+
+def test_audit_package_endpoint_pdf_export(db, client):
+    session, cid = db
+    _add_voucher_with_classification(session, cid, 1, "도시가스", evidence="근거1")
+
+    res = client.get(f"/admin/audit-package?company_id={cid}&year={YEAR}&format=pdf")
+    assert res.status_code == 200
+    assert res.headers["content-type"].startswith("application/pdf")
+    assert "attachment" in res.headers["content-disposition"]
+    assert f"audit-report-{cid}-{YEAR}.pdf" in res.headers["content-disposition"]
+
+    with pdfplumber.open(io.BytesIO(res.content)) as pdf:
+        text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+    assert "○○정밀" in text
+    assert "근거1" in text
+
+
+# ── db/audit_report_pdf.py 순수 로직 ──────────────────────────────────────────
+def test_build_audit_report_pdf_returns_nonempty_bytes(db):
+    session, cid = db
+    _add_voucher_with_classification(session, cid, 1, "도시가스", evidence="근거1")
+    package = build_audit_package(session, cid, YEAR)
+
+    pdf_bytes = build_audit_report_pdf(package, "○○정밀")
+    assert isinstance(pdf_bytes, bytes)
+    assert pdf_bytes.startswith(b"%PDF")
+
+
+def test_build_audit_report_pdf_handles_empty_entries(db):
+    session, cid = db
+    package = build_audit_package(session, cid, YEAR)
+
+    pdf_bytes = build_audit_report_pdf(package, "○○정밀")
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+    assert "해당 기간에 표시할 근거가 없습니다" in text
