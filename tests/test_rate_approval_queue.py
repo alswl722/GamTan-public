@@ -84,7 +84,7 @@ def _add_classified_voucher(session, cid, month, item, *, scope, emission, statu
 
 def _make_upgrade_candidate(session, cid, scope_group="scope_1"):
     """해당 Scope 전표 12개월 전부를 매출 환산(수량 없음, revenue/4등급)으로 채워
-    정식 엔진 기준 등급 상승 후보가 되도록 한다(4등급→3등급, test_admin.py와 동일 패턴)."""
+    정식 엔진 기준 등급 상승 후보가 되도록 한다(4등급→2등급, test_admin.py와 동일 패턴)."""
     scope = 1 if scope_group == "scope_1" else 2
     item = "유류대금" if scope_group == "scope_1" else "전기요금"
     for m in range(1, 13):
@@ -100,15 +100,15 @@ def test_create_rate_request_snapshots_grade_at_creation_time(db):
     req = create_rate_request(session, cid, request_type="rate_upgrade", scope_group="scope_1")
     assert req.scope_group == "scope_1"
     assert req.current_grade == 4
-    assert req.target_grade == 3
+    assert req.target_grade == 2
     assert req.missing_summary
     assert req.status == "pending"
     assert "보장하지 않습니다" in req.disclaimer_text
 
 
 def test_create_rate_request_fails_when_already_at_best_achievable_grade(db):
-    """이미 도달 가능한 최고 등급(production 기반, 3등급)이면 요청 자체를 만들 수 없다
-    (추정으로 채우지 않음)."""
+    """이미 도달 가능한 최고 등급(energy_consumption 기반, 2등급)이면 요청 자체를 만들 수
+    없다(추정으로 채우지 않음)."""
     session, cid = db
     for m in range(1, 13):
         _add_classified_voucher(session, cid, m, "도시가스", scope=1, emission=100.0, quantity=100)

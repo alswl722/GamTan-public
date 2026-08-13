@@ -564,7 +564,7 @@ def test_traces_groups_runs_with_badges(db, client):
 
 def test_rate_candidates_flags_company_with_revenue_dominant_scope(db, client):
     """정식 엔진 기준 — Scope 전표 다수가 매출 환산(수량 없음, revenue/4등급)이면
-    후보로 나온다(db/pcaf_quality.py::quality_upgrade_candidate, 4등급→3등급만 가능)."""
+    후보로 나온다(db/pcaf_quality.py::quality_upgrade_candidate, 4등급→2등급만 가능)."""
     session, cid = db
     for m in range(1, 13):
         _add(session, cid, m, "유류대금", scope=1, emission=100.0, status="auto", quantity=None)
@@ -576,14 +576,14 @@ def test_rate_candidates_flags_company_with_revenue_dominant_scope(db, client):
     assert cand["company_name"] == "○○정밀"
     assert cand["scope_group"] == "scope_1"
     assert cand["current_grade"] == 4
-    assert cand["target_grade"] == 3
+    assert cand["target_grade"] == 2
     assert cand["missing"]
     assert cand["benefit"]
 
 
 def test_rate_candidates_excludes_company_already_at_best_achievable_grade(db, client):
-    """Scope 전표 다수가 실측 수량 기반(production/3등급 — 이 프로젝트가 도달 가능한
-    최고점)이면 더 오를 데가 없어 후보에서 빠진다."""
+    """Scope 전표 다수가 실측 수량 기반(energy_consumption/2등급 — 이 프로젝트가 도달
+    가능한 최고점)이면 더 오를 데가 없어 후보에서 빠진다."""
     session, cid = db
     for m in range(1, 13):
         _add(session, cid, m, "도시가스", scope=1, emission=100.0, status="auto", quantity=100)

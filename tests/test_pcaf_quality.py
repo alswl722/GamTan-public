@@ -102,13 +102,14 @@ def test_option_2a_does_not_apply_to_scope3(db):
 
 
 # ── classify_activity_data_method ───────────────────────────────────────────
-def test_production_basis_when_voucher_has_measured_quantity(db):
-    """전표에 실측 수량이 있으면 production(물리적 활동자료) — 2등급 고정 아님."""
+def test_energy_consumption_basis_when_voucher_has_measured_quantity(db):
+    """전표에 실측 수량이 있으면 energy_consumption(Option 2a) — 전기 kWh·가스 m³·경유 L는
+    전부 에너지원별 소비량이지 생산 실적(2b)이 아니다(Table 10.1-2 원문 예시 대조)."""
     session, cid = db
     vid = _add_voucher(session, cid, 1, "도시가스", quantity=100)
     voucher = session.query(Voucher).filter_by(id=vid).one()
     classification = voucher.classification
-    assert classify_activity_data_method(voucher, classification) == "production"
+    assert classify_activity_data_method(voucher, classification) == "energy_consumption"
 
 
 def test_revenue_basis_when_voucher_has_no_quantity(db):
@@ -176,12 +177,12 @@ def test_other_bucket_vouchers_excluded_from_both_completeness_and_basis(db):
 
 
 # ── assess_borrower_emission_quality — 활동자료 근거별 옵션 매칭 ─────────────
-def test_production_data_scores_higher_than_revenue_estimate(db):
-    """생산량 기반(2b, Score 3)이 매출 환산(3a, Score 4)보다 높은 품질(작은 숫자)로 평가된다."""
+def test_energy_consumption_data_scores_higher_than_revenue_estimate(db):
+    """에너지 소비량 기반(2a, Score 2)이 매출 환산(3a, Score 4)보다 높은 품질(작은 숫자)로 평가된다."""
     session, cid = db
     for m in range(1, 13):
         _add_voucher(session, cid, m, "도시가스", quantity=100)
-    production_result = assess_borrower_emission_quality(session, cid, YEAR, "scope_1")
+    energy_result = assess_borrower_emission_quality(session, cid, YEAR, "scope_1")
 
     company2 = Company(name="타사", industry_code="C251")
     session.add(company2)
@@ -190,9 +191,9 @@ def test_production_data_scores_higher_than_revenue_estimate(db):
         _add_voucher(session, company2.id, m, "유류대금")
     revenue_result = assess_borrower_emission_quality(session, company2.id, YEAR, "scope_1")
 
-    assert production_result["candidate_score"] < revenue_result["candidate_score"]
-    assert production_result["option_code"] == "2b"
-    assert production_result["candidate_score"] == 3
+    assert energy_result["candidate_score"] < revenue_result["candidate_score"]
+    assert energy_result["option_code"] == "2a"
+    assert energy_result["candidate_score"] == 2
     assert revenue_result["option_code"] == "3a"
     assert revenue_result["candidate_score"] == 4
 
@@ -200,29 +201,29 @@ def test_production_data_scores_higher_than_revenue_estimate(db):
 def test_mixed_data_within_year_uses_dominant_basis(db):
     """혼합 데이터 — 더 많이 쓰인 활동자료 근거를 대표값으로 매칭한다."""
     session, cid = db
-    for m in range(1, 9):  # 8개월 production
+    for m in range(1, 9):  # 8개월 energy_consumption
         _add_voucher(session, cid, m, "도시가스", quantity=100)
     for m in (9, 10, 11, 12):  # 4개월 revenue
         _add_voucher(session, cid, m, "유류대금")
 
     result = assess_borrower_emission_quality(session, cid, YEAR, "scope_1")
-    assert result["option_code"] == "2b"  # production이 다수
+    assert result["option_code"] == "2a"  # energy_consumption이 다수
 
 
 def test_scope1_basis_not_polluted_by_scope2_data(db):
-    """Scope 2(전기)가 revenue 기반이어도 Scope 1(가스, production 기반) 점수는
+    """Scope 2(전기)가 revenue 기반이어도 Scope 1(가스, energy_consumption 기반) 점수는
     영향받지 않는다 — PR #25 리뷰가 지적한 Scope 오염 버그의 회귀 테스트."""
     session, cid = db
     for m in range(1, 13):
-        _add_voucher(session, cid, m, "도시가스", quantity=100)  # Scope 1: production
+        _add_voucher(session, cid, m, "도시가스", quantity=100)  # Scope 1: energy_consumption
     for m in range(1, 13):
         _add_voucher(session, cid, m, "전기요금")  # Scope 2: revenue(수량 없음)
 
     scope1 = assess_borrower_emission_quality(session, cid, YEAR, "scope_1")
     scope2 = assess_borrower_emission_quality(session, cid, YEAR, "scope_2")
 
-    assert scope1["option_code"] == "2b"
-    assert scope1["candidate_score"] == 3
+    assert scope1["option_code"] == "2a"
+    assert scope1["candidate_score"] == 2
     assert scope2["option_code"] == "3a"
     assert scope2["candidate_score"] == 4
 
@@ -236,7 +237,7 @@ def test_hitl_review_required_does_not_change_quality_score(db):
 
     result = assess_borrower_emission_quality(session, cid, YEAR, "scope_1")
     assert result["candidate_score"] is not None
-    assert result["option_code"] == "2b"
+    assert result["option_code"] == "2a"
 
 
 # ── Scope 분리 ────────────────────────────────────────────────────────────────
@@ -411,7 +412,7 @@ def test_quality_evidence_includes_rule_source_reference(db):
         _add_voucher(session, cid, m, "도시가스", quantity=100)
     result = assess_borrower_emission_quality(session, cid, YEAR, "scope_1")
     assert any("Table 10.1-2" in b for b in result["basis"])
-    assert any("2b" in b for b in result["basis"])
+    assert any("2a" in b for b in result["basis"])
 
 
 # ── API 라우터 (evaluate 저장·버전 체인) ──────────────────────────────────────

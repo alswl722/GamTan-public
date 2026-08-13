@@ -36,6 +36,18 @@ v1 §4 "인벤토리 완전성 집계" (2026-08-12): aggregate_scope_emissions �
 BorrowerEmissionInventory.emission_tco2e를 실제로 채우는 유일한 계산 경로. 전에는
 candidate_quality_score(품질 후보 점수)만 채우고 emission_tco2e는 항상 null로
 남아 있었다(docs/db-schema.md §17 노트).
+
+2a/2b 판정 정정 (2026-08-13): 위 8~12행의 "수량이 있으면 보수적으로 2b로
+취급" 결정을 원문과 다시 대조했다. PCAF 원문 Table 10.1-2에서 Option 2a
+(energy consumption)의 예시는 "megawatt-hours of electricity", Option 2b
+(production)의 예시는 "tonnes of rice produced" — 에너지 소비량과 생산
+실적은 완전히 다른 개념이다. 이 프로젝트가 전표에서 뽑는 quantity(전기
+kWh·도시가스 m³·경유 L)는 전부 연료·전력 소비량이지 생산 실적이 아니므로
+2a(Score 2)가 맞다. 종전의 "보수적으로 2b" 처리는 실제로는 원문보다 더 나쁜
+등급(Score 3)을 매기고 있었다 — classify_activity_data_method의 반환값을
+production → energy_consumption 으로 바꿨다. 2b(생산 실적)는 이 프로젝트가
+생산량 데이터를 아예 만들지 않으므로 1a/1b/3b/3c와 같은 성격으로 도달
+불가능한 옵션으로 남는다.
 """
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -74,23 +86,26 @@ def classify_activity_data_method(voucher: Voucher, classification: Classificati
     """전표 1건의 활동자료 근거(PcafQualityRule.activity_data_basis 값)를 판정.
 
     이 프로젝트가 실제로 구분 가능한 신호는 "전표에 실측 수량이 있는가"뿐이다.
-    원문 Option 2a(energy_consumption)와 2b(production)는 에너지원 소비량인지
-    생산량인지로 갈리는데, 이 프로젝트의 quantity 필드는 그 구분을 담지 않으므로
-    더 보수적인(Score가 큰) 2b=production으로 취급한다. 수량이 없으면 금액을
-    환산단가로 나눈 값이라 물리적 활동자료가 아니라 경제자료(매출 대용) 성격에
-    가까워 3a=revenue로 취급한다.
+    이 프로젝트가 만드는 quantity는 전기 kWh·도시가스 m³·경유 L처럼 전부
+    **에너지원별 소비량**이지 생산 실적(예: 생산 톤수)이 아니다 — 원문
+    Table 10.1-2의 Option 2a 예시가 정확히 "megawatt-hours of electricity"다.
+    그래서 수량이 있으면 2a=energy_consumption으로 판정한다. Option 2b
+    (production, 예: "tonnes of rice produced")는 이 프로젝트가 생산 실적
+    데이터를 아예 만들지 않으므로 도달 불가능한 옵션으로 남는다 — 반환하지
+    않는다. 수량이 없으면 금액을 환산단가로 나눈 값이라 물리적 활동자료가
+    아니라 경제자료(매출 대용) 성격에 가까워 3a=revenue로 취급한다.
     verified_emissions/unverified_emissions(1a/1b, 차주 직접 보고+검증)와
     assets/asset_turnover_ratio(3b/3c)는 이 프로젝트가 아직 만들지 않는 입력
     경로이므로 반환하지 않는다 — 없는 값을 만들어내지 않는다.
 
-    참고(PR #25 리뷰): 이 함수의 반환값(production/revenue)은 Classification 모델의
-    기존 activity_data_method 필드(0005 마이그레이션, reported_quantity 등)와 다른
-    어휘로 같은 개념을 표현한다. 기존 필드는 현재 다른 코드에서 쓰이지 않아 급하지
-    않지만, 두 체계를 나중에 통합할 필요가 있다.
+    참고(PR #25 리뷰): 이 함수의 반환값(energy_consumption/revenue)은 Classification
+    모델의 기존 activity_data_method 필드(0005 마이그레이션, reported_quantity 등)와
+    다른 어휘로 같은 개념을 표현한다. 기존 필드는 현재 다른 코드에서 쓰이지 않아
+    급하지 않지만, 두 체계를 나중에 통합할 필요가 있다.
     """
     raw = voucher.raw_json or {}
     if raw.get("quantity") is not None:
-        return "production"
+        return "energy_consumption"
     return "revenue"
 
 
@@ -265,8 +280,11 @@ def _select_quality_rule(
     """구성비에서 가장 많이 쓰인 활동자료 근거에 맞는 PCAF 옵션 규칙을 선택.
 
     scope3=True 면 Option 2a(energy_consumption)는 원문 각주 208에 의해 제외한다.
-    이 프로젝트는 activity_data_basis 로 revenue/production 두 가지만 만들어내므로
-    실질적으로 이 필터는 향후 energy_consumption 판정이 추가될 때를 대비한 것이다.
+    이 프로젝트는 activity_data_basis 로 revenue/energy_consumption 두 가지만
+    만들어내므로, 이 필터는 Scope 3 호출(scope3=True) 시 energy_consumption
+    후보를 실제로 걸러내는 역할을 한다 — 다만 assess_borrower_emission_quality가
+    Scope 3는 이 함수를 호출하기 전에 미리 candidate_score=None으로 반환하므로,
+    현재 이 필터는 실제 호출 경로에서는 아직 발동하지 않는다.
     """
     stmt = select(PcafQualityRule).where(
         PcafQualityRule.asset_class == "business_loans_and_unlisted_equity",
@@ -429,14 +447,14 @@ def quality_upgrade_candidate(
 ) -> dict | None:
     """해당 Scope의 품질점수를 다음 옵션 단계로 올릴 수 있는 후보인지 판정.
 
-    이 프로젝트가 실제로 구분하는 활동자료 근거는 production(Option 2b, score 3)과
-    revenue(Option 3a, score 4) 둘뿐이다(classify_activity_data_method) — 1a/1b/2a/3b/3c가
-    요구하는 검증배출량·에너지소비량·자산 데이터는 아직 만들지 않으므로, 이 프로젝트에서
-    실제 도달 가능한 등급 전환은 4등급→3등급 하나뿐이다. candidate_score가 4가 아니면
-    (None=활동자료 없음, 3=이미 도달 가능한 최고점) 후보가 아니다.
+    이 프로젝트가 실제로 구분하는 활동자료 근거는 energy_consumption(Option 2a, score 2)과
+    revenue(Option 3a, score 4) 둘뿐이다(classify_activity_data_method) — 1a/1b/2b/3b/3c가
+    요구하는 검증배출량·생산실적·자산 데이터는 아직 만들지 않으므로, 이 프로젝트에서
+    실제 도달 가능한 등급 전환은 4등급→2등급 하나뿐이다. candidate_score가 4가 아니면
+    (None=활동자료 없음, 2=이미 도달 가능한 최고점) 후보가 아니다.
 
-    4등급이면, 그 Scope 전표 중 실측 수량이 기록된(production) 비율을 다수로 뒤집는 데
-    필요한 최소 건수를 activity_basis_breakdown에서 계산해 안내 문구를 만든다.
+    4등급이면, 그 Scope 전표 중 실측 수량이 기록된(energy_consumption) 비율을 다수로
+    뒤집는 데 필요한 최소 건수를 activity_basis_breakdown에서 계산해 안내 문구를 만든다.
     """
     assessment = assess_borrower_emission_quality(session, company_id, reporting_year, scope_group)
     if assessment["candidate_score"] != 4:
@@ -444,18 +462,18 @@ def quality_upgrade_candidate(
 
     completeness = assess_inventory_completeness(session, company_id, reporting_year, scope_group)
     counts = completeness.activity_basis_breakdown
-    production = counts.get("production", 0)
+    energy_consumption = counts.get("energy_consumption", 0)
     revenue = counts.get("revenue", 0)
-    needed = revenue - production + 1
+    needed = revenue - energy_consumption + 1
     fuels = ", ".join(f for f, s in _FUEL_BUCKET_SCOPE.items() if s == scope_group)
     scope_label = "Scope 1" if scope_group == "scope_1" else "Scope 2"
 
     return {
         "scope_group": scope_group,
         "current_grade": 4,
-        "target_grade": 3,
+        "target_grade": 2,
         "missing": f"{fuels} 고지서 중 사용량(수량)이 기록된 건이 {needed}건 더 필요해요",
-        "benefit": f"{scope_label} 4등급 → 3등급 시 우대금리 대상 안내 가능",
+        "benefit": f"{scope_label} 4등급 → 2등급 시 우대금리 대상 안내 가능",
     }
 
 
