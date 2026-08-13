@@ -144,16 +144,23 @@ def _parse_tax_invoice(text: str) -> dict:
     if not date_m:
         raise DocumentParseError("작성일자를 찾지 못했어요")
     supplier_m = re.search(r"공급자:\s*(.+)", text)
-    # 품목 행: "경유 L 301L 1,400 420,833" — 품목명, 규격, 수량, 단가(원), 공급가액(원).
-    # 마지막 두 컬럼만 순수 숫자/콤마라 이 패턴으로 헤더 행("품목명 규격 ... 공급가액(원)")과
-    # 구분된다(헤더는 괄호·한글이 섞여 있어 [\d,]+로 안 끝남).
-    row_m = re.search(r"^(\S+)\s+\S+\s+\S+\s+[\d,]+\s+([\d,]+)\s*$", text, re.MULTILINE)
+    # 품목 행: "경유 L 301L 1,400 420,833" — 품목명, 규격, 수량+단위(예: "301L"), 단가(원),
+    # 공급가액(원). 마지막 두 컬럼만 순수 숫자/콤마라 이 패턴으로 헤더 행("품목명 규격 ...
+    # 공급가액(원)")과 구분된다(헤더는 괄호·한글이 섞여 있어 [\d,]+로 안 끝남).
+    row_m = re.search(r"^(\S+)\s+\S+\s+(\S+)\s+[\d,]+\s+([\d,]+)\s*$", text, re.MULTILINE)
     if not row_m:
         raise DocumentParseError("품목·공급가액 행을 찾지 못했어요")
-    return {
+    result = {
         "supplier_name": supplier_m.group(1).strip() if supplier_m else "알 수 없음",
         "item_description": row_m.group(1).strip(),
-        "supply_amount_krw": _parse_amount(row_m.group(2), field_label="공급가액"),
+        "supply_amount_krw": _parse_amount(row_m.group(3), field_label="공급가액"),
         "year": int(date_m.group(1)),
         "month": int(date_m.group(2)),
     }
+    # 세금계산서는 물량이 안 찍힌 경우("-" 등)가 더 흔하다 — 이때는 quantity 필드
+    # 자체를 안 넣어 기존 금액÷단가 환산 경로를 그대로 탄다.
+    qty_m = re.match(r"^([\d,]+)(\D+)$", row_m.group(2))
+    if qty_m:
+        result["quantity"] = _parse_amount(qty_m.group(1), field_label="수량")
+        result["quantity_unit"] = qty_m.group(2).strip()
+    return result

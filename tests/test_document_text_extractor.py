@@ -70,7 +70,9 @@ def test_gas_bill_parses_date_amount_quantity():
     assert result["supply_amount_krw"] == 900_000
 
 
-def test_tax_invoice_parses_item_and_amount_from_table_row():
+def test_tax_invoice_parses_item_amount_and_quantity_from_table_row():
+    """수량+단위가 붙은 컬럼("301L")도 이제 캡처한다 — 세금계산서 경로로 들어오는
+    유류비 전표도 PCAF 2a(energy_consumption) 판정에 도달할 수 있어야 한다."""
     text = extract_pdf_text(_pdf([
         "전자세금계산서",
         "공급자: 구미에너지주유소",
@@ -83,7 +85,23 @@ def test_tax_invoice_parses_item_and_amount_from_table_row():
     assert result["item_description"] == "경유"
     assert result["supply_amount_krw"] == 420_833
     assert result["year"] == 2025 and result["month"] == 2
+    assert result["quantity"] == 301
+    assert result["quantity_unit"] == "L"
+
+
+def test_tax_invoice_without_printed_quantity_omits_quantity_fields():
+    """세금계산서는 물량이 안 찍힌 경우("-" 등)가 더 흔하다 — 이때는 quantity를
+    합성해 넣지 않고 기존 금액÷단가 환산 경로를 그대로 탄다."""
+    text = extract_pdf_text(_pdf([
+        "전자세금계산서",
+        "공급자: 구미석유",
+        "작성일자: 2025-01-18",
+        "품목명 규격 수량 단가(원) 공급가액(원)",
+        "유류대금 외1종 - 1,400 420,000",
+    ]))
+    result = parse_document_text(text, "tax_invoice")
     assert "quantity" not in result
+    assert result["supply_amount_krw"] == 420_000
 
 
 def test_degraded_scan_amount_masked_raises_instead_of_faking_value():
