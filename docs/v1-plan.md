@@ -257,6 +257,11 @@ alembic upgrade head                  # 빈 DB에서 마이그레이션 성공 �
   금액이 판독 불가로 가려진 경우도 값을 지어내지 않고 실패시킨다(CLAUDE.md 실패 가시성 원칙).
 - `db/document_extraction.py`: 실 추출을 우선하고, `year`/`month`가 명시적으로 주어졌을 때만
   기존 해시 기반 합성 mock으로 폴백(테스트·임의 파일 업로드 편의는 유지).
+  ⚠️ **2026-08-13 갱신**: 이 합성 mock은 이후 제거됐다 — 실 서식과 다른 진짜 문서(예:
+  국세청 표준 전자세금계산서 레이아웃)도 조용히 가짜 값으로 대체돼 파서가 실제로
+  동작하는지 확인이 불가능해지는 문제가 있었다. 지금은 실 추출 실패 시 `year`/`month`
+  유무와 무관하게 항상 `DocumentParseError`로 명확히 실패한다(`year`/`month` 파라미터
+  자체도 `extract_document()`/`ingest_uploaded_document()`/업로드 엔드포인트에서 제거됨).
 - `api/document_ingestion.py`, `api/routers/owner.py`: `year`/`month`가 선택값으로 전환 —
   문서에서 읽어낸 값을 응답에 실어 보낸다. 파싱 실패는 422로 안내.
 - `web/components/SceneUpload.tsx`: 월별 업로드 UI를 여러 파일 일괄 업로드로 교체(월 선택

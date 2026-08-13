@@ -4,6 +4,9 @@ from datetime import date
 
 import openpyxl
 import pytest
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+from reportlab.pdfgen import canvas
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
@@ -13,6 +16,49 @@ from api.document_ingestion import (
     ingest_uploaded_document,
 )
 from db.models import Base, Company, FinancialInstitution, InstitutionBorrower, SourceDocument, Voucher
+
+pdfmetrics.registerFont(UnicodeCIDFont("HYGothic-Medium"))
+
+
+def _minimal_pdf(lines: list[str]) -> bytes:
+    """합성 mock이 사라졌으므로 실 파싱이 되는 최소 텍스트 PDF가 필요하다
+    (tests/test_document_extraction.py와 동일 패턴)."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf)
+    c.setFont("HYGothic-Medium", 11)
+    y = 700
+    for line in lines:
+        c.drawString(50, y, line)
+        y -= 20
+    c.save()
+    return buf.getvalue()
+
+
+def _electric_bill_pdf(*, month="03", amount=987_654, quantity=1234) -> bytes:
+    return _minimal_pdf([
+        "전기요금 고지서",
+        f"청구월: 2025-{month} 계약종별: 산업용(을) 고압A",
+        f"사용량(kWh) {quantity}",
+        f"청구금액(원) {amount}",
+    ])
+
+
+def _gas_bill_pdf(*, month="04", amount=800_000, quantity=800) -> bytes:
+    return _minimal_pdf([
+        "도시가스 요금고지서",
+        f"사용월: 2025-{month}",
+        f"사용량(m³) {quantity}",
+        f"청구금액(원) {amount}",
+    ])
+
+
+def _tax_invoice_pdf(*, day="07-10", supplier="구미석유", amount=420_000) -> bytes:
+    return _minimal_pdf([
+        "전자세금계산서",
+        f"작성일자: 2025-{day}",
+        f"공급자: {supplier}",
+        f"경유 L 300L 1,400 {amount:,}",
+    ])
 
 
 @pytest.fixture()
@@ -54,19 +100,20 @@ def _xlsx_bytes(rows: list[tuple]) -> bytes:
 
 def test_upload_without_institution_backfill_raises_clear_error(db):
     """source_documents.financial_institution_id는 NOT NULL — 백필 안 된 기업은
-    DB IntegrityError가 아니라 명확한 에러로 먼저 막혀야 한다."""
+    DB IntegrityError가 아니라 명확한 에러로 먼저 막혀야 한다(기관 귀속 확인이
+    문서 파싱보다 먼저 일어나므로 파일 내용은 아무거나 줘도 된다)."""
     session, company_id = db
     with pytest.raises(MissingInstitutionAttributionError):
         ingest_uploaded_document(
-            session, company_id, b"x", "a.jpg", "gas_bill", mode="ocr", year=2025, month=4,
+            session, company_id, b"x", "a.jpg", "gas_bill", mode="ocr",
         )
 
 
 def test_ocr_upload_creates_one_source_document_and_one_voucher(db_with_institution):
     session, company_id, _inst_id, _ib_id = db_with_institution
     result = ingest_uploaded_document(
-        session, company_id, b"fake-electric-bill", "3월전기고지서.jpg",
-        "electric_bill", mode="ocr", year=2025, month=3,
+        session, company_id, _electric_bill_pdf(), "3월전기고지서.pdf",
+        "electric_bill", mode="ocr",
     )
     assert result["vouchers_created"] == 1
 
@@ -101,10 +148,10 @@ def test_excel_upload_creates_one_source_document_and_multiple_vouchers(db_with_
 
 def test_duplicate_file_upload_is_rejected(db_with_institution):
     session, company_id, _inst_id, _ib_id = db_with_institution
-    content = b"same-bytes-every-time"
-    ingest_uploaded_document(session, company_id, content, "a.jpg", "gas_bill", mode="ocr", year=2025, month=4)
+    content = _gas_bill_pdf()
+    ingest_uploaded_document(session, company_id, content, "a.pdf", "gas_bill", mode="ocr")
     with pytest.raises(DuplicateDocumentError):
-        ingest_uploaded_document(session, company_id, content, "a.jpg", "gas_bill", mode="ocr", year=2025, month=4)
+        ingest_uploaded_document(session, company_id, content, "a.pdf", "gas_bill", mode="ocr")
 
 
 def test_db_constraint_blocks_duplicate_even_if_app_check_is_bypassed(db_with_institution):
@@ -135,8 +182,8 @@ def test_db_constraint_blocks_duplicate_even_if_app_check_is_bypassed(db_with_in
 def test_institution_attribution_is_filled_when_backfilled(db_with_institution):
     session, company_id, inst_id, ib_id = db_with_institution
     ingest_uploaded_document(
-        session, company_id, b"tax-invoice-bytes", "invoice.jpg",
-        "tax_invoice", mode="ocr", year=2025, month=7,
+        session, company_id, _tax_invoice_pdf(), "invoice.pdf",
+        "tax_invoice", mode="ocr",
     )
     voucher = session.execute(select(Voucher)).scalars().first()
     assert voucher.financial_institution_id == inst_id

@@ -9,9 +9,11 @@
 """
 import io
 
-import pdfplumber
 import pytest
 from fastapi.testclient import TestClient
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+from reportlab.pdfgen import canvas
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
@@ -32,6 +34,27 @@ from db.models import (
 from db.quality_issues import list_ingestion_failures, record_ingestion_failure
 
 YEAR = 2025
+
+pdfmetrics.registerFont(UnicodeCIDFont("HYGothic-Medium"))
+
+
+def _gas_bill_pdf(*, month="03", amount=800_000, quantity=800) -> bytes:
+    """합성 mock이 사라졌으므로 업로드 성공 케이스는 실제로 파싱되는 최소
+    텍스트 PDF가 있어야 한다(tests/test_document_extraction.py와 동일 패턴)."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf)
+    c.setFont("HYGothic-Medium", 11)
+    y = 700
+    for line in [
+        "도시가스 요금고지서",
+        f"사용월: 2025-{month}",
+        f"사용량(m³) {quantity}",
+        f"청구금액(원) {amount}",
+    ]:
+        c.drawString(50, y, line)
+        y -= 20
+    c.save()
+    return buf.getvalue()
 
 
 @pytest.fixture()
@@ -125,15 +148,18 @@ def test_list_ingestion_failures_ordered_most_recent_first(db):
 def test_quality_issues_endpoint_excludes_successful_uploads(db, client):
     """성공한 업로드는 품질 이슈 로그에 안 남는다 — 실패만 모은 열람 전용 로그다."""
     session, cid = db
-    client.post(
+    ok_res = client.post(
         f"/owner/{cid}/documents/upload",
-        files={"file": ("ok.jpg", b"ok-bytes", "image/jpeg")},
-        data={"document_type": "gas_bill", "mode": "ocr", "year": "2025", "month": "3"},
+        files={"file": ("ok.pdf", _gas_bill_pdf(month="03"), "application/pdf")},
+        data={"document_type": "gas_bill", "mode": "ocr"},
     )
-    files = {"file": ("dup.jpg", b"dup-bytes", "image/jpeg")}
-    data = {"document_type": "gas_bill", "mode": "ocr", "year": "2025", "month": "4"}
-    client.post(f"/owner/{cid}/documents/upload", files=files, data=data)
-    client.post(f"/owner/{cid}/documents/upload", files=files, data=data)
+    assert ok_res.status_code == 200, ok_res.text
+    files = {"file": ("dup.pdf", _gas_bill_pdf(month="04"), "application/pdf")}
+    data = {"document_type": "gas_bill", "mode": "ocr"}
+    first = client.post(f"/owner/{cid}/documents/upload", files=files, data=data)
+    assert first.status_code == 200, first.text
+    second = client.post(f"/owner/{cid}/documents/upload", files=files, data=data)
+    assert second.status_code == 409
 
     res = client.get("/admin/quality-issues")
     assert res.status_code == 200

@@ -711,10 +711,6 @@ export function ScenePcaf({ showHeading = true }: { showHeading?: boolean } = {}
       {alerts.length > 0 && (
         <div className="mt-3 space-y-2 rounded-2xl bg-surface p-5">
           <div className="text-[13px] font-semibold text-ink">이상 신호 알림</div>
-          <p className="text-[11.5px] leading-relaxed text-faint">
-            은행 담당자에게도 같은 시점에 안내되는 신호예요. 여신 결정과는 무관하며,
-            참고용 안내입니다.
-          </p>
           {alerts.map((a) => (
             <div
               key={`${a.type}-${a.month}`}

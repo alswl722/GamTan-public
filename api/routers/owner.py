@@ -107,8 +107,6 @@ async def upload_document(
     file: UploadFile = File(...),
     document_type: str = Form(...),
     mode: str = Form("ocr"),
-    year: int | None = Form(None),
-    month: int | None = Form(None),
     session: Session = Depends(get_session),
 ):
     """3단계(세금계산서 OCR|엑셀 택1)·4단계(전기·도시가스고지서 OCR) 공용 업로드.
@@ -123,15 +121,15 @@ async def upload_document(
         raise HTTPException(status_code=400, detail=f"invalid mode: {mode}")
     if mode == "excel" and document_type != "tax_invoice":
         raise HTTPException(status_code=400, detail="엑셀 업로드는 세금계산서만 지원합니다")
-    # year/month는 더 이상 필수가 아니다 — 문서 자체(PDF 텍스트)에서 날짜를 읽어낸다
-    # (db/document_text_extractor.py). 못 읽으면 422로 명확히 실패한다.
+    # 문서 자체(PDF 텍스트)에서 날짜를 읽어낸다(db/document_text_extractor.py).
+    # 못 읽으면 합성값으로 가리지 않고 422로 명확히 실패한다(실패 가시성 원칙).
 
     file_bytes = await file.read()
     filename = file.filename or "upload"
     try:
         return ingest_uploaded_document(
             session, company_id, file_bytes, filename,
-            document_type, mode=mode, year=year, month=month,
+            document_type, mode=mode,
         )
     except DuplicateDocumentError as e:
         record_ingestion_failure(
@@ -155,6 +153,8 @@ async def upload_document(
     except DocumentParseError as e:
         # 문서에서 날짜·금액을 못 읽었거나(화질 불량 등) 엉뚱한 칸에 업로드된 경우 —
         # 같은 실패 가시성 원칙, 값을 지어내지 않고 사유를 그대로 보여준다.
+        # VisionExtractionError(Gemini 호출 자체 실패)도 이 서브클래스라 여기서
+        # 같이 잡힌다 — 원인 구분은 detail 텍스트로 충분해 failure_reason은 공유한다.
         record_ingestion_failure(
             session, company_id, document_type=document_type, original_filename=filename,
             failure_reason="parse_error", detail=str(e),

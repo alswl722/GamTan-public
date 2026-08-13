@@ -46,7 +46,13 @@ def extract_pdf_text(file_bytes: bytes) -> str | None:
     return text or None
 
 
-def _detect_document_type(text: str) -> DocumentType | None:
+def detect_document_type(text: str) -> DocumentType | None:
+    """첫 줄 제목으로 문서종류 판별 — 못 알아보면 None.
+
+    db/document_extraction.py가 이 함수로 먼저 "아예 모르는 서식인지"를 갈라
+    비전 폴백 여부를 정한다(모르는 서식만 비전 재시도, 아는 서식인데 슬롯이
+    틀린 경우는 비전으로 재시도해도 답이 안 바뀌므로 그대로 실패시킴).
+    """
     stripped = text.strip()
     if not stripped:
         return None
@@ -81,7 +87,7 @@ def parse_document_text(text: str, expected_document_type: DocumentType) -> dict
     실제 내용이 업로드한 칸(expected_document_type)과 다르면(엉뚱한 카드에
     업로드) 값을 억지로 맞추지 않고 명확히 실패시킨다.
     """
-    detected = _detect_document_type(text)
+    detected = detect_document_type(text)
     if detected is None:
         raise DocumentParseError("인식할 수 없는 문서 형식이에요")
     if detected != expected_document_type:
