@@ -119,6 +119,7 @@ export interface KTaxonomyLeadItem {
 export interface RateCandidateItem {
   company_id: number;
   company_name: string;
+  scope_group: "scope_1" | "scope_2";
   current_grade: number;
   target_grade: number;
   missing: string;
@@ -135,6 +136,7 @@ export interface RateApprovalRequestItem {
   company_id: number;
   company_name: string;
   request_type: "rate_upgrade" | "equipment_finance";
+  scope_group: "scope_1" | "scope_2" | null;
   current_grade: number | null;
   target_grade: number | null;
   missing_summary: string | null;

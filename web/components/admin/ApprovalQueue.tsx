@@ -71,6 +71,11 @@ function RequestCard({
 
       {item.current_grade != null && item.target_grade != null && (
         <div className="mb-1.5 flex items-center gap-1.5">
+          {item.scope_group && (
+            <span className="rounded border border-line bg-bg px-1.5 py-0.5 text-[10px] font-medium text-muted">
+              {item.scope_group === "scope_1" ? "Scope 1" : "Scope 2"}
+            </span>
+          )}
           <span
             className="rounded-full px-2 py-0.5 text-[11px] font-bold text-white"
             style={{ backgroundColor: gradeColor(item.current_grade) }}

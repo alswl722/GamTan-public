@@ -38,13 +38,36 @@ candidate_quality_score(품질 후보 점수)만 채우고 emission_tco2e는 항
 남아 있었다(docs/db-schema.md §17 노트).
 """
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from db.models import BorrowerEmissionInventory, Classification, OrganizationalBoundary, PcafQualityRule, Voucher
+from db.models import (
+    BorrowerEmissionInventory,
+    Classification,
+    Company,
+    OrganizationalBoundary,
+    PcafQualityRule,
+    Voucher,
+)
 
 _FUEL_BUCKET_SCOPE = {"전기": "scope_2", "가스": "scope_1", "경유/유류": "scope_1"}
+_UPGRADE_SCOPES = ("scope_1", "scope_2")
+
+
+def default_reporting_year(session: Session, company_id: int) -> int:
+    """연도 파라미터 생략 시 쓸 기본값 — 달력상 올해가 아니라 그 기업의 전표가
+    실제로 존재하는 가장 최근 연도를 쓴다. 결산 주기가 달력연도와 다를 수 있고,
+    무엇보다 "올해"로 고정하면 데이터가 전부 작년(또는 그 이전) 연도인 기업은
+    아무 전표도 없는 빈 연도를 기본값으로 잡아 리포트가 항상 텅 비어 보인다.
+
+    api/routers/owner_quality.py(품질 리포트)와 우대금리 후보 판정이 같은 기준을
+    공유해야 두 화면의 연도가 어긋나지 않는다."""
+    latest_year = session.execute(
+        select(func.max(Voucher.year)).where(Voucher.company_id == company_id)
+    ).scalar()
+    return latest_year or datetime.now(timezone.utc).year
 
 
 def classify_activity_data_method(voucher: Voucher, classification: Classification) -> str:
@@ -359,3 +382,70 @@ def save_quality_assessment_version(
     )
     session.add(inventory)
     return inventory
+
+
+def quality_upgrade_candidate(
+    session: Session, company_id: int, reporting_year: int, scope_group: str
+) -> dict | None:
+    """해당 Scope의 품질점수를 다음 옵션 단계로 올릴 수 있는 후보인지 판정.
+
+    이 프로젝트가 실제로 구분하는 활동자료 근거는 production(Option 2b, score 3)과
+    revenue(Option 3a, score 4) 둘뿐이다(classify_activity_data_method) — 1a/1b/2a/3b/3c가
+    요구하는 검증배출량·에너지소비량·자산 데이터는 아직 만들지 않으므로, 이 프로젝트에서
+    실제 도달 가능한 등급 전환은 4등급→3등급 하나뿐이다. candidate_score가 4가 아니면
+    (None=활동자료 없음, 3=이미 도달 가능한 최고점) 후보가 아니다.
+
+    4등급이면, 그 Scope 전표 중 실측 수량이 기록된(production) 비율을 다수로 뒤집는 데
+    필요한 최소 건수를 activity_basis_breakdown에서 계산해 안내 문구를 만든다.
+    """
+    assessment = assess_borrower_emission_quality(session, company_id, reporting_year, scope_group)
+    if assessment["candidate_score"] != 4:
+        return None
+
+    completeness = assess_inventory_completeness(session, company_id, reporting_year, scope_group)
+    counts = completeness.activity_basis_breakdown
+    production = counts.get("production", 0)
+    revenue = counts.get("revenue", 0)
+    needed = revenue - production + 1
+    fuels = ", ".join(f for f, s in _FUEL_BUCKET_SCOPE.items() if s == scope_group)
+    scope_label = "Scope 1" if scope_group == "scope_1" else "Scope 2"
+
+    return {
+        "scope_group": scope_group,
+        "current_grade": 4,
+        "target_grade": 3,
+        "missing": f"{fuels} 고지서 중 사용량(수량)이 기록된 건이 {needed}건 더 필요해요",
+        "benefit": f"{scope_label} 4등급 → 3등급 시 우대금리 대상 안내 가능",
+    }
+
+
+def quality_upgrade_candidates_for_company(
+    session: Session, company_id: int, reporting_year: int | None = None
+) -> list[dict]:
+    """한 기업의 Scope1·2 등급 상승 후보를 모두 모아 반환(0~2건).
+
+    reporting_year 생략 시 default_reporting_year로 채운다 — 사장님 리포트와 같은
+    "그 기업의 최신 전표 연도" 기준을 공유한다.
+    """
+    year = reporting_year if reporting_year is not None else default_reporting_year(session, company_id)
+    candidates = []
+    for scope_group in _UPGRADE_SCOPES:
+        candidate = quality_upgrade_candidate(session, company_id, year, scope_group)
+        if candidate is not None:
+            candidates.append(candidate)
+    return candidates
+
+
+def quality_rate_upgrade_candidates(session: Session) -> list[dict]:
+    """등급 상승 후보 전체 목록 — 관리자 "우대금리 자격 후보" 탭용.
+
+    기업마다 최대 2행(Scope1·Scope2 각각 독립 판정)을 낼 수 있다 — 구
+    db/pcaf.py::rate_upgrade_candidates는 기업당 최대 1행이었던 것과 다르다.
+    """
+    companies = session.execute(select(Company).order_by(Company.id)).scalars().all()
+    results = []
+    for company in companies:
+        year = default_reporting_year(session, company.id)
+        for candidate in quality_upgrade_candidates_for_company(session, company.id, year):
+            results.append({"company_id": company.id, "company_name": company.name, **candidate})
+    return results

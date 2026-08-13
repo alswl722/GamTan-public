@@ -412,10 +412,14 @@ class DocumentIngestionFailure(Base):
 class RateApprovalRequest(Base):
     """우대금리·설비금융 안내 승인요청 큐 (v1 §6 2주차).
 
-    기존 GET /admin/rate-candidates(db/pcaf.py::rate_upgrade_candidates)는 읽기 전용
-    "안내 후보" 목록일 뿐 사장님이 실제로 요청을 만드는 행위가 없었다. 이 테이블은
-    그 요청 자체와 은행 담당자의 승인/반려를 저장한다.
+    기존 GET /admin/rate-candidates(db/pcaf_quality.py::quality_rate_upgrade_candidates)는
+    읽기 전용 "안내 후보" 목록일 뿐 사장님이 실제로 요청을 만드는 행위가 없었다. 이
+    테이블은 그 요청 자체와 은행 담당자의 승인/반려를 저장한다.
 
+    scope_group은 rate_upgrade 요청에서 어느 Scope(scope_1|scope_2)에 대한 등급 상승
+    요청인지 저장한다 — 정식 엔진(db/pcaf_quality.py)은 Scope별로 독립 판정하므로 한
+    기업이 동시에 두 Scope의 후보일 수 있다. equipment_finance 요청과 이 컬럼 추가 이전의
+    과거 스냅샷은 null로 남는다.
     current_grade/target_grade는 요청 생성 시점 스냅샷 — 이후 재산정으로 등급이
     바뀌어도 요청 당시 근거가 그대로 남는다(감사 가능성).
     disclaimer_text는 승인/반려 응답에 항상 동반해야 하는 비보장 문구를 생성 시점에
@@ -429,6 +433,7 @@ class RateApprovalRequest(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
     request_type = Column(String(20), nullable=False, default="rate_upgrade")  # rate_upgrade | equipment_finance
+    scope_group = Column(String(20))  # scope_1 | scope_2 | null(equipment_finance·과거 스냅샷)
     current_grade = Column(SmallInteger)
     target_grade = Column(SmallInteger)
     missing_summary = Column(Text)
