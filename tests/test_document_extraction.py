@@ -71,22 +71,17 @@ def test_tax_invoice_has_no_quantity_fields():
     assert result["supply_amount_krw"] == 420_000
 
 
-def test_unparseable_pdf_raises():
-    """PDF는 맞지만 알려진 형식이 아니면 값을 지어내지 않고 명확히 실패한다
-    (실패 가시성 원칙 — 합성 mock 폴백 없음)."""
-    pdf = _minimal_pdf(["아무 문서", "관련 없는 내용"])
-    with pytest.raises(DocumentParseError):
-        extract_document(pdf, "electric_bill")
+def test_wrong_document_type_raises_immediately_without_vision_fallback(monkeypatch):
+    """전기요금고지서를 세금계산서 칸에 올리는 등 알려진 서식인데 슬롯이 틀리면,
+    비전으로 재시도해도 답이 바뀌지 않으므로 곧장 실패한다(API 호출 낭비 없음) —
+    extract_via_vision이 호출되지 않는 것까지 확인."""
+    import db.document_extraction as document_extraction
 
+    def _should_not_be_called(*a, **k):
+        raise AssertionError("알려진 서식인데 슬롯만 틀린 경우엔 비전 폴백을 타면 안 된다")
 
-def test_non_pdf_raises():
-    with pytest.raises(DocumentParseError):
-        extract_document(b"not a pdf at all", "tax_invoice")
+    monkeypatch.setattr(document_extraction, "extract_via_vision", _should_not_be_called)
 
-
-def test_wrong_document_type_raises_with_helpful_message():
-    """전기요금고지서를 세금계산서 칸에 올리는 등 엉뚱한 칸에 업로드하면
-    값을 억지로 맞추지 않고 어떤 문서인지 알려주며 실패한다."""
     pdf = _minimal_pdf([
         "전기요금 고지서",
         "청구월: 2025-06",
@@ -95,3 +90,42 @@ def test_wrong_document_type_raises_with_helpful_message():
     ])
     with pytest.raises(DocumentParseError, match="전기요금고지서"):
         extract_document(pdf, "tax_invoice")
+
+
+def test_unrecognized_format_falls_back_to_vision(monkeypatch):
+    """텍스트는 있지만 아예 모르는 서식(예: 국세청 표준 세금계산서)이면 비전
+    폴백을 탄다 — 합성 mock을 없앤 뒤 실제로 발견된 문제(구미정밀 현실 세금계산서)."""
+    import db.document_extraction as document_extraction
+
+    monkeypatch.setattr(
+        document_extraction, "extract_via_vision",
+        lambda file_bytes, document_type: {
+            "supplier_name": "구미에너지주유소", "item_description": "경유",
+            "supply_amount_krw": 460_617, "year": 2025, "month": 1,
+        },
+    )
+    pdf = _minimal_pdf(["전 자 세 금 계 산 서", "작성일자 공급가액", "2025-01-11 460,617"])
+    result = extract_document(pdf, "tax_invoice")
+    assert result["supplier_name"] == "구미에너지주유소"
+
+
+def test_no_text_layer_falls_back_to_vision(monkeypatch):
+    """텍스트 레이어가 아예 없으면(비-PDF, 실 사진 등) 곧장 비전 폴백을 탄다."""
+    import db.document_extraction as document_extraction
+
+    monkeypatch.setattr(
+        document_extraction, "extract_via_vision",
+        lambda file_bytes, document_type: {
+            "supplier_name": "한국전력공사", "item_description": "전기요금",
+            "supply_amount_krw": 100_000, "year": 2025, "month": 3,
+        },
+    )
+    result = extract_document(b"not a pdf at all", "electric_bill")
+    assert result["year"] == 2025
+
+
+def test_vision_fallback_failure_propagates():
+    """비전 폴백까지 실패하면(monkeypatch 없이 실제 _detect_mime_type이 못 알아보는
+    바이트) 값을 지어내지 않고 DocumentParseError 그대로 던진다."""
+    with pytest.raises(DocumentParseError):
+        extract_document(b"not a pdf at all", "tax_invoice")
