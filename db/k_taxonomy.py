@@ -53,15 +53,17 @@ def _empty_fields() -> dict:
     }
 
 
-def k_taxonomy_leads(session: Session) -> list[dict]:
-    """K택소노미·설비투자 리드 — finance_lead_type이 채워진 분류 건을 전 기업에서 모은다.
+def k_taxonomy_leads(session: Session, company_id: int | None = None) -> list[dict]:
+    """K택소노미·설비투자 리드 — finance_lead_type이 채워진 분류 건을 모은다.
 
-    관리자 화면(§13 "K택소노미 리드 리스트")용. 여신 결정이 아니라 안내 대상 목록일
-    뿐이다(CLAUDE.md §9). 정렬은 데이터 완전성(결손 개수)만 사용한다 — 감축 실적·
-    배출량 기반 순위는 금지한다(CLAUDE.md 원칙7). 담당자가 반려한 건(status='rejected')은
+    관리자 화면(§13 "K택소노미 리드 리스트")용. `company_id`를 주면 그 기업만 필터한다
+    (사장님 리포트용 k_taxonomy_leads_for_company가 이 필터를 재사용) — 생략하면 기존과
+    동일하게 전 기업을 대상으로 한다. 여신 결정이 아니라 안내 대상 목록일 뿐이다
+    (CLAUDE.md §9). 정렬은 데이터 완전성(결손 개수)만 사용한다 — 감축 실적·배출량
+    기반 순위는 금지한다(CLAUDE.md 원칙7). 담당자가 반려한 건(status='rejected')은
     신뢰할 수 없는 분류라 제외한다(다른 집계와 동일 규칙, db/pcaf.py::_after_measured 참고).
     """
-    rows = session.execute(
+    stmt = (
         select(Classification, Voucher, Company)
         .join(Voucher, Classification.voucher_id == Voucher.id)
         .join(Company, Voucher.company_id == Company.id)
@@ -70,7 +72,10 @@ def k_taxonomy_leads(session: Session) -> list[dict]:
             Classification.status != "rejected",
         )
         .order_by(Voucher.company_id, Classification.classified_at.desc())
-    ).all()
+    )
+    if company_id is not None:
+        stmt = stmt.where(Company.id == company_id)
+    rows = session.execute(stmt).all()
 
     gap_count_by_company: dict[int, int] = {}
     leads = []
@@ -95,3 +100,47 @@ def k_taxonomy_leads(session: Session) -> list[dict]:
     # 결손 적은(데이터 완전성 높은) 기업 우선 — 원칙7: 데이터 완전성만 정렬 기준.
     leads.sort(key=lambda lead: (lead["gap_count"], lead["company_id"]))
     return leads
+
+
+# k_taxonomy_mapping 시트(KT001~KT009) 실측 확인 — finance_lead_type은 이 5종뿐이다.
+# 사장님 눈높이 문구로 번역 — "리드"·"HITL"·"finance_lead_type" 같은 은행 내부 어휘는
+# 그대로 노출하지 않는다(ScopeQualitySection의 basis/limitations 은닉과 동일 원칙).
+_LEAD_TYPE_HINT: dict[str, str] = {
+    "녹색여신 후보": "친환경 설비로 확인됐어요. 녹색여신 대상일 수 있어요",
+    "녹색여신·설비금융 후보": "친환경 설비 투자로 확인됐어요. 녹색여신·설비금융 대상일 수 있어요",
+    "리스금융 후보": "저탄소 장비 도입으로 확인됐어요. 리스금융 안내를 받아보실 수 있어요",
+    "설비금융 후보": "설비투자로 확인됐어요. 설비금융 안내를 받아보실 수 있어요",
+    "환경설비금융 후보": "환경 개선 설비로 확인됐어요. 환경설비금융 안내를 받아보실 수 있어요",
+}
+
+
+def k_taxonomy_leads_for_company(session: Session, company_id: int) -> list[dict]:
+    """사장님 리포트용 — 한 기업의 K택소노미 리드를 설비 단위로 묶어 반환.
+
+    같은 설비가 여러 달에 걸쳐 청구되면(예: 태양광 설치비를 3개월 분할 계산서로 받음)
+    k_taxonomy_leads()에는 전표 건수만큼 행이 생긴다 — 사장님에게는 "같은 설비 얘기"를
+    여러 번 보여줄 필요가 없으므로 (설비유형, 리드유형) 기준으로 묶는다.
+
+    은행 내부 신호(k_taxonomy_hitl_required, gap_count, company_id/company_name)는
+    사장님 화면에 노출할 이유가 없어 반환 dict에서 제외한다.
+    """
+    raw = k_taxonomy_leads(session, company_id=company_id)
+
+    grouped: dict[tuple[str, str], dict] = {}
+    for lead in raw:
+        key = (lead["k_taxonomy_facility_type"], lead["finance_lead_type"])
+        existing = grouped.get(key)
+        if existing is None or lead["voucher_month"] > existing["voucher_month"]:
+            grouped[key] = {
+                "k_taxonomy_facility_type": lead["k_taxonomy_facility_type"],
+                "k_taxonomy_candidate_type": lead["k_taxonomy_candidate_type"],
+                "finance_lead_type": lead["finance_lead_type"],
+                "hint": _LEAD_TYPE_HINT.get(lead["finance_lead_type"], "친환경 설비로 확인됐어요"),
+                "item_description": lead["item_description"],
+                "voucher_month": lead["voucher_month"],
+                "occurrence_count": (existing["occurrence_count"] + 1) if existing else 1,
+            }
+        else:
+            existing["occurrence_count"] += 1
+
+    return sorted(grouped.values(), key=lambda g: g["k_taxonomy_facility_type"])

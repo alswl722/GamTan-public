@@ -6,6 +6,7 @@
 - GET   /owner/{company_id}/progress            5단계 위저드 실제 완료 상태 — 홈 화면 진행바·이어하기용
 - GET   /owner/{company_id}/rate-candidate      우대금리 등급 상승 후보 여부(있으면 요청 버튼 노출)
 - POST  /owner/{company_id}/rate-requests       우대금리·설비금융 안내 요청 생성 → 관리자 승인요청 큐
+- GET   /owner/{company_id}/k-taxonomy-leads    K택소노미·설비투자 리드(있으면 설비금융 안내 요청 버튼 노출)
 
 GET /admin/alerts(은행 담당자용 포트폴리오 전체)와 같은 판정 로직
 (db/alerts.py::detect_alerts)을 재사용하되 자기 기업으로만 필터한다 —
@@ -29,6 +30,7 @@ from db.alerts import detect_alerts
 from db.document_requirements import FuelTypes, required_documents
 from db.document_text_extractor import DocumentParseError
 from db.hometax_excel_parser import HometaxExcelFormatError
+from db.k_taxonomy import k_taxonomy_leads_for_company
 from db.models import Company
 from db.pcaf_quality import quality_upgrade_candidates_for_company
 from db.quality_issues import record_ingestion_failure
@@ -167,6 +169,9 @@ class RateRequestIn(BaseModel):
     request_type: Literal["rate_upgrade", "equipment_finance"] = "rate_upgrade"
     # rate_upgrade는 Scope별 독립 후보라(정식 엔진) 어느 Scope에 대한 요청인지 필수.
     scope_group: Literal["scope_1", "scope_2"] | None = None
+    # equipment_finance 전용 — K택소노미 리드 카드에서 어떤 설비인지 채워서 보낸다.
+    # rate_upgrade는 서버가 candidate에서 계산한 missing을 쓰므로 이 값을 무시한다.
+    missing_summary: str | None = None
 
 
 @router.get("/{company_id}/rate-candidate")
@@ -193,7 +198,11 @@ def submit_rate_request(
         raise HTTPException(status_code=422, detail="scope_group required for rate_upgrade")
     try:
         req = create_rate_request(
-            session, company_id, request_type=body.request_type, scope_group=body.scope_group
+            session,
+            company_id,
+            request_type=body.request_type,
+            scope_group=body.scope_group,
+            missing_summary=body.missing_summary,
         )
     except CompanyNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -211,3 +220,15 @@ def submit_rate_request(
         "status": req.status,
         "created_at": req.created_at.isoformat() if req.created_at else None,
     }
+
+
+@router.get("/{company_id}/k-taxonomy-leads")
+def k_taxonomy_leads(company_id: int, session: Session = Depends(get_session)):
+    """자기 기업의 K택소노미·설비투자 리드 — 설비 단위로 묶어서 반환(있으면 프론트가
+    "설비금융 안내 요청" 버튼을 노출한다).
+
+    룰 매칭 경로에서만 채워지는 필드라(LLM 분류 경로는 항상 비어 있음) 대다수
+    기업·기간은 빈 리스트가 정상이다. 은행 GET /admin/k-taxonomy-leads와 같은 원천
+    데이터를 자기 기업으로 좁혀 재사용한다(db/k_taxonomy.py::k_taxonomy_leads_for_company).
+    """
+    return {"leads": k_taxonomy_leads_for_company(session, company_id)}

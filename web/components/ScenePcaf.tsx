@@ -65,6 +65,20 @@ type RateRequestResponse = {
   disclaimer_text: string;
 };
 
+// GET /owner/{company_id}/k-taxonomy-leads — db/k_taxonomy.py::k_taxonomy_leads_for_company.
+// 룰 매칭 경로에서만 채워지는 필드라(LLM 분류 경로는 항상 비어 있음) 대다수 기업·기간은
+// 빈 배열이 정상이다 — 섹션 자체를 조건부로 숨긴다.
+type KTaxonomyLead = {
+  k_taxonomy_facility_type: string;
+  k_taxonomy_candidate_type: string | null;
+  finance_lead_type: string;
+  hint: string;
+  item_description: string;
+  voucher_month: number;
+  occurrence_count: number;
+};
+type KTaxonomyLeadsResponse = { leads: KTaxonomyLead[] };
+
 const fmt = (n: number) => n.toFixed(1);
 
 // PCAF 품질점수는 1(최정확)~5(최부정확)의 순서형 데이터라, 배출량 수치 크기가 아니라
@@ -405,6 +419,32 @@ export function ScenePcaf({ showHeading = true }: { showHeading?: boolean } = {}
   const [busyScope, setBusyScope] = useState<string | null>(null);
   const [requestError, setRequestError] = useState<{ scope: string; message: string } | null>(null);
 
+  const [kTaxonomyLeads, setKTaxonomyLeads] = useState<KTaxonomyLead[]>([]);
+  // 우대금리 카드와 같은 패턴 — 리드는 설비유형별로 최대 여러 건일 수 있어 요청
+  // 상태도 설비유형(k_taxonomy_facility_type)별로 따로 추적한다.
+  const [leadRequests, setLeadRequests] = useState<Record<string, RateRequestResponse>>({});
+  const [busyLeadKey, setBusyLeadKey] = useState<string | null>(null);
+  const [leadRequestError, setLeadRequestError] = useState<{ key: string; message: string } | null>(null);
+
+  async function submitLeadRequest(lead: KTaxonomyLead) {
+    const key = lead.k_taxonomy_facility_type;
+    setBusyLeadKey(key);
+    setLeadRequestError(null);
+    try {
+      const cid = await getCompanyId();
+      const res = await apiPost<RateRequestResponse>(`/owner/${cid}/rate-requests`, {
+        request_type: "equipment_finance",
+        missing_summary: `${lead.k_taxonomy_facility_type} · ${lead.item_description}`,
+      });
+      setLeadRequests((prev) => ({ ...prev, [key]: res }));
+    } catch (err) {
+      console.error("설비금융 안내 요청 실패:", err);
+      setLeadRequestError({ key, message: "요청에 실패했습니다. 잠시 후 다시 시도해 주세요." });
+    } finally {
+      setBusyLeadKey(null);
+    }
+  }
+
   async function submitRateRequest(scopeGroup: string) {
     setBusyScope(scopeGroup);
     setRequestError(null);
@@ -439,6 +479,10 @@ export function ScenePcaf({ showHeading = true }: { showHeading?: boolean } = {}
       apiGet<RateCandidateResponse>(`/owner/${cid}/rate-candidate`)
         .then((r) => setRateCandidate(r))
         .catch((err) => console.error("우대금리 후보 조회 실패(부가 정보라 화면은 계속 진행):", err));
+      // K택소노미 리드도 부가 정보 — 대다수 기업은 빈 배열이 정상이다.
+      apiGet<KTaxonomyLeadsResponse>(`/owner/${cid}/k-taxonomy-leads`)
+        .then((r) => setKTaxonomyLeads(r.leads))
+        .catch((err) => console.error("K택소노미 리드 조회 실패(부가 정보라 화면은 계속 진행):", err));
       // 월별 배출 추이만 구 엔진에서 재사용(파일 상단 주석 참고) — 부가 정보라
       // 실패해도 리포트 본문(Scope 품질 후보)은 그대로 보여준다.
       apiGet<LegacyPcafResponse>(`/pcaf/${cid}`)
@@ -543,6 +587,49 @@ export function ScenePcaf({ showHeading = true }: { showHeading?: boolean } = {}
               {a.message}
             </div>
           ))}
+        </div>
+      )}
+
+      {kTaxonomyLeads.length > 0 && (
+        <div className="mt-3 space-y-3 rounded-2xl bg-surface p-5">
+          <div>
+            <div className="text-[13px] font-semibold text-ink">친환경 설비 투자 안내</div>
+            <p className="mt-1 text-[11.5px] leading-relaxed text-faint">
+              전표에서 확인된 친환경·저탄소 설비예요.
+            </p>
+          </div>
+
+          {kTaxonomyLeads.map((lead) => {
+            const key = lead.k_taxonomy_facility_type;
+            return (
+              <div key={key} className="rounded-xl bg-bg p-4">
+                <div className="text-[12.5px] font-semibold text-ink">
+                  {lead.k_taxonomy_facility_type}
+                </div>
+                <p className="mt-1 text-[12.5px] leading-relaxed text-muted">{lead.hint}</p>
+
+                {leadRequests[key] ? (
+                  <div className="mt-3 rounded-xl bg-brand-soft px-3.5 py-2.5 text-center text-[12.5px] font-semibold text-brand-ink">
+                    요청됐어요. 담당 은행원이 확인 후 안내드려요
+                  </div>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => void submitLeadRequest(lead)}
+                      disabled={busyLeadKey === key}
+                      className="btn-cta mt-3 w-full rounded-2xl bg-brand py-3 text-[13.5px] font-bold text-white disabled:opacity-60"
+                    >
+                      {busyLeadKey === key ? "요청하는 중…" : "설비금융 안내 요청"}
+                    </button>
+                    {leadRequestError?.key === key && (
+                      <p className="mt-2 text-[11.5px] text-red-600">{leadRequestError.message}</p>
+                    )}
+                  </>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 
