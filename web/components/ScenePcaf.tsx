@@ -393,7 +393,7 @@ function CompletenessCard({ scope1, scope2 }: { scope1: ScopeQuality; scope2: Sc
   );
 }
 
-export function ScenePcaf() {
+export function ScenePcaf({ showHeading = true }: { showHeading?: boolean } = {}) {
   const [data, setData] = useState<QualityReportResponse | null>(null);
   const [monthly, setMonthly] = useState<MonthlyRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -496,9 +496,11 @@ export function ScenePcaf() {
 
   return (
     <section>
-      <h2 className="text-[17px] font-bold leading-snug text-ink">
-        측정이 끝났어요
-      </h2>
+      {showHeading && (
+        <h2 className="text-[17px] font-bold leading-snug text-ink">
+          측정이 끝났어요
+        </h2>
+      )}
       <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
         {bankReviewRequired && (
           <span className="rounded-full bg-hitl/25 px-2 py-0.5 text-[10.5px] font-semibold text-hitl-ink">

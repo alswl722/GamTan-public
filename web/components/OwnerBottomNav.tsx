@@ -5,12 +5,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Home, Leaf } from "lucide-react";
+import { FileBarChart, Home } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const ITEMS = [
   { href: "/owner", label: "홈", icon: Home, exact: true },
-  { href: "/owner/measure", label: "탄소측정", icon: Leaf, exact: false },
+  { href: "/owner/report", label: "탄소 리포트", icon: FileBarChart, exact: false },
 ] as const;
 
 export function OwnerBottomNav() {
