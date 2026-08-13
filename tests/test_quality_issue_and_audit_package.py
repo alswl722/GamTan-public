@@ -100,7 +100,9 @@ def test_list_ingestion_failures_includes_company_name_and_label(db):
         session, cid, document_type="tax_invoice", original_filename="x.xlsx",
         failure_reason="excel_format", detail="헤더 열이 다릅니다",
     )
-    issues = list_ingestion_failures(session)
+    result = list_ingestion_failures(session)
+    assert result["total"] == 1
+    issues = result["issues"]
     assert len(issues) == 1
     assert issues[0]["company_name"] == "○○정밀"
     assert issues[0]["failure_reason_label"] == "엑셀 형식 오류"
@@ -116,9 +118,27 @@ def test_list_ingestion_failures_ordered_most_recent_first(db):
         session, cid, document_type="gas_bill", original_filename="b.jpg",
         failure_reason="parse_error", detail="두번째 실패",
     )
-    issues = list_ingestion_failures(session)
+    issues = list_ingestion_failures(session)["issues"]
     assert issues[0]["detail"] == "두번째 실패"
     assert issues[1]["detail"] == "첫 실패"
+
+
+def test_list_ingestion_failures_paginates_and_filters_by_company(db):
+    session, cid = db
+    for i in range(3):
+        record_ingestion_failure(
+            session, cid, document_type="gas_bill", original_filename=f"{i}.jpg",
+            failure_reason="duplicate", detail=f"실패 {i}",
+        )
+    page1 = list_ingestion_failures(session, page=1, page_size=2)
+    assert page1["total"] == 3
+    assert len(page1["issues"]) == 2
+    page2 = list_ingestion_failures(session, page=2, page_size=2)
+    assert len(page2["issues"]) == 1
+
+    other = list_ingestion_failures(session, company_name="존재하지않는기업")
+    assert other["total"] == 0
+    assert other["issues"] == []
 
 
 # ── API 라우터 — GET /admin/quality-issues ────────────────────────────────────

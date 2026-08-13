@@ -8,12 +8,26 @@ import type {
   ClassificationEdit,
   DocumentAccessLogEntry,
   HitlItem,
+  PageMeta,
   PortfolioResponse,
   QualityIssueEntry,
   ReviewLogEntry,
   TraceRunItem,
   TraceStep,
 } from "@/lib/admin-types";
+
+/** 서버사이드 페이지네이션 요청 공통 파라미터 — review-log/access-log/quality-issues 공유. */
+export interface PageParams {
+  page?: number;
+  pageSize?: number;
+  companyName?: string;
+}
+
+function pageQuery({ page = 1, pageSize = 50, companyName }: PageParams): string {
+  const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+  if (companyName?.trim()) params.set("company_name", companyName.trim());
+  return params.toString();
+}
 
 // ── 실 API ──────────────────────────────────────────────────────────────
 export function getPortfolio(): Promise<PortfolioResponse> {
@@ -51,8 +65,10 @@ export function bulkReject(voucherIds: number[]): Promise<{ results: BulkActionR
   return apiPatch("/admin/classifications/bulk-reject", { voucher_ids: voucherIds });
 }
 
-export function getReviewLog(): Promise<ReviewLogEntry[]> {
-  return apiGet<{ entries: ReviewLogEntry[] }>("/admin/review-log").then((r) => r.entries);
+export function getReviewLog(
+  params: PageParams = {},
+): Promise<{ entries: ReviewLogEntry[] } & PageMeta> {
+  return apiGet(`/admin/review-log?${pageQuery(params)}`);
 }
 
 export function getTraceRuns(): Promise<TraceRunItem[]> {
@@ -69,15 +85,17 @@ export function getAlerts(): Promise<AlertItem[]> {
 }
 
 /** 원본문서 접근 감사 로그 — 열람 이벤트 자체의 기록(review-log와 다른 축). */
-export function getDocumentAccessLog(): Promise<DocumentAccessLogEntry[]> {
-  return apiGet<{ entries: DocumentAccessLogEntry[] }>("/admin/documents/access-log").then(
-    (r) => r.entries,
-  );
+export function getDocumentAccessLog(
+  params: PageParams = {},
+): Promise<{ entries: DocumentAccessLogEntry[] } & PageMeta> {
+  return apiGet(`/admin/documents/access-log?${pageQuery(params)}`);
 }
 
 /** 품질 이슈 로그(열람 전용) — 업로드 반려·실패 이력만 모은다(v1 Tier 2). */
-export function getQualityIssues(): Promise<QualityIssueEntry[]> {
-  return apiGet<{ issues: QualityIssueEntry[] }>("/admin/quality-issues").then((r) => r.issues);
+export function getQualityIssues(
+  params: PageParams = {},
+): Promise<{ issues: QualityIssueEntry[] } & PageMeta> {
+  return apiGet(`/admin/quality-issues?${pageQuery(params)}`);
 }
 
 /** 감사 대응 근거 패키지 CSV 내보내기 URL — 다운로드 링크로 그대로 사용(fetch 불필요). */

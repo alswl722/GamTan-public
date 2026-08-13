@@ -3,37 +3,20 @@
 /**
  * 관리자 대시보드 — 은행 ESG·여신 담당자 화면.
  * 실데이터: 포트폴리오 집계·담당자 검토 큐·실행 이력·이상 신호 알림 (백엔드 실제 응답).
+ * 변경 이력·원본문서 접근 로그·품질 이슈 로그는 각자 서버사이드 페이지네이션으로
+ * 자체 조회한다(DashboardShell 하위 컴포넌트) — 여기서는 최초 로딩에 포함하지 않는다.
  * 목업(예시): 검증 오차율 (결선 확장 — 화면에 '예시' 표식).
  */
 import { useCallback, useEffect, useState } from "react";
-import {
-  getAlerts,
-  getDocumentAccessLog,
-  getHitl,
-  getPortfolio,
-  getQualityIssues,
-  getReviewLog,
-  getTraceRuns,
-} from "@/lib/admin-data";
-import type {
-  AlertItem,
-  DocumentAccessLogEntry,
-  HitlItem,
-  PortfolioResponse,
-  QualityIssueEntry,
-  ReviewLogEntry,
-  TraceRunItem,
-} from "@/lib/admin-types";
+import { getAlerts, getHitl, getPortfolio, getTraceRuns } from "@/lib/admin-data";
+import type { AlertItem, HitlItem, PortfolioResponse, TraceRunItem } from "@/lib/admin-types";
 import { DashboardShell } from "@/components/admin/DashboardShell";
 
 type Data = {
   portfolio: PortfolioResponse;
   hitlQueue: HitlItem[];
   traceRuns: TraceRunItem[];
-  reviewLog: ReviewLogEntry[];
   alerts: AlertItem[];
-  documentAccessLog: DocumentAccessLogEntry[];
-  qualityIssues: QualityIssueEntry[];
 };
 
 export default function AdminPage() {
@@ -43,34 +26,9 @@ export default function AdminPage() {
   const load = useCallback(() => {
     setError(false);
     setData(null);
-    Promise.all([
-      getPortfolio(),
-      getHitl(),
-      getTraceRuns(),
-      getReviewLog(),
-      getAlerts(),
-      getDocumentAccessLog(),
-      getQualityIssues(),
-    ])
-      .then(
-        ([
-          portfolio,
-          hitlQueue,
-          traceRuns,
-          reviewLog,
-          alerts,
-          documentAccessLog,
-          qualityIssues,
-        ]) =>
-          setData({
-            portfolio,
-            hitlQueue,
-            traceRuns,
-            reviewLog,
-            alerts,
-            documentAccessLog,
-            qualityIssues,
-          }),
+    Promise.all([getPortfolio(), getHitl(), getTraceRuns(), getAlerts()])
+      .then(([portfolio, hitlQueue, traceRuns, alerts]) =>
+        setData({ portfolio, hitlQueue, traceRuns, alerts }),
       )
       .catch((err) => {
         console.error("대시보드 데이터 조회 실패:", err);
@@ -79,13 +37,6 @@ export default function AdminPage() {
   }, []);
 
   useEffect(load, [load]);
-
-  /** 검토 조치 후 변경 이력만 조용히 다시 불러온다 — 전체 재로딩(깜빡임) 없이 최신 상태 유지. */
-  const refreshReviewLog = useCallback(() => {
-    getReviewLog()
-      .then((reviewLog) => setData((prev) => (prev ? { ...prev, reviewLog } : prev)))
-      .catch((err) => console.error("변경 이력 갱신 실패:", err));
-  }, []);
 
   if (error) {
     return (
@@ -117,11 +68,7 @@ export default function AdminPage() {
       portfolio={data.portfolio}
       hitlQueue={data.hitlQueue}
       traceRuns={data.traceRuns}
-      reviewLog={data.reviewLog}
       alerts={data.alerts}
-      documentAccessLog={data.documentAccessLog}
-      qualityIssues={data.qualityIssues}
-      onReviewed={refreshReviewLog}
     />
   );
 }

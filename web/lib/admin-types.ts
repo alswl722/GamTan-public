@@ -3,6 +3,13 @@
  * (id·month는 숫자, nullable 필드 명시 — v0 목업의 string 가정과 다름)
  */
 
+/** 서버사이드 페이지네이션 메타 — review-log/documents/access-log/quality-issues 공통. */
+export interface PageMeta {
+  total: number;
+  page: number;
+  page_size: number;
+}
+
 export interface Company {
   company_id: number;
   company_name: string;
