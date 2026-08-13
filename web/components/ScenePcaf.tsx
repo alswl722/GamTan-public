@@ -110,9 +110,22 @@ const SCOPE_LABEL: Record<string, string> = { scope_1: "Scope 1", scope_2: "Scop
 // 한 카드에 담는다. basis/limitations는 db/pcaf_quality.py가 이미 완결된 한국어
 // 문장으로 만들어 저장해두므로(코드가 유일한 명세), 프론트에서 옵션코드→설명
 // 매핑을 따로 두지 않고 그대로 나열한다.
-function ScopeQualityCard({ data }: { data: ScopeQuality }) {
+// basis/limitations(db/pcaf_quality.py가 만든 원문 — "Option 3a", "Table 10.1-2" 등
+// PCAF 표준 인용문)는 은행 담당자용 감사 근거 문장이라 사장님껜 그대로 노출하지
+// 않는다. 대신 activity_data_basis 값 하나만 보고 사장님 말투로 요약한다.
+const ACTIVITY_BASIS_LABEL: Record<string, string> = {
+  verified_emissions: "직접 보고하고 제3자 검증까지 받은 값이에요",
+  unverified_emissions: "직접 계산해서 보고한 값이에요(제3자 검증 전)",
+  energy_consumption: "실제 에너지 사용량을 기준으로 계산한 값이에요",
+  production: "실제 사용 수량을 기준으로 계산한 값이에요",
+  revenue: "매출액을 기준으로 추정한 값이에요(실측 아님)",
+  assets: "자산 규모를 기준으로 추정한 값이에요(실측 아님)",
+  asset_turnover_ratio: "자산 회전율을 기준으로 추정한 값이에요(실측 아님)",
+};
+
+function ScopeQualitySection({ data }: { data: ScopeQuality }) {
   return (
-    <div className="mt-3 rounded-2xl bg-surface p-5">
+    <div>
       <div className="flex items-center justify-between">
         <span className="text-[13px] font-semibold text-ink">{SCOPE_LABEL[data.scope_group]}</span>
         {data.candidate_score != null && (
@@ -148,19 +161,10 @@ function ScopeQualityCard({ data }: { data: ScopeQuality }) {
             </div>
           )}
 
-          {data.basis.length > 0 && (
-            <ul className="mt-3 space-y-1 text-[11px] leading-relaxed text-muted">
-              {data.basis.map((b, i) => (
-                <li key={i}>· {b}</li>
-              ))}
-            </ul>
-          )}
-          {data.limitations.length > 0 && (
-            <ul className="mt-2 space-y-1 text-[10.5px] leading-relaxed text-faint">
-              {data.limitations.map((l, i) => (
-                <li key={i}>· {l}</li>
-              ))}
-            </ul>
+          {data.activity_data_basis && (
+            <p className="mt-3 text-[11px] leading-relaxed text-muted">
+              {ACTIVITY_BASIS_LABEL[data.activity_data_basis] ?? data.activity_data_basis}
+            </p>
           )}
         </>
       ) : (
@@ -430,8 +434,12 @@ export function ScenePcaf() {
         </span>
       </div>
 
-      <ScopeQualityCard data={scope_1} />
-      <ScopeQualityCard data={scope_2} />
+      <div className="mt-3 rounded-2xl bg-surface p-5">
+        <ScopeQualitySection data={scope_1} />
+        <div className="mt-4 border-t border-line pt-4">
+          <ScopeQualitySection data={scope_2} />
+        </div>
+      </div>
 
       <BenchmarkCard benchmark={benchmark} hasDistribution={hasDistribution} />
 
