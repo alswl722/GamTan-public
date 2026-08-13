@@ -120,7 +120,7 @@ export default function OwnerHomePage() {
             확인해보세요
           </span>
           <span className="flex shrink-0 items-center gap-1">
-            <Image src="/ddockdi_1.png" alt="" width={130} height={149} className="shrink-0" />
+            <Image src="/ddockdi_1.png" alt="" width={90} height={103} className="shrink-0" />
             <ChevronRight size={16} className="shrink-0 text-faint" />
           </span>
         </span>
