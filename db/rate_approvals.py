@@ -14,7 +14,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from db.models import Company, RateApprovalRequest
-from db.pcaf_quality import default_reporting_year, quality_upgrade_candidate
+from db.pcaf_quality import default_reporting_year
+from db.rate_products import rate_product_status_for_scope
 
 DISCLAIMER_TEXT = (
     "본 안내는 데이터 완전성 개선을 제안할 뿐 PCAF 등급 상승이나 우대금리·설비금융 "
@@ -27,7 +28,10 @@ class CompanyNotFoundError(Exception):
 
 
 class NoUpgradeCandidateError(Exception):
-    """결손을 채워도 등급이 오르지 않거나 결손 자체가 없어 요청 근거가 없을 때."""
+    """해당 Scope에 활동자료(전표) 자체가 없어 요청 근거가 없을 때.
+
+    "이미 최고 등급"은 더 이상 이 예외의 사유가 아니다 — db/rate_products.py 도입
+    이후 이미 등급 조건을 충족한 상태도 "이미 대상" 요청으로 허용한다."""
 
 
 class InvalidScopeError(Exception):
@@ -60,10 +64,13 @@ def create_rate_request(
     등급이 바뀌어도 요청 당시 근거가 감사 가능하게 그대로 남는다. disclaimer_text도
     생성 시점에 고정해 문구 정책이 바뀌어도 과거 요청은 요청 당시 그대로 보존된다.
 
-    request_type="rate_upgrade"는 정식 엔진(db/pcaf_quality.py) 기준 Scope별 후보
-    판정을 쓴다 — 한 기업이 Scope1·Scope2 각각 독립적으로 후보일 수 있어 scope_group을
-    반드시 지정해야 한다(어느 Scope에 대한 요청인지 스냅샷에 남기기 위함). 이 경로는
-    missing_summary를 서버가 candidate에서 계산하므로 인자로 받은 값은 무시한다.
+    request_type="rate_upgrade"는 db/rate_products.py::rate_product_status_for_scope
+    (정식 엔진 db/pcaf_quality.py 기준) 판정을 쓴다 — 한 기업이 Scope1·Scope2 각각
+    독립적으로 후보일 수 있어 scope_group을 반드시 지정해야 한다. status가 "eligible"
+    (이미 등급 조건 충족)이면 current_grade=target_grade로 스냅샷하고 matched_product_name을
+    채운다 — "이미 대상"이어도 은행 확인을 요청할 수 있다. "upgrade_needed"면 기존과
+    동일하게 목표 등급·결손 안내를 스냅샷한다. 이 경로는 missing_summary를 서버가
+    계산하므로 인자로 받은 값은 무시한다.
 
     request_type="equipment_finance"(설비금융)는 등급 스냅샷 없이도 요청을 만들 수 있다
     — missing_summary는 호출부가 채운다(사장님 리포트의 K택소노미 리드 카드는
@@ -80,21 +87,33 @@ def create_rate_request(
                 f"scope_group은 scope_1|scope_2여야 함(전달값: {scope_group!r})"
             )
         year = default_reporting_year(session, company_id)
-        candidate = quality_upgrade_candidate(session, company_id, year, scope_group)
-        if candidate is None:
+        status = rate_product_status_for_scope(session, company_id, year, scope_group)
+        if status is None:
             raise NoUpgradeCandidateError(
-                f"company_id={company_id} scope_group={scope_group} 등급 상승 후보 아님 "
-                "— 활동자료가 없거나 이미 도달 가능한 최고 등급임"
+                f"company_id={company_id} scope_group={scope_group} 활동자료 없음 "
+                "— 우대금리 안내 요청 근거 없음"
             )
-        req = RateApprovalRequest(
-            company_id=company_id,
-            request_type=request_type,
-            scope_group=scope_group,
-            current_grade=candidate["current_grade"],
-            target_grade=candidate["target_grade"],
-            missing_summary=candidate["missing"],
-            disclaimer_text=DISCLAIMER_TEXT,
-        )
+        if status["status"] == "eligible":
+            req = RateApprovalRequest(
+                company_id=company_id,
+                request_type=request_type,
+                scope_group=scope_group,
+                current_grade=status["candidate_score"],
+                target_grade=status["candidate_score"],
+                missing_summary="이미 조건을 충족했어요 — 확인을 요청합니다",
+                matched_product_name=", ".join(p["product_name"] for p in status["products"]),
+                disclaimer_text=DISCLAIMER_TEXT,
+            )
+        else:
+            req = RateApprovalRequest(
+                company_id=company_id,
+                request_type=request_type,
+                scope_group=scope_group,
+                current_grade=status["current_grade"],
+                target_grade=status["target_grade"],
+                missing_summary=status["missing"],
+                disclaimer_text=DISCLAIMER_TEXT,
+            )
     else:
         req = RateApprovalRequest(
             company_id=company_id,

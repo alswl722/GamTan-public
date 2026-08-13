@@ -9,6 +9,7 @@
 """
 import io
 
+import pdfplumber
 import pytest
 from fastapi.testclient import TestClient
 from reportlab.pdfbase import pdfmetrics

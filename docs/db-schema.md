@@ -6,7 +6,7 @@
 이 문서는 두 세대의 스키마를 함께 담고 있다.
 
 - **v0.1 코어 엔진 테이블** (§1~8) — 전표→탄소량 변환 파이프라인. 데모부터 지금까지 교체 없이 계속 사용 중.
-- **v1 기관/PCAF 테이블** (§9~22) — 여신 포트폴리오 단위 금융배출량(PCAF Business Loans) 산정 레이어(§9~21)와 그 위의 관리자 승인요청·감사 로그(§15, §22, 2주차 추가)까지 포함. `financial_institutions`를 데이터 격리의 루트로 두고, 기존 v0.1 테이블(`vouchers`, `classifications`)에는 소속 기관을 가리키는 FK만 nullable로 얹었다(§23 참고).
+- **v1 기관/PCAF 테이블** (§9~23) — 여신 포트폴리오 단위 금융배출량(PCAF Business Loans) 산정 레이어(§9~21)와 그 위의 관리자 승인요청·감사 로그·상품 참조 테이블(§15, §22~23, 2주차 추가)까지 포함. `financial_institutions`를 데이터 격리의 루트로 두고, 기존 v0.1 테이블(`vouchers`, `classifications`)에는 소속 기관을 가리키는 FK만 nullable로 얹었다(§24 참고).
 
 ## 1. `companies` — 기업
 | 컬럼 | 타입 | 키/제약 | 설명 |
@@ -385,9 +385,11 @@ PCAF Standard Part A Third Edition, Table 10.1-2(Annex, p.192)의 Option 1a/1b/2
 | id | INTEGER | PK | |
 | company_id | INTEGER | FK→companies.id, NN | |
 | request_type | VARCHAR(20) | NN, CK, default 'rate_upgrade' | `rate_upgrade` \| `equipment_finance` |
-| current_grade | SMALLINT | | 요청 생성 시점 PCAF 등급 스냅샷 |
-| target_grade | SMALLINT | | 결손을 채웠을 때의 예상 등급 스냅샷 |
+| scope_group | VARCHAR(20) | | `scope_1` \| `scope_2` \| null(equipment_finance·0014 이전 과거 스냅샷) — 정식 엔진은 Scope별 독립 판정이라 한 기업이 두 Scope 모두 후보일 수 있다(0014 마이그레이션) |
+| current_grade | SMALLINT | | 요청 생성 시점 PCAF 등급 스냅샷 — 이미 자격 충족 상태면 target_grade와 동일값 |
+| target_grade | SMALLINT | | 결손을 채웠을 때의 예상 등급, 또는 이미 도달한 등급(스냅샷) |
 | missing_summary | TEXT | | 필요 데이터 요약(생성 시점 고정) |
+| matched_product_name | VARCHAR(200) | | 매칭된 `rate_products.product_name` 스냅샷(FK 아님) — "이미 대상" 상태 요청에서만 채워짐(0016) |
 | disclaimer_text | TEXT | NN | 비보장 문구 — 생성 시점에 고정 저장(정책이 바뀌어도 과거 요청 문구는 그대로) |
 | status | VARCHAR(20) | NN, CK, default 'pending' | `pending` \| `approved` \| `rejected` |
 | reviewed_by | VARCHAR(100) | | |
@@ -399,9 +401,26 @@ PCAF Standard Part A Third Edition, Table 10.1-2(Annex, p.192)의 Option 1a/1b/2
 
 > 기존 `GET /admin/rate-candidates`(§16 `pcaf_quality_rules`와는 무관, `db/pcaf.py::rate_upgrade_candidates`)는 읽기 전용 "안내 후보" 목록만 계산할 뿐 저장하지 않는다. 이 테이블은 사장님이 그 안내를 보고 실제로 만든 요청과, 은행 담당자의 승인/반려를 저장한다. 승인은 여신 결정이 아니다(§3 원칙6, 원칙9) — "안내 대상으로 확인했다"는 수동 확인이며, `current_grade`/`target_grade`/`missing_summary`는 이후 재산정과 무관하게 요청 당시 근거를 그대로 보존한다. `classifications`(분류 신뢰도) 기반 HITL 큐와는 데이터·엔드포인트가 완전히 분리돼 있다.
 
+## 23. `rate_products` — 우대금리 참조 상품 (v1 2주차, 0016)
+| 컬럼 | 타입 | 키/제약 | 설명 |
+| --- | --- | --- | --- |
+| id | INTEGER | PK | |
+| product_name | VARCHAR(200) | NN | 예: "ESG Grow-Up 특별대출" |
+| provider_name | VARCHAR(100) | NN | 예: "iM뱅크" |
+| min_data_quality_score | SMALLINT | NN, CK | 이 점수 이하(=이 등급 이상 고품질)면 자격 충족(PCAF 1=최고~5=최저) |
+| rate_discount_pct | NUMERIC(4,2) | NN | 우대금리 폭(%p) — 상품 공시 안내값, 확정 금리 아님 |
+| eligibility_description | TEXT | NN | |
+| source_reference | TEXT | NN | 실제 상품 공시 페이지 출처 |
+| disclaimer_note | TEXT | | |
+| created_at | TIMESTAMPTZ | default now | |
+
+**CK** `ck_rate_products_min_data_quality_score`
+
+> `pcaf_quality_rules`(§16)와 동일한 패턴 — 코드가 원 소스(`db/init_db.py::seed_rate_products`), 임의 수치를 지어내지 않고 실제 은행 상품의 공시 조건 중 이 프로젝트가 실제로 만드는 데이터(PCAF Scope 1·2 품질등급)로 증빙 가능한 티어만 시드한다. `db/rate_products.py::rate_product_status_for_company`가 `db/pcaf_quality.py::assess_borrower_emission_quality`의 `candidate_score`와 `min_data_quality_score`를 비교해 "eligible"(이미 자격 충족) 또는 "upgrade_needed"(등급 개선 필요, `db/pcaf_quality.py::quality_upgrade_candidate` 재사용)로 판정한다 — LLM 미호출, 결정론적 코드만.
+
 ---
 
-## 23. 참고
+## 24. 참고
 
 - 정본은 `db/models.py`. 스키마 변경은 전부 Alembic 마이그레이션(`alembic/versions/`)으로 관리 — `Base.metadata.create_all` 직접 호출이나 `init_db.py`의 수동 `ALTER TABLE`은 더 이상 쓰지 않는다.
 - 초기화: `alembic upgrade head`(스키마) + 마스터 데이터 시드는 `db/init_db.py`, 시연 데이터는 `db/seed_mock.py`.
@@ -411,6 +430,7 @@ PCAF Standard Part A Third Edition, Table 10.1-2(Annex, p.192)의 Option 1a/1b/2
 - `db/pcaf.py::rate_upgrade_candidates`(전체 기업 순회, 읽기 전용 안내 목록)는 단일 기업 판정 함수 `upgrade_candidate_for_company`로 리팩터링됐다 — `rate_approval_requests` 생성 시(§22) 동일 판정 로직을 재사용해 등급 스냅샷을 저장하기 위함(로직 중복 없음).
 
 ## 변경 이력
+- 2026-08(2주차): `rate_products`(§23) 추가 + `rate_approval_requests`(§22)에 `matched_product_name` 컬럼 — 우대금리 카드를 "이미 대상"/"개선 필요" 두 상태로 나누며 실제 iM뱅크 상품(ESG Grow-Up 특별대출)을 참조 시드. `0016_rate_products.py` 마이그레이션. §22 표에 그동안 누락돼 있던 `scope_group` 컬럼(0014)도 같이 반영.
 - 2026-08(2주차): §17 `borrower_emission_inventories.emission_tco2e`를 채우는 집계 로직(`aggregate_scope_emissions`) 추가 — 스키마 변경 없음, 계산 경로만 신규(§4 역할분담 "인벤토리 완전성 집계" 해소).
 - 2026-08(2주차): `source_document_access_logs`(§15), `rate_approval_requests`(§22) 추가 — 승인요청 큐(HITL 큐와 분리)와 원본문서 열람 감사 로그(PR #28). `0011_rate_approval_and_access_log.py` 마이그레이션.
 - 2026-08: v1 기관/PCAF 레이어(§9~21) 전면 추가, Alembic 도입 반영, PCAF 이원화 현황 명시.

@@ -153,4 +153,37 @@ export function getOwnerProgress(companyId: number): Promise<OwnerProgress> {
   return apiGet<OwnerProgress>(`/owner/${companyId}/progress`);
 }
 
+// GET /owner/{company_id}/rate-candidate — db/rate_products.py::rate_product_status_for_company.
+// status가 "eligible"(이미 상품 자격 충족) | "upgrade_needed"(등급 개선 필요)로 갈린다.
+// 이전엔 ScenePcaf.tsx 로컬 타입이었으나 web/components/RateProductCard.tsx로 카드가
+// 옮겨가며 공유 타입이 됐다.
+export interface RateProduct {
+  product_name: string;
+  provider_name: string;
+  rate_discount_pct: number;
+  eligibility_description: string;
+  source_reference: string;
+}
+export interface RateCandidate {
+  scope_group: "scope_1" | "scope_2";
+  status: "eligible" | "upgrade_needed";
+  candidate_score: number;
+  products?: RateProduct[];
+  current_grade?: number;
+  target_grade?: number;
+  missing?: string;
+  benefit?: string;
+  target_products?: RateProduct[];
+}
+export interface RateCandidateResponse {
+  candidates: RateCandidate[];
+  disclaimer_text: string;
+}
+
+/** 사장님 메인 화면의 우대금리 카드 — Scope별 상품 자격 상태(0~2건), 읽기 전용
+ * 안내(요청 제출 플로우는 관리자측 승인요청 큐가 이번 스코프에서 빠지며 함께 보류). */
+export function getRateCandidate(companyId: number): Promise<RateCandidateResponse> {
+  return apiGet<RateCandidateResponse>(`/owner/${companyId}/rate-candidate`);
+}
+
 export { BASE_URL };

@@ -443,6 +443,11 @@ class RateApprovalRequest(Base):
     reviewed_by = Column(String(100))
     reviewed_at = Column(DateTime(timezone=True))
     review_note = Column(Text)
+    # 어떤 상품(RateProduct.product_name)에 매칭돼 요청이 만들어졌는지 스냅샷 — FK가
+    # 아니라 current_grade/target_grade와 같은 원칙(요청 시점 근거 보존, 상품 조건이
+    # 나중에 바뀌어도 과거 요청은 그대로). "이미 대상"인 상태에서 만든 요청만 채워지고,
+    # 등급 개선이 필요한 요청·equipment_finance는 null로 남는다.
+    matched_product_name = Column(String(200))
     created_at = Column(DateTime(timezone=True), default=now)
 
     __table_args__ = (
@@ -456,6 +461,39 @@ class RateApprovalRequest(Base):
         ),
         Index("ix_rate_approval_requests_company", "company_id"),
         Index("ix_rate_approval_requests_status", "status"),
+    )
+
+
+class RateProduct(Base):
+    """우대금리 참조 상품 목록 (PcafQualityRule과 동일 패턴 — 코드가 원 소스).
+
+    db/init_db.py::seed_rate_products가 채운다. 임의로 지어낸 금리·조건이 아니라
+    실제 은행 상품(첫 시드는 iM뱅크 "ESG Grow-Up 특별대출")의 공시된 우대금리 티어를
+    참고한다 — 그중 감탄이 실제로 만드는 데이터(Scope 1·2 PCAF 데이터 품질등급)로
+    증빙 가능한 티어만 시드한다(과잉주장 금지, CLAUDE.md 원칙10).
+
+    min_data_quality_score: 이 점수 이하(=이 등급 이상 고품질)면 자격 충족 —
+    PCAF 품질점수는 1(최고)~5(최저) 순서형이라 "작을수록 우수"다.
+    rate_discount_pct: 우대금리 폭(%p). 실제 확정 금리가 아니라 상품 공시상 우대폭
+    안내이며, 최종 적용 여부·수치는 은행 담당자 심사에 따른다(원칙10).
+    """
+    __tablename__ = "rate_products"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    product_name = Column(String(200), nullable=False)
+    provider_name = Column(String(100), nullable=False)
+    min_data_quality_score = Column(SmallInteger, nullable=False)
+    rate_discount_pct = Column(Numeric(4, 2), nullable=False)
+    eligibility_description = Column(Text, nullable=False)
+    source_reference = Column(Text, nullable=False)
+    disclaimer_note = Column(Text)
+    created_at = Column(DateTime(timezone=True), default=now)
+
+    __table_args__ = (
+        CheckConstraint(
+            "min_data_quality_score BETWEEN 1 AND 5",
+            name="ck_rate_products_min_data_quality_score"
+        ),
     )
 
 
