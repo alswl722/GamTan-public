@@ -8,6 +8,7 @@ import type {
   ClassificationEdit,
   DocumentAccessLogEntry,
   HitlItem,
+  KTaxonomyLeadItem,
   PortfolioResponse,
   QualityIssueEntry,
   RateApprovalRequestItem,
@@ -68,6 +69,11 @@ export function getRateCandidates(): Promise<RateCandidateItem[]> {
   return apiGet<{ candidates: RateCandidateItem[] }>("/admin/rate-candidates").then(
     (r) => r.candidates,
   );
+}
+
+/** K택소노미·설비투자 리드 목록 — 정렬은 데이터 완전성만(감축 실적 기반 금지, 원칙7). */
+export function getKTaxonomyLeads(): Promise<KTaxonomyLeadItem[]> {
+  return apiGet<{ leads: KTaxonomyLeadItem[] }>("/admin/k-taxonomy-leads").then((r) => r.leads);
 }
 
 /**

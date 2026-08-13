@@ -66,6 +66,26 @@ def _add(session, cid, month, item, *, scope, emission, status, conf=0.9, fuel_t
     return v.id
 
 
+def _add_k_taxonomy_lead(session, cid, month, item, *, finance_lead_type,
+                          candidate_type, facility_type, hitl_required=True, status="auto"):
+    v = Voucher(company_id=cid, source="hometax", year=2025, month=month,
+                supplier_name="테스트", item_description=item,
+                supply_amount_krw=1_000_000, raw_json={})
+    session.add(v)
+    session.flush()
+    session.add(Classification(
+        voucher_id=v.id, scope=None, category="감축투자 후보", fuel_type=None,
+        amount_krw=1_000_000, emission_co2e=None, confidence=0.9,
+        evidence="테스트", method="rule", status=status,
+        finance_lead_type=finance_lead_type,
+        k_taxonomy_candidate_type=candidate_type,
+        k_taxonomy_facility_type=facility_type,
+        k_taxonomy_hitl_required=hitl_required,
+    ))
+    session.commit()
+    return v.id
+
+
 def test_portfolio_matches_per_company_summary(db):
     """포트폴리오 집계는 기업별 company_pcaf_summary(after 우선)와 일치해야 한다."""
     session, cid = db
@@ -566,3 +586,65 @@ def test_rate_candidates_excludes_company_without_gap(db, client):
     res = client.get("/admin/rate-candidates")
     ids = {c["company_id"] for c in res.json()["candidates"]}
     assert cid not in ids
+
+
+def test_k_taxonomy_leads_lists_only_finance_lead_type_filled(db, client):
+    """finance_lead_type이 채워진 분류 건만 리드로 나온다 — 일반 연료 전표는 제외."""
+    session, cid = db
+    _add_k_taxonomy_lead(session, cid, 3, "태양광 설비 설치",
+                          finance_lead_type="녹색여신 후보",
+                          candidate_type="재생에너지 설비", facility_type="태양광 설비")
+    _add(session, cid, 4, "도시가스 요금", scope=1, emission=500.0, status="auto")
+
+    res = client.get("/admin/k-taxonomy-leads")
+    leads = res.json()["leads"]
+    assert len(leads) == 1
+    lead = leads[0]
+    assert lead["company_id"] == cid
+    assert lead["company_name"] == "○○정밀"
+    assert lead["finance_lead_type"] == "녹색여신 후보"
+    assert lead["k_taxonomy_candidate_type"] == "재생에너지 설비"
+    assert lead["k_taxonomy_facility_type"] == "태양광 설비"
+    assert lead["item_description"] == "태양광 설비 설치"
+    assert lead["voucher_month"] == 3
+
+
+def test_k_taxonomy_leads_excludes_rejected(db, client):
+    """담당자가 반려한 리드 건은 신뢰할 수 없는 분류라 제외한다(다른 집계와 동일 규칙)."""
+    session, cid = db
+    _add_k_taxonomy_lead(session, cid, 1, "CNC 장비구매",
+                          finance_lead_type="설비금융 후보",
+                          candidate_type="설비투자(자동화)", facility_type="CNC 장비",
+                          hitl_required=False, status="rejected")
+
+    res = client.get("/admin/k-taxonomy-leads")
+    assert res.json()["leads"] == []
+
+
+def test_k_taxonomy_leads_sorted_by_data_completeness_only(db, client):
+    """정렬 기준은 데이터 완전성(결손 개수)만 — 감축 실적 기반 정렬 금지(CLAUDE.md 원칙7)."""
+    session, cid = db
+    other = Company(
+        name="후순위정밀", industry_code="C251", industry_name="구조용 금속제품 제조",
+        employee_count=8, revenue_krw=1_000_000_000, region="경북 구미시",
+    )
+    session.add(other)
+    session.commit()
+
+    # cid: 결손 다수(1월치만 실측) / other: 12개월 전부 실측 → 결손 없음
+    _add(session, cid, 1, "도시가스", scope=1, emission=1000.0, status="auto")
+    for m in range(1, 13):
+        _add(session, other.id, m, "도시가스", scope=1, emission=100.0, status="auto")
+        _add(session, other.id, m, "전기요금", scope=2, emission=50.0, status="auto")
+        _add(session, other.id, m, "경유", scope=1, emission=30.0, status="auto")
+
+    _add_k_taxonomy_lead(session, cid, 2, "태양광 설비 설치",
+                          finance_lead_type="녹색여신 후보",
+                          candidate_type="재생에너지 설비", facility_type="태양광 설비")
+    _add_k_taxonomy_lead(session, other.id, 2, "ESS 설치",
+                          finance_lead_type="녹색여신·설비금융 후보",
+                          candidate_type="에너지저장장치", facility_type="ESS")
+
+    res = client.get("/admin/k-taxonomy-leads")
+    leads = res.json()["leads"]
+    assert [lead["company_id"] for lead in leads] == [other.id, cid]  # 결손 적은 쪽(other) 먼저
