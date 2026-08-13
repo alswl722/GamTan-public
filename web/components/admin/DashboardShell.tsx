@@ -5,7 +5,6 @@ import type {
   AlertItem,
   DocumentAccessLogEntry,
   HitlItem,
-  KTaxonomyLeadItem,
   PortfolioResponse,
   QualityIssueEntry,
   ReviewLogEntry,
@@ -15,10 +14,10 @@ import { cn } from "@/lib/utils";
 import { AlertsPanel } from "@/components/admin/AlertsPanel";
 import { AuditLog } from "@/components/admin/AuditLog";
 import { AuditPackage } from "@/components/admin/AuditPackage";
+import { CompanyGradeList } from "@/components/admin/CompanyGradeList";
 import { DocumentAccessLog } from "@/components/admin/DocumentAccessLog";
 import { GradeDonut } from "@/components/admin/GradeDonut";
 import { HitlWorkspace } from "@/components/admin/HitlWorkspace";
-import { KTaxonomyLeads } from "@/components/admin/KTaxonomyLeads";
 import { QualityIssueLog } from "@/components/admin/QualityIssueLog";
 import { TraceHistory } from "@/components/admin/TraceHistory";
 import { VerificationBadge } from "@/components/admin/VerificationBadge";
@@ -27,7 +26,6 @@ const TABS = [
   { id: "hitl", label: "담당자 검토" },
   { id: "grades", label: "등급 분포" },
   { id: "risk", label: "여신 리스크" },
-  { id: "k-taxonomy", label: "K택소노미 리드" },
   { id: "trace", label: "실행 이력" },
   { id: "audit", label: "변경 이력" },
   { id: "quality-issues", label: "품질 이슈" },
@@ -44,7 +42,6 @@ export interface DashboardShellProps {
   alerts: AlertItem[];
   documentAccessLog: DocumentAccessLogEntry[];
   qualityIssues: QualityIssueEntry[];
-  kTaxonomyLeads: KTaxonomyLeadItem[];
   /** 담당자 검토 탭에서 확정/반려가 성공할 때마다 호출 — 변경 이력을 최신으로 다시 불러온다. */
   onReviewed?: () => void;
 }
@@ -57,7 +54,6 @@ export function DashboardShell({
   alerts,
   documentAccessLog,
   qualityIssues,
-  kTaxonomyLeads,
   onReviewed,
 }: DashboardShellProps) {
   const [activeTab, setActiveTab] = useState<TabId>("hitl");
@@ -95,12 +91,17 @@ export function DashboardShell({
         )}
 
         {activeTab === "grades" && (
-          <div className="grid h-full grid-cols-1 items-stretch gap-5 overflow-y-auto p-5 lg:grid-cols-3">
-            <div className="lg:col-span-2">
-              <GradeDonut data={portfolio} />
+          <div className="h-full space-y-5 overflow-y-auto p-5">
+            <div className="grid grid-cols-1 items-stretch gap-5 lg:grid-cols-3">
+              <div className="lg:col-span-2">
+                <GradeDonut data={portfolio} />
+              </div>
+              <div className="lg:col-span-1">
+                <VerificationBadge />
+              </div>
             </div>
-            <div className="lg:col-span-1">
-              <VerificationBadge />
+            <div className="h-[28rem]">
+              <CompanyGradeList companies={portfolio.companies} />
             </div>
           </div>
         )}
@@ -108,12 +109,6 @@ export function DashboardShell({
         {activeTab === "risk" && (
           <div className="h-full p-5">
             <AlertsPanel alerts={alerts} />
-          </div>
-        )}
-
-        {activeTab === "k-taxonomy" && (
-          <div className="h-full p-4">
-            <KTaxonomyLeads leads={kTaxonomyLeads} />
           </div>
         )}
 

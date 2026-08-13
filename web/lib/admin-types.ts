@@ -101,23 +101,6 @@ export interface AlertItem {
   message: string;
 }
 
-/**
- * K택소노미·설비투자 리드 — GET /admin/k-taxonomy-leads 응답 항목. finance_lead_type이
- * 채워져도 여신 결정이 아니라 안내 대상일 뿐이다(CLAUDE.md §9).
- */
-export interface KTaxonomyLeadItem {
-  company_id: number;
-  company_name: string;
-  industry_name: string | null;
-  finance_lead_type: string;
-  k_taxonomy_candidate_type: string | null;
-  k_taxonomy_facility_type: string | null;
-  k_taxonomy_hitl_required: boolean;
-  item_description: string;
-  voucher_month: number;
-  gap_count: number;
-}
-
 /** 원본문서 접근 감사 로그 한 건 — GET /admin/documents/access-log 응답 항목. */
 export interface DocumentAccessLogEntry {
   log_id: number;

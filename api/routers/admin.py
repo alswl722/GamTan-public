@@ -1,7 +1,6 @@
 """관리자 API — 은행 ESG·여신 담당자용 대시보드 데이터 소스.
 
 - GET   /admin/portfolio                      포트폴리오 금융배출량 집계 + PCAF 등급 분포
-- GET   /admin/k-taxonomy-leads                K택소노미·설비투자 리드 목록 (녹색여신·설비금융 안내 대상)
 - GET   /admin/hitl                           전 기업 담당자 검토 큐 (저신뢰 분류 건)
 - PATCH /admin/classifications/{id}/confirm   그대로 확정
 - PATCH /admin/classifications/{id}           분류 수정 후 확정 (담당자 교정)
@@ -41,7 +40,6 @@ from db.calc_engine import CalcDataGap, ClassifiedItemInput, compute_emission, \
 from db.audit_package import build_audit_package
 from db.audit_report_pdf import build_audit_report_pdf
 from db.document_access_log import access_history, record_access, recent_access_log
-from db.k_taxonomy import k_taxonomy_leads
 from db.models import Classification, Company, SourceDocument, TraceLog, Voucher
 from db.pcaf import portfolio_summary
 from db.quality_issues import list_ingestion_failures
@@ -67,16 +65,6 @@ class BulkAction(BaseModel):
 def portfolio(session: Session = Depends(get_session)):
     """거래 기업 전체의 Scope 1/2 합산 + PCAF 등급 분포 + 기업별 내역."""
     return portfolio_summary(session)
-
-
-@router.get("/k-taxonomy-leads")
-def k_taxonomy_leads_endpoint(session: Session = Depends(get_session)):
-    """K택소노미·설비투자 리드 목록 — 전 기업에서 finance_lead_type이 채워진 분류 건.
-
-    여신 결정이 아니라 안내 대상 목록이다(CLAUDE.md §9). 정렬은 데이터 완전성만
-    사용한다(원칙7).
-    """
-    return {"leads": k_taxonomy_leads(session)}
 
 
 @router.get("/hitl")

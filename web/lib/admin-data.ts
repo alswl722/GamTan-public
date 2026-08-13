@@ -8,7 +8,6 @@ import type {
   ClassificationEdit,
   DocumentAccessLogEntry,
   HitlItem,
-  KTaxonomyLeadItem,
   PortfolioResponse,
   QualityIssueEntry,
   ReviewLogEntry,
@@ -67,11 +66,6 @@ export function getTraceSteps(sessionId: string): Promise<TraceStep[]> {
 
 export function getAlerts(): Promise<AlertItem[]> {
   return apiGet<{ alerts: AlertItem[] }>("/admin/alerts").then((r) => r.alerts);
-}
-
-/** K택소노미·설비투자 리드 목록 — 정렬은 데이터 완전성만(감축 실적 기반 금지, 원칙7). */
-export function getKTaxonomyLeads(): Promise<KTaxonomyLeadItem[]> {
-  return apiGet<{ leads: KTaxonomyLeadItem[] }>("/admin/k-taxonomy-leads").then((r) => r.leads);
 }
 
 /** 원본문서 접근 감사 로그 — 열람 이벤트 자체의 기록(review-log와 다른 축). */
