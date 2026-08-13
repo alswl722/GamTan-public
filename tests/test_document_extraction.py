@@ -57,14 +57,30 @@ def test_gas_bill_includes_quantity_fields():
     assert result["quantity"] == 800
 
 
-def test_tax_invoice_has_no_quantity_fields():
-    """세금계산서는 물량이 안 찍혀 있는 경우가 대부분 — 금액÷단가 역산 경로를 타야 하므로
-    quantity를 합성해 넣지 않는다(기존 계산 엔진 우선순위: 실측 > 금액÷단가)."""
+def test_tax_invoice_includes_quantity_when_printed():
+    """품목 행에 수량+단위(예: "300L")가 찍혀 있으면 캡처한다 — 세금계산서 경로로
+    들어온 유류비 전표도 PCAF 2a(energy_consumption) 판정에 도달할 수 있어야 한다
+    (db/document_text_extractor.py::_parse_tax_invoice)."""
     pdf = _minimal_pdf([
         "전자세금계산서",
         "작성일자: 2025-07-10",
         "공급자: 구미석유",
         "경유 L 300L 1,400 420,000",
+    ])
+    result = extract_document(pdf, "tax_invoice")
+    assert result["quantity"] == 300
+    assert result["quantity_unit"] == "L"
+    assert result["supply_amount_krw"] == 420_000
+
+
+def test_tax_invoice_without_printed_quantity_omits_quantity_fields():
+    """세금계산서는 물량이 안 찍혀 있는 경우("-" 등)가 더 흔하다 — 이때는 quantity를
+    합성해 넣지 않고 기존 계산 엔진 우선순위(실측 > 금액÷단가)의 후자 경로를 탄다."""
+    pdf = _minimal_pdf([
+        "전자세금계산서",
+        "작성일자: 2025-01-18",
+        "공급자: 구미석유",
+        "유류대금 외1종 - 1,400 420,000",
     ])
     result = extract_document(pdf, "tax_invoice")
     assert "quantity" not in result

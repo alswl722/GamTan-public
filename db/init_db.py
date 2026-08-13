@@ -6,7 +6,7 @@ from sqlalchemy import create_engine, delete, text
 from sqlalchemy.orm import Session
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from db.models import Base, EmissionFactor, UnitPrice, IndustryDistribution, PcafQualityRule
+from db.models import Base, EmissionFactor, UnitPrice, IndustryDistribution, PcafQualityRule, RateProduct
 
 load_dotenv()
 
@@ -231,6 +231,43 @@ def seed_pcaf_quality_rules(session: Session):
     print(f"[OK] PCAF 품질규칙 {len(rules)}건 적재 (Table 10.1-2 원문)")
 
 
+def seed_rate_products(session: Session):
+    """우대금리 참조 상품 — 지어낸 금리가 아니라 iM뱅크 실제 상품 "ESG Grow-Up
+    특별대출"의 공시 조건을 참고한다(iM뱅크 홈페이지, 2026-08 확인). 대기업·중견·
+    중소기업·개인사업자 대상, 중진공 ESG 심층진단 "환경(E) 분야 단독 3등급 이상"
+    조건이 우대금리 0.30%p — 감탄이 실제로 만드는 데이터(PCAF Scope 1·2 품질등급)로
+    증빙 가능한 티어만 시드한다. E·S·G 전분야 3등급 이상(0.50%p) 티어는 감탄이
+    사회(S)·지배구조(G) 데이터를 만들지 않으므로 시드하지 않는다(과잉주장 금지,
+    CLAUDE.md 원칙10).
+
+    PcafQualityRule과 동일한 count-guard 멱등 정책 — 이미 있으면 건드리지 않는다.
+    """
+    if session.query(RateProduct).count() > 0:
+        print("[SKIP] 우대금리 상품 이미 존재")
+        return
+
+    session.add(RateProduct(
+        product_name="ESG Grow-Up 특별대출",
+        provider_name="iM뱅크",
+        min_data_quality_score=2,
+        rate_discount_pct=0.30,
+        eligibility_description=(
+            "PCAF 데이터 품질 2등급(에너지원별 소비량 실측 기반, Option 2a) 이상 — "
+            "중소벤처기업진흥공단 ESG 심층진단 환경(E) 분야 단독 3등급 이상과 동일 "
+            "수준의 우대금리 조건에 준함"
+        ),
+        source_reference=(
+            "iM뱅크 ESG Grow-Up 특별대출 "
+            "(https://www.imbank.co.kr/cms/fnm/loan/product/giup/01/sda_41211/1231351_2507.html)"
+        ),
+        disclaimer_note=(
+            "실제 적용 여부·금리는 은행 담당자 심사에 따라 달라질 수 있습니다."
+        ),
+    ))
+    session.commit()
+    print("[OK] 우대금리 상품 1건 적재 (iM뱅크 ESG Grow-Up 특별대출 참고)")
+
+
 def main():
     engine = create_engine(os.getenv("DATABASE_URL"))
     drop_legacy_tables(engine)
@@ -250,6 +287,9 @@ def main():
 
         # PCAF 품질규칙: 회계 검수 전 초안 → 존재하면 그대로 유지(seed_pcaf_quality_rules 내부에서 skip 처리)
         seed_pcaf_quality_rules(session)
+
+        # 우대금리 상품: 실제 iM뱅크 상품 참고 → 존재하면 그대로 유지(내부에서 skip 처리)
+        seed_rate_products(session)
 
     print("\n[완료] DB 초기화 성공")
 

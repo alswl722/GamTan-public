@@ -4,7 +4,7 @@
 - PATCH /owner/{company_id}/fuel-types          2단계(연료 유형 체크) 저장 + 3단계 필수서류 안내
 - POST  /owner/{company_id}/documents/upload    3~4단계 업로드(세금계산서 OCR|엑셀, 전기·도시가스 OCR)
 - GET   /owner/{company_id}/progress            5단계 위저드 실제 완료 상태 — 홈 화면 진행바·이어하기용
-- GET   /owner/{company_id}/rate-candidate      우대금리 등급 상승 후보 여부(있으면 요청 버튼 노출)
+- GET   /owner/{company_id}/rate-candidate      우대금리 상품 자격 상태(이미 대상 | 개선 필요)
 - POST  /owner/{company_id}/rate-requests       우대금리·설비금융 안내 요청 생성 → 관리자 승인요청 큐
 - GET   /owner/{company_id}/k-taxonomy-leads    K택소노미·설비투자 리드(있으면 설비금융 안내 요청 버튼 노출)
 
@@ -32,7 +32,7 @@ from db.document_text_extractor import DocumentParseError
 from db.hometax_excel_parser import HometaxExcelFormatError
 from db.k_taxonomy import k_taxonomy_leads_for_company
 from db.models import Company
-from db.pcaf_quality import quality_upgrade_candidates_for_company
+from db.rate_products import rate_product_status_for_company
 from db.quality_issues import record_ingestion_failure
 from db.rate_approvals import (
     CompanyNotFoundError,
@@ -176,12 +176,15 @@ class RateRequestIn(BaseModel):
 
 @router.get("/{company_id}/rate-candidate")
 def rate_candidate(company_id: int, session: Session = Depends(get_session)):
-    """자기 기업의 Scope별 등급 상승 후보 목록 — 있으면 프론트가 Scope마다 "안내 요청"
-    버튼을 노출한다(0~2건, 정식 엔진 db/pcaf_quality.py::quality_upgrade_candidates_for_company).
+    """자기 기업의 Scope별 우대금리 상품 자격 상태 목록(0~2건,
+    db/rate_products.py::rate_product_status_for_company).
 
-    은행 GET /admin/rate-candidates와 같은 판정 로직을 자기 기업으로 좁혀 재사용한다.
+    각 항목의 status가 "eligible"(이미 상품 자격 충족)이거나 "upgrade_needed"(등급
+    개선 필요)다 — 프론트는 이 값으로 두 카드 종류를 나눠 렌더링한다. 은행 쪽
+    GET /admin/rate-candidates(quality_upgrade_candidates_for_company, 등급 개선
+    후보만 다룸)와는 별개 응답 구조다.
     """
-    candidates = quality_upgrade_candidates_for_company(session, company_id)
+    candidates = rate_product_status_for_company(session, company_id)
     return {"candidates": candidates, "disclaimer_text": DISCLAIMER_TEXT}
 
 
@@ -216,6 +219,7 @@ def submit_rate_request(
         "current_grade": req.current_grade,
         "target_grade": req.target_grade,
         "missing_summary": req.missing_summary,
+        "matched_product_name": req.matched_product_name,
         "disclaimer_text": req.disclaimer_text,
         "status": req.status,
         "created_at": req.created_at.isoformat() if req.created_at else None,

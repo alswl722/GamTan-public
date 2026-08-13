@@ -19,6 +19,7 @@ from db.init_db import (
     seed_emission_factors,
     seed_industry_distributions,
     seed_pcaf_quality_rules,
+    seed_rate_products,
     seed_unit_prices,
 )
 from db.models import Base, Classification, Company, FinancialInstitution, SourceDocument, Voucher
@@ -47,6 +48,7 @@ def db(tmp_path):
         seed_unit_prices(session)
         seed_industry_distributions(session)
         seed_pcaf_quality_rules(session)
+        seed_rate_products(session)
         # 도시가스+전기만 쓰고 경유는 안 쓰는 회사로 고정 — 안 그러면 약한 고리 원칙
         # 아래서 한 번도 안 쓴 경유 버킷의 12개월이 전부 "결손"으로 잡혀 실측을 다
         # 채워도 revenue(4등급)에 묶인다(db/pcaf_quality.py::_selected_fuels 참고).
@@ -117,13 +119,26 @@ def test_create_rate_request_snapshots_grade_at_creation_time(db):
     assert "보장하지 않습니다" in req.disclaimer_text
 
 
-def test_create_rate_request_fails_when_already_at_best_achievable_grade(db):
-    """이미 도달 가능한 최고 등급(energy_consumption 기반, 2등급)이면 요청 자체를 만들 수
-    없다(추정으로 채우지 않음)."""
+def test_create_rate_request_allows_already_eligible_status(db):
+    """이미 도달 가능한 최고 등급(energy_consumption 기반, 2등급)이면 db/rate_products.py가
+    매칭 상품(ESG Grow-Up 특별대출, seed_rate_products)을 찾아 "이미 대상" 상태로 요청을
+    허용한다 — 더 이상 NoUpgradeCandidateError가 아니다. current_grade==target_grade로
+    스냅샷되고 matched_product_name이 채워진다."""
     session, cid = db
     for m in range(1, 13):
         _add_classified_voucher(session, cid, m, "도시가스", scope=1, emission=100.0, quantity=100)
 
+    req = create_rate_request(session, cid, request_type="rate_upgrade", scope_group="scope_1")
+    assert req.current_grade == 2
+    assert req.target_grade == 2
+    assert req.matched_product_name == "ESG Grow-Up 특별대출"
+    assert "이미 조건을 충족" in req.missing_summary
+
+
+def test_create_rate_request_fails_when_no_activity_data(db):
+    """활동자료(전표) 자체가 없으면 여전히 NoUpgradeCandidateError — 이건 약한 고리
+    원칙과 무관하게 애초에 근거가 없는 경우다."""
+    session, cid = db
     with pytest.raises(NoUpgradeCandidateError):
         create_rate_request(session, cid, request_type="rate_upgrade", scope_group="scope_1")
 
@@ -254,7 +269,9 @@ def test_owner_rate_candidate_endpoint_reflects_both_scopes_independently(db, cl
     assert scopes == {"scope_1", "scope_2"}
 
 
-def test_owner_rate_candidate_endpoint_empty_when_already_at_best_achievable_grade(db, client):
+def test_owner_rate_candidate_endpoint_reflects_eligible_status(db, client):
+    """이미 최고 등급이면 빈 목록이 아니라 "eligible" 상태 + 매칭 상품이 나온다
+    (db/rate_products.py 도입 이후 — 이전엔 이 상태를 표현할 데이터가 없었다)."""
     session, cid = db
     for m in range(1, 13):
         _add_classified_voucher(session, cid, m, "도시가스", scope=1, emission=100.0, quantity=100)
@@ -262,11 +279,17 @@ def test_owner_rate_candidate_endpoint_empty_when_already_at_best_achievable_gra
 
     res = client.get(f"/owner/{cid}/rate-candidate")
     assert res.status_code == 200
-    assert res.json()["candidates"] == []
+    candidates = res.json()["candidates"]
+    assert len(candidates) == 2
+    assert all(c["status"] == "eligible" for c in candidates)
+    assert all(c["products"][0]["product_name"] == "ESG Grow-Up 특별대출" for c in candidates)
 
 
-def test_owner_submits_request_then_admin_sees_it_in_queue(db, client):
-    """사장님이 만든 요청이 관리자 승인요청 큐(HITL 큐와 분리된)에 그대로 나타난다."""
+def test_owner_submits_rate_upgrade_request_successfully(db, client):
+    """사장님이 등급 개선 후보 상태에서 요청을 만들면 스냅샷이 저장된다.
+
+    관리자 승인요청 큐 UI(/admin/rate-requests)는 이번 스코프에서 제외됐다(팀원
+    커밋 0caca0e) — 이 테스트는 owner 쪽 생성 결과만 검증한다."""
     session, cid = db
     _make_upgrade_candidate(session, cid)
 
@@ -275,21 +298,13 @@ def test_owner_submits_request_then_admin_sees_it_in_queue(db, client):
         json={"request_type": "rate_upgrade", "scope_group": "scope_1"},
     )
     assert post_res.status_code == 200, post_res.text
-    request_id = post_res.json()["id"]
     assert post_res.json()["status"] == "pending"
     assert post_res.json()["scope_group"] == "scope_1"
 
-    admin_res = client.get("/admin/rate-requests")
-    ids = {r["id"] for r in admin_res.json()["requests"]}
-    assert request_id in ids
-    entry = next(r for r in admin_res.json()["requests"] if r["id"] == request_id)
-    assert entry["company_name"] == "○○정밀"
-    assert entry["scope_group"] == "scope_1"
-    assert entry["disclaimer_text"]
 
-
-def test_owner_submit_request_fails_clearly_when_already_at_best_achievable_grade(db, client):
-    """후보가 아닌데 요청을 보내면 422로 명확히 실패한다(추정으로 채우지 않음)."""
+def test_owner_submit_request_succeeds_when_already_at_best_achievable_grade(db, client):
+    """이미 최고 등급이어도(eligible 상태, 매칭 상품 있음) 요청을 만들 수 있다 —
+    더 이상 422가 아니다(db/rate_products.py 도입 이후)."""
     session, cid = db
     for m in range(1, 13):
         _add_classified_voucher(session, cid, m, "도시가스", scope=1, emission=100.0, quantity=100)
@@ -298,7 +313,8 @@ def test_owner_submit_request_fails_clearly_when_already_at_best_achievable_grad
         f"/owner/{cid}/rate-requests",
         json={"request_type": "rate_upgrade", "scope_group": "scope_1"},
     )
-    assert res.status_code == 422
+    assert res.status_code == 200, res.text
+    assert res.json()["matched_product_name"] == "ESG Grow-Up 특별대출"
 
 
 def test_owner_submit_request_fails_clearly_when_scope_group_missing(db, client):
@@ -321,102 +337,11 @@ def test_owner_submit_request_rejects_unknown_request_type_with_422(db, client):
     assert res.status_code == 422
 
 
-def test_admin_approve_endpoint_always_includes_disclaimer(db, client):
-    """승인 응답에 항상 비보장 문구가 포함된다(원칙6) — 여신 결정처럼 보이지 않게."""
-    session, cid = db
-    _make_upgrade_candidate(session, cid)
-    request_id = client.post(
-        f"/owner/{cid}/rate-requests",
-        json={"request_type": "rate_upgrade", "scope_group": "scope_1"},
-    ).json()["id"]
-
-    res = client.patch(
-        f"/admin/rate-requests/{request_id}/approve",
-        json={"reviewed_by": "bank-officer-1"},
-    )
-    assert res.status_code == 200, res.text
-    body = res.json()
-    assert body["status"] == "approved"
-    assert "보장하지 않습니다" in body["disclaimer_text"]
-    assert body["reviewed_by"] == "bank-officer-1"
-
-
-def test_admin_reject_endpoint_records_note(db, client):
-    session, cid = db
-    _make_upgrade_candidate(session, cid)
-    request_id = client.post(
-        f"/owner/{cid}/rate-requests",
-        json={"request_type": "rate_upgrade", "scope_group": "scope_1"},
-    ).json()["id"]
-
-    res = client.patch(
-        f"/admin/rate-requests/{request_id}/reject",
-        json={"reviewed_by": "bank-officer-1", "note": "재무 정보 추가 확인 필요"},
-    )
-    assert res.status_code == 200, res.text
-    assert res.json()["status"] == "rejected"
-    assert res.json()["review_note"] == "재무 정보 추가 확인 필요"
-
-
-def test_admin_approve_already_processed_request_returns_409(db, client):
-    session, cid = db
-    _make_upgrade_candidate(session, cid)
-    request_id = client.post(
-        f"/owner/{cid}/rate-requests",
-        json={"request_type": "rate_upgrade", "scope_group": "scope_1"},
-    ).json()["id"]
-    client.patch(f"/admin/rate-requests/{request_id}/approve", json={"reviewed_by": "officer-1"})
-
-    res = client.patch(
-        f"/admin/rate-requests/{request_id}/reject",
-        json={"reviewed_by": "officer-2"},
-    )
-    assert res.status_code == 409
-
-
-def test_admin_approve_already_approved_request_by_different_officer_returns_409(db, client):
-    """이미 승인된 요청을 다른 담당자가 또 승인해도 조용히 200이 아니라 409여야 한다 —
-    이전엔 같은 decision끼리는 통과돼서 두 번째 담당자가 자기 처리가 반영된 줄 착각할 수
-    있었다(리뷰 지적사항, PR #28). 원래 승인자 정보도 그대로 유지돼야 한다."""
-    session, cid = db
-    _make_upgrade_candidate(session, cid)
-    request_id = client.post(
-        f"/owner/{cid}/rate-requests",
-        json={"request_type": "rate_upgrade", "scope_group": "scope_1"},
-    ).json()["id"]
-    client.patch(f"/admin/rate-requests/{request_id}/approve", json={"reviewed_by": "officer-1"})
-
-    res = client.patch(
-        f"/admin/rate-requests/{request_id}/approve",
-        json={"reviewed_by": "officer-2-imposter"},
-    )
-    assert res.status_code == 409
-
-    unchanged = client.get("/admin/rate-requests").json()["requests"]
-    entry = next(r for r in unchanged if r["id"] == request_id)
-    assert entry["reviewed_by"] == "officer-1"
-
-
-def test_admin_rate_requests_queue_is_separate_from_hitl_queue(db, client):
-    """승인요청 큐와 HITL 큐는 서로 다른 엔드포인트·데이터다 — 하나가 다른 걸 오염시키지 않는다."""
-    session, cid = db
-    _make_upgrade_candidate(session, cid)
-    # HITL 큐에 걸릴 저신뢰 분류 1건도 함께 심는다.
-    _add_classified_voucher(session, cid, 6, "유류대금", scope=1, emission=0.0, status="review_required")
-
-    client.post(
-        f"/owner/{cid}/rate-requests",
-        json={"request_type": "rate_upgrade", "scope_group": "scope_1"},
-    )
-
-    hitl = client.get("/admin/hitl").json()["queue"]
-    rate_requests = client.get("/admin/rate-requests").json()["requests"]
-
-    assert len(hitl) == 1
-    assert len(rate_requests) == 1
-    # 필드 형태 자체가 다른 자료구조임을 확인 — 승인요청에는 status(pending 등), HITL 큐엔 없음
-    assert rate_requests[0]["status"] == "pending"
-    assert "status" not in hitl[0] or hitl[0].get("status") != "pending"
+# 관리자측 승인요청 큐 HTTP 엔드포인트(/admin/rate-requests, approve/reject)는 이번
+# 스코프에서 제외됐다(팀원 커밋 0caca0e, "우대금리 후보·승인요청 큐... 제외한다").
+# review_rate_request/list_rate_requests 자체(순수 함수, db/rate_approvals.py)는 여전히
+# 살아있고 위 "db/rate_approvals.py 순수 로직" 섹션에서 직접 검증한다 — 없어진 건 HTTP
+# 라우팅뿐이라 그 부분 테스트만 걷어낸다.
 
 
 # ── 원본문서 접근 감사 로그 ───────────────────────────────────────────────────

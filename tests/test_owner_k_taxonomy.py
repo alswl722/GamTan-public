@@ -82,9 +82,11 @@ def test_k_taxonomy_leads_endpoint_empty_for_company_without_leads(db, client):
     assert res.json()["leads"] == []
 
 
-def test_equipment_finance_request_from_lead_reaches_admin_queue(db, client):
-    """K택소노미 리드 카드의 "설비금융 안내 요청" 버튼이 실제로 승인요청 큐에
-    missing_summary와 함께 나타난다(엔드투엔드)."""
+def test_equipment_finance_request_from_lead_succeeds(db, client):
+    """K택소노미 리드 카드의 "설비금융 안내 요청" 버튼이 실제로 요청을 만든다.
+
+    관리자 승인요청 큐 UI(/admin/rate-requests)는 이번 스코프에서 제외됐다(팀원
+    커밋 0caca0e) — 이 테스트는 owner 쪽 생성 결과만 검증한다."""
     session, cid = db
     _add_voucher(session, cid, "태양광 설비 설치")
     classify_vouchers(session, cid)
@@ -99,8 +101,4 @@ def test_equipment_finance_request_from_lead_reaches_admin_queue(db, client):
     )
     assert post_res.status_code == 200, post_res.text
     assert post_res.json()["missing_summary"] == summary
-
-    admin_res = client.get("/admin/rate-requests")
-    entry = next(r for r in admin_res.json()["requests"] if r["id"] == post_res.json()["id"])
-    assert entry["missing_summary"] == summary
-    assert entry["request_type"] == "equipment_finance"
+    assert post_res.json()["request_type"] == "equipment_finance"
