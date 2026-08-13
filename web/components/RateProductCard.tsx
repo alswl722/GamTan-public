@@ -8,13 +8,42 @@ import { getRateCandidate, type RateCandidate, type RateCandidateResponse } from
  *
  * GET /owner/{id}/rate-candidate(db/rate_products.py::rate_product_status_for_company)가
  * Scope별로 status를 "eligible"(이미 상품 자격 충족)과 "upgrade_needed"(등급 개선
- * 필요)로 나눠 주므로, 두 카드 종류로 갈라 렌더링한다.
+ * 필요)로 나눠 주므로, 두 카드 종류로 갈라 렌더링한다. 같은 상품이 Scope 1·2 양쪽에서
+ * 매칭되면 카드 하나로 묶는다(같은 상품 안내가 두 번 뜨는 걸 막기 위함).
  *
  * 읽기 전용 안내 카드다 — 관리자측 승인요청 큐(ApprovalQueue.tsx, /admin/rate-requests)가
  * 이번 스코프에서 제외되며(팀원 커밋 0caca0e), 요청을 넣어도 은행 담당자가 확인할 UI가
  * 없어 "요청하기" 버튼은 만들지 않는다. */
 
 const SCOPE_LABEL: Record<string, string> = { scope_1: "Scope 1", scope_2: "Scope 2" };
+
+function ProductBadge({ name }: { name: string }) {
+  return (
+    <span className="rounded-full bg-brand-soft px-2 py-0.5 text-[10.5px] font-semibold text-brand-ink">
+      {name}
+    </span>
+  );
+}
+
+function ScopeBadge({ label }: { label: string }) {
+  return (
+    <span className="rounded-full bg-line px-2 py-0.5 text-[10.5px] font-semibold text-muted">
+      {label}
+    </span>
+  );
+}
+
+function groupByProductNames<T extends { scope_group: string }>(
+  items: T[],
+  productNamesOf: (item: T) => string[]
+): Map<string, T[]> {
+  const groups = new Map<string, T[]>();
+  for (const item of items) {
+    const key = productNamesOf(item).join(",");
+    groups.set(key, [...(groups.get(key) ?? []), item]);
+  }
+  return groups;
+}
 
 export function RateProductCard({ companyId }: { companyId: number | null }) {
   const [data, setData] = useState<RateCandidateResponse | null>(null);
@@ -37,12 +66,10 @@ export function RateProductCard({ companyId }: { companyId: number | null }) {
   const eligible = data.candidates.filter((c) => c.status === "eligible");
   const upgradeNeeded = data.candidates.filter((c) => c.status === "upgrade_needed");
 
-  // 같은 상품이 Scope 1·2 양쪽에서 매칭되면 카드 하나로 묶는다(중복 안내 방지).
-  const eligibleGroups = new Map<string, RateCandidate[]>();
-  for (const c of eligible) {
-    const key = (c.products ?? []).map((p) => p.product_name).join(",");
-    eligibleGroups.set(key, [...(eligibleGroups.get(key) ?? []), c]);
-  }
+  const eligibleGroups = groupByProductNames(eligible, (c) => (c.products ?? []).map((p) => p.product_name));
+  const upgradeGroups = groupByProductNames(upgradeNeeded, (c) =>
+    (c.target_products ?? []).map((p) => p.product_name)
+  );
 
   return (
     <div className="mt-4 flex flex-col gap-3">
@@ -51,11 +78,12 @@ export function RateProductCard({ companyId }: { companyId: number | null }) {
         const scopeLabels = group.map((c) => SCOPE_LABEL[c.scope_group]).join(" · ");
         return (
           <div key={scopeLabels} className="rounded-3xl bg-surface p-5 shadow-card">
-            <div className="flex items-center gap-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
               <div className="text-[13px] font-semibold text-ink">우대금리 대상 안내</div>
-              <span className="rounded-full bg-brand-soft px-2 py-0.5 text-[10.5px] font-semibold text-brand-ink">
-                {scopeLabels} 조건 충족
-              </span>
+              <ScopeBadge label={`${scopeLabels} 조건 충족`} />
+              {products.map((p) => (
+                <ProductBadge key={p.product_name} name={p.product_name} />
+              ))}
             </div>
             {products.map((p) => (
               <div key={p.product_name} className="mt-3 rounded-2xl bg-bg p-3.5">
@@ -71,35 +99,42 @@ export function RateProductCard({ companyId }: { companyId: number | null }) {
                 </p>
               </div>
             ))}
-            <p className="mt-3 text-[11px] leading-relaxed text-faint">{data.disclaimer_text}</p>
           </div>
         );
       })}
 
-      {upgradeNeeded.map((c) => (
-        <div key={c.scope_group} className="rounded-3xl bg-surface p-5 shadow-card">
-          <div className="flex items-center gap-1.5">
-            <div className="text-[13px] font-semibold text-ink">우대금리 대상 안내</div>
-            <span className="rounded-full bg-line px-2 py-0.5 text-[10.5px] font-semibold text-muted">
-              {SCOPE_LABEL[c.scope_group]}
-            </span>
+      {[...upgradeGroups.values()].map((group) => {
+        const targetProducts = group[0].target_products ?? [];
+        const scopeLabels = group.map((c) => SCOPE_LABEL[c.scope_group]).join(" · ");
+        return (
+          <div key={scopeLabels} className="rounded-3xl bg-surface p-5 shadow-card">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <div className="text-[13px] font-semibold text-ink">우대금리 대상 안내</div>
+              <ScopeBadge label={scopeLabels} />
+              {targetProducts.map((p) => (
+                <ProductBadge key={p.product_name} name={p.product_name} />
+              ))}
+            </div>
+            {group.map((c) => (
+              <div key={c.scope_group} className="mt-3">
+                {group.length > 1 && (
+                  <div className="text-[11.5px] font-semibold text-ink">{SCOPE_LABEL[c.scope_group]}</div>
+                )}
+                <div className="mt-1 flex items-center gap-1.5 text-[12.5px] text-muted">
+                  <span className="rounded-full bg-line px-2 py-0.5 text-[11px] font-bold text-muted">
+                    {c.current_grade}등급
+                  </span>
+                  <span className="text-faint">→</span>
+                  <span className="rounded-full bg-brand px-2 py-0.5 text-[11px] font-bold text-white">
+                    {c.target_grade}등급
+                  </span>
+                </div>
+                <p className="mt-1.5 text-[12.5px] leading-relaxed text-muted">{c.missing}</p>
+              </div>
+            ))}
           </div>
-          <div className="mt-2 flex items-center gap-1.5 text-[12.5px] text-muted">
-            <span className="rounded-full bg-line px-2 py-0.5 text-[11px] font-bold text-muted">
-              {c.current_grade}등급
-            </span>
-            <span className="text-faint">→</span>
-            <span className="rounded-full bg-brand px-2 py-0.5 text-[11px] font-bold text-white">
-              {c.target_grade}등급
-            </span>
-          </div>
-          <p className="mt-2 text-[12.5px] leading-relaxed text-muted">
-            <span className="font-semibold text-ink">필요 데이터:</span> {c.missing}
-          </p>
-          <p className="mt-1 text-[12.5px] leading-relaxed text-brand-ink">{c.benefit}</p>
-          <p className="mt-3 text-[11px] leading-relaxed text-faint">{data.disclaimer_text}</p>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
