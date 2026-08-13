@@ -3,7 +3,6 @@
 import { useState } from "react";
 import type { AlertItem, HitlItem, PortfolioResponse, TraceRunItem } from "@/lib/admin-types";
 import { cn } from "@/lib/utils";
-import { AlertsPanel } from "@/components/admin/AlertsPanel";
 import { AuditLog } from "@/components/admin/AuditLog";
 import { AuditPackage } from "@/components/admin/AuditPackage";
 import { CompanyDetail } from "@/components/admin/CompanyDetail";
@@ -14,7 +13,6 @@ import { TraceHistory } from "@/components/admin/TraceHistory";
 const TABS = [
   { id: "hitl", label: "담당자 검토" },
   { id: "company", label: "기업" },
-  { id: "risk", label: "여신 리스크" },
   { id: "trace", label: "실행 이력" },
   { id: "audit", label: "변경 이력" },
   { id: "audit-package", label: "감사 대응" },
@@ -74,15 +72,9 @@ export function DashboardShell({ portfolio, hitlQueue, traceRuns, alerts }: Dash
           <CompanyDetail companies={portfolio.companies} traceRuns={traceRuns} />
         )}
 
-        {activeTab === "risk" && (
-          <div className="h-full p-5">
-            <AlertsPanel alerts={alerts} />
-          </div>
-        )}
-
         {activeTab === "trace" && (
           <div className="h-full p-4">
-            <TraceHistory runs={traceRuns} />
+            <TraceHistory runs={traceRuns} alerts={alerts} />
           </div>
         )}
 
