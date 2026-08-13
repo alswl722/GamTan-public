@@ -45,17 +45,17 @@ type QualityReportResponse = {
 type MonthlyRow = { month: number; total_tco2e: number; by_fuel: Record<string, number> };
 type LegacyPcafResponse = { after: { monthly: MonthlyRow[] } | null };
 
-// GET /owner/{company_id}/rate-candidate — db/pcaf.py::upgrade_candidate_for_company와
-// 은행 쪽 GET /admin/rate-candidates가 같은 판정 로직을 공유한다(중복 없음).
+// GET /owner/{company_id}/rate-candidate — db/pcaf_quality.py::quality_upgrade_candidates_for_company와
+// 은행 쪽 GET /admin/rate-candidates가 같은 판정 로직을 공유한다(중복 없음). 정식 엔진은
+// Scope별 독립 판정이라 한 기업이 최대 2건(scope_1·scope_2)까지 후보일 수 있다.
 type RateCandidate = {
-  company_id: number;
-  company_name: string;
+  scope_group: "scope_1" | "scope_2";
   current_grade: number;
   target_grade: number;
   missing: string;
   benefit: string;
 };
-type RateCandidateResponse = { candidate: RateCandidate | null; disclaimer_text: string };
+type RateCandidateResponse = { candidates: RateCandidate[]; disclaimer_text: string };
 
 // POST /owner/{company_id}/rate-requests 응답 — 여신 결정이 아니다(CLAUDE.md §9).
 // 관리자 승인요청 큐(GET /admin/rate-requests)로 넘어가 담당자가 "안내 대상 확인"만 한다.
@@ -399,24 +399,27 @@ export function ScenePcaf() {
   const [error, setError] = useState<string | null>(null);
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [rateCandidate, setRateCandidate] = useState<RateCandidateResponse | null>(null);
-  const [rateRequest, setRateRequest] = useState<RateRequestResponse | null>(null);
-  const [requestBusy, setRequestBusy] = useState(false);
-  const [requestError, setRequestError] = useState<string | null>(null);
+  // 정식 엔진은 Scope별 독립 후보라 최대 2건이 동시에 뜰 수 있어, 요청 상태도
+  // scope_group별로 따로 추적한다.
+  const [rateRequests, setRateRequests] = useState<Record<string, RateRequestResponse>>({});
+  const [busyScope, setBusyScope] = useState<string | null>(null);
+  const [requestError, setRequestError] = useState<{ scope: string; message: string } | null>(null);
 
-  async function submitRateRequest() {
-    setRequestBusy(true);
+  async function submitRateRequest(scopeGroup: string) {
+    setBusyScope(scopeGroup);
     setRequestError(null);
     try {
       const cid = await getCompanyId();
       const res = await apiPost<RateRequestResponse>(`/owner/${cid}/rate-requests`, {
         request_type: "rate_upgrade",
+        scope_group: scopeGroup,
       });
-      setRateRequest(res);
+      setRateRequests((prev) => ({ ...prev, [scopeGroup]: res }));
     } catch (err) {
       console.error("우대금리 안내 요청 실패:", err);
-      setRequestError("요청에 실패했습니다. 잠시 후 다시 시도해 주세요.");
+      setRequestError({ scope: scopeGroup, message: "요청에 실패했습니다. 잠시 후 다시 시도해 주세요." });
     } finally {
-      setRequestBusy(false);
+      setBusyScope(null);
     }
   }
 
@@ -541,49 +544,53 @@ export function ScenePcaf() {
         </div>
       )}
 
-      {rateCandidate?.candidate ? (
-        <div className="mt-3 rounded-2xl bg-surface p-5">
-          <div className="text-[13px] font-semibold text-ink">우대금리 대상 안내</div>
-          <div className="mt-2 flex items-center gap-1.5 text-[12.5px] text-muted">
-            <span className="rounded-full bg-line px-2 py-0.5 text-[11px] font-bold text-muted">
-              {rateCandidate.candidate.current_grade}등급
-            </span>
-            <span className="text-faint">→</span>
-            <span className="rounded-full bg-brand px-2 py-0.5 text-[11px] font-bold text-white">
-              {rateCandidate.candidate.target_grade}등급
-            </span>
-          </div>
-          <p className="mt-2 text-[12.5px] leading-relaxed text-muted">
-            <span className="font-semibold text-ink">필요 데이터:</span>{" "}
-            {rateCandidate.candidate.missing}
-          </p>
-          <p className="mt-1 text-[12.5px] leading-relaxed text-brand-ink">
-            {rateCandidate.candidate.benefit}
-          </p>
-          <p className="mt-3 text-[11px] leading-relaxed text-faint">
-            {rateCandidate.disclaimer_text}
-          </p>
-
-          {rateRequest ? (
-            <div className="mt-3 rounded-xl bg-brand-soft px-3.5 py-2.5 text-center text-[12.5px] font-semibold text-brand-ink">
-              요청됐어요. 담당 은행원이 확인 후 안내드려요
+      {rateCandidate && rateCandidate.candidates.length > 0 ? (
+        rateCandidate.candidates.map((c) => (
+          <div key={c.scope_group} className="mt-3 rounded-2xl bg-surface p-5">
+            <div className="flex items-center gap-1.5">
+              <div className="text-[13px] font-semibold text-ink">우대금리 대상 안내</div>
+              <span className="rounded-full bg-line px-2 py-0.5 text-[10.5px] font-semibold text-muted">
+                {SCOPE_LABEL[c.scope_group]}
+              </span>
             </div>
-          ) : (
-            <>
-              <button
-                type="button"
-                onClick={() => void submitRateRequest()}
-                disabled={requestBusy}
-                className="btn-cta mt-3 w-full rounded-2xl bg-brand py-3.5 text-[14px] font-bold text-white disabled:opacity-60"
-              >
-                {requestBusy ? "요청하는 중…" : "우대금리 안내 요청"}
-              </button>
-              {requestError && (
-                <p className="mt-2 text-[11.5px] text-red-600">{requestError}</p>
-              )}
-            </>
-          )}
-        </div>
+            <div className="mt-2 flex items-center gap-1.5 text-[12.5px] text-muted">
+              <span className="rounded-full bg-line px-2 py-0.5 text-[11px] font-bold text-muted">
+                {c.current_grade}등급
+              </span>
+              <span className="text-faint">→</span>
+              <span className="rounded-full bg-brand px-2 py-0.5 text-[11px] font-bold text-white">
+                {c.target_grade}등급
+              </span>
+            </div>
+            <p className="mt-2 text-[12.5px] leading-relaxed text-muted">
+              <span className="font-semibold text-ink">필요 데이터:</span> {c.missing}
+            </p>
+            <p className="mt-1 text-[12.5px] leading-relaxed text-brand-ink">{c.benefit}</p>
+            <p className="mt-3 text-[11px] leading-relaxed text-faint">
+              {rateCandidate.disclaimer_text}
+            </p>
+
+            {rateRequests[c.scope_group] ? (
+              <div className="mt-3 rounded-xl bg-brand-soft px-3.5 py-2.5 text-center text-[12.5px] font-semibold text-brand-ink">
+                요청됐어요. 담당 은행원이 확인 후 안내드려요
+              </div>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => void submitRateRequest(c.scope_group)}
+                  disabled={busyScope === c.scope_group}
+                  className="btn-cta mt-3 w-full rounded-2xl bg-brand py-3.5 text-[14px] font-bold text-white disabled:opacity-60"
+                >
+                  {busyScope === c.scope_group ? "요청하는 중…" : "우대금리 안내 요청"}
+                </button>
+                {requestError?.scope === c.scope_group && (
+                  <p className="mt-2 text-[11.5px] text-red-600">{requestError.message}</p>
+                )}
+              </>
+            )}
+          </div>
+        ))
       ) : (
         <div className="mt-3 rounded-2xl bg-surface p-5 text-center">
           <div className="text-[13px] font-semibold text-ink">

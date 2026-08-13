@@ -10,33 +10,20 @@ db/organizational_boundary.py, 회계 검수 필요)과 최초 평가 자동 산
 여신 결정이 아니다(CLAUDE.md §9). status는 항상 draft 이상으로 올라가지 않으며,
 bank_review_required가 항상 true다 — 은행 담당자 승인 전 자동 확정 없음.
 """
-from datetime import datetime, timezone
-
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.db import get_session
 from api.queries import get_distribution
-from db.models import BorrowerEmissionInventory, Company, PcafQualityRule, Voucher
+from db.models import BorrowerEmissionInventory, Company, PcafQualityRule
 from db.organizational_boundary import ensure_organizational_boundary
 from db.pcaf import benchmark_against_industry
-from db.pcaf_quality import save_quality_assessment_version
+from db.pcaf_quality import default_reporting_year, save_quality_assessment_version
 
 router = APIRouter(prefix="/owner", tags=["owner-quality"])
 
 _SCOPES = ("scope_1", "scope_2")
-
-
-def _default_reporting_year(session: Session, company_id: int) -> int:
-    """연도 파라미터 생략 시 쓸 기본값 — 달력상 올해가 아니라 그 기업의 전표가
-    실제로 존재하는 가장 최근 연도를 쓴다. 결산 주기가 달력연도와 다를 수 있고,
-    무엇보다 "올해"로 고정하면 데이터가 전부 작년(또는 그 이전) 연도인 기업은
-    아무 전표도 없는 빈 연도를 기본값으로 잡아 리포트가 항상 텅 비어 보인다."""
-    latest_year = session.execute(
-        select(func.max(Voucher.year)).where(Voucher.company_id == company_id)
-    ).scalar()
-    return latest_year or datetime.now(timezone.utc).year
 
 
 def _latest_inventory(
@@ -90,7 +77,7 @@ def owner_quality_report(
     if company is None:
         raise HTTPException(status_code=404, detail=f"company_id={company_id} 없음")
 
-    reporting_year = year or _default_reporting_year(session, company_id)
+    reporting_year = year or default_reporting_year(session, company_id)
 
     try:
         boundary = ensure_organizational_boundary(session, company_id, reporting_year)

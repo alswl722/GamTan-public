@@ -47,7 +47,8 @@ from db.audit_package import build_audit_package
 from db.document_access_log import access_history, record_access, recent_access_log
 from db.k_taxonomy import k_taxonomy_leads
 from db.models import Classification, Company, SourceDocument, TraceLog, Voucher
-from db.pcaf import portfolio_summary, rate_upgrade_candidates
+from db.pcaf import portfolio_summary
+from db.pcaf_quality import quality_rate_upgrade_candidates
 from db.quality_issues import list_ingestion_failures
 from db.rate_approvals import AlreadyProcessedError, list_rate_requests, review_rate_request
 
@@ -76,11 +77,12 @@ def portfolio(session: Session = Depends(get_session)):
 
 @router.get("/rate-candidates")
 def rate_candidates(session: Session = Depends(get_session)):
-    """등급 상승 역산 후보 — 결손월만 채우면 PCAF 등급이 오르는 기업.
+    """등급 상승 후보 — 정식 엔진(db/pcaf_quality.py) 기준 Scope별 독립 판정.
 
-    여신 결정은 하지 않는다(CLAUDE.md §9) — 우대금리 자격 '안내'까지만 담당.
+    기업마다 최대 2행(Scope1·Scope2 각각)이 나올 수 있다. 여신 결정은 하지 않는다
+    (CLAUDE.md §9) — 우대금리 자격 '안내'까지만 담당.
     """
-    return {"candidates": rate_upgrade_candidates(session)}
+    return {"candidates": quality_rate_upgrade_candidates(session)}
 
 
 @router.get("/k-taxonomy-leads")
@@ -377,6 +379,7 @@ def _serialize_rate_request(req) -> dict:
         "id": req.id,
         "company_id": req.company_id,
         "request_type": req.request_type,
+        "scope_group": req.scope_group,
         "current_grade": req.current_grade,
         "target_grade": req.target_grade,
         "missing_summary": req.missing_summary,

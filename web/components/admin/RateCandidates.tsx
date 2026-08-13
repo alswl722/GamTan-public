@@ -25,9 +25,14 @@ export function RateCandidates({ candidates }: { candidates: RateCandidateItem[]
           </div>
         ) : (
           candidates.map((c) => (
-            <div key={c.company_id} className="px-5 py-3.5">
+            <div key={`${c.company_id}-${c.scope_group}`} className="px-5 py-3.5">
               <div className="mb-1.5 flex items-center justify-between gap-2">
-                <span className="text-xs font-semibold text-ink">{c.company_name}</span>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs font-semibold text-ink">{c.company_name}</span>
+                  <span className="rounded border border-line bg-bg px-1.5 py-0.5 text-[10px] font-medium text-muted">
+                    {c.scope_group === "scope_1" ? "Scope 1" : "Scope 2"}
+                  </span>
+                </div>
                 <div className="flex flex-shrink-0 items-center gap-1.5">
                   <span
                     className="rounded-full px-2 py-0.5 text-[11px] font-bold text-white"

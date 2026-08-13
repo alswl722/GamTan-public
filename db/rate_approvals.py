@@ -1,6 +1,6 @@
 """우대금리·설비금융 승인요청 큐 (v1 §6 2주차).
 
-기존 db/pcaf.py::rate_upgrade_candidates 는 "안내 후보" 목록을 계산만 할 뿐 저장하지
+db/pcaf_quality.py::quality_upgrade_candidate은 "안내 후보" 여부를 계산만 할 뿐 저장하지
 않는 읽기 전용 함수다. 여기서는 그 계산을 재사용해 사장님의 명시적 요청을
 RateApprovalRequest 행으로 만들고, 은행 담당자의 승인/반려를 기록한다.
 
@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from db.models import Company, RateApprovalRequest
-from db.pcaf import upgrade_candidate_for_company
+from db.pcaf_quality import default_reporting_year, quality_upgrade_candidate
 
 DISCLAIMER_TEXT = (
     "본 안내는 데이터 완전성 개선을 제안할 뿐 PCAF 등급 상승이나 우대금리·설비금융 "
@@ -30,6 +30,10 @@ class NoUpgradeCandidateError(Exception):
     """결손을 채워도 등급이 오르지 않거나 결손 자체가 없어 요청 근거가 없을 때."""
 
 
+class InvalidScopeError(Exception):
+    """rate_upgrade 요청에 scope_group이 없거나 scope_1/scope_2가 아닐 때."""
+
+
 class AlreadyProcessedError(Exception):
     """이미 처리된 요청을 다시 처리하려 할 때 — 새 decision이 이전과 같아도 예외다.
 
@@ -43,13 +47,21 @@ class AlreadyProcessedError(Exception):
 
 
 def create_rate_request(
-    session: Session, company_id: int, *, request_type: str = "rate_upgrade"
+    session: Session,
+    company_id: int,
+    *,
+    request_type: str = "rate_upgrade",
+    scope_group: str | None = None,
 ) -> RateApprovalRequest:
     """사장님이 안내 카드를 보고 "요청" 버튼을 눌렀을 때 승인요청 큐에 항목을 만든다.
 
     current_grade/target_grade/missing_summary는 생성 시점 스냅샷 — 이후 재산정으로
     등급이 바뀌어도 요청 당시 근거가 감사 가능하게 그대로 남는다. disclaimer_text도
     생성 시점에 고정해 문구 정책이 바뀌어도 과거 요청은 요청 당시 그대로 보존된다.
+
+    request_type="rate_upgrade"는 정식 엔진(db/pcaf_quality.py) 기준 Scope별 후보
+    판정을 쓴다 — 한 기업이 Scope1·Scope2 각각 독립적으로 후보일 수 있어 scope_group을
+    반드시 지정해야 한다(어느 Scope에 대한 요청인지 스냅샷에 남기기 위함).
 
     request_type="equipment_finance"(설비금융)는 K택소노미·설비투자 필드가 아직
     classification 테이블에 없어(개발자 A 담당, 2주차 병행) 등급 스냅샷 없이도 요청을
@@ -60,14 +72,21 @@ def create_rate_request(
         raise CompanyNotFoundError(f"company_id={company_id} 없음")
 
     if request_type == "rate_upgrade":
-        candidate = upgrade_candidate_for_company(session, company_id)
+        if scope_group not in ("scope_1", "scope_2"):
+            raise InvalidScopeError(
+                f"scope_group은 scope_1|scope_2여야 함(전달값: {scope_group!r})"
+            )
+        year = default_reporting_year(session, company_id)
+        candidate = quality_upgrade_candidate(session, company_id, year, scope_group)
         if candidate is None:
             raise NoUpgradeCandidateError(
-                f"company_id={company_id} 등급 상승 후보 아님 — 결손이 없거나 채워도 등급이 안 오름"
+                f"company_id={company_id} scope_group={scope_group} 등급 상승 후보 아님 "
+                "— 활동자료가 없거나 이미 도달 가능한 최고 등급임"
             )
         req = RateApprovalRequest(
             company_id=company_id,
             request_type=request_type,
+            scope_group=scope_group,
             current_grade=candidate["current_grade"],
             target_grade=candidate["target_grade"],
             missing_summary=candidate["missing"],

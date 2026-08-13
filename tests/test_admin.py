@@ -14,6 +14,7 @@ from api.queries import get_hitl_queue
 from db.init_db import (
     seed_emission_factors,
     seed_industry_distributions,
+    seed_pcaf_quality_rules,
     seed_unit_prices,
 )
 from db.models import Base, Classification, Company, TraceLog, Voucher
@@ -33,6 +34,7 @@ def db(tmp_path):
         seed_emission_factors(session)
         seed_unit_prices(session)
         seed_industry_distributions(session)
+        seed_pcaf_quality_rules(session)
         company = Company(
             name="○○정밀", industry_code="C251", industry_name="구조용 금속제품 제조",
             employee_count=12, revenue_krw=2_400_000_000, region="경북 구미시",
@@ -51,10 +53,11 @@ def client(db):
     app.dependency_overrides.clear()
 
 
-def _add(session, cid, month, item, *, scope, emission, status, conf=0.9, fuel_type="도시가스"):
+def _add(session, cid, month, item, *, scope, emission, status, conf=0.9, fuel_type="도시가스", quantity=100):
     v = Voucher(company_id=cid, source="hometax", year=2025, month=month,
                 supplier_name="테스트", item_description=item,
-                supply_amount_krw=100000, raw_json={"quantity": 100})
+                supply_amount_krw=100000,
+                raw_json={"quantity": quantity} if quantity is not None else {})
     session.add(v)
     session.flush()
     session.add(Classification(
@@ -559,29 +562,32 @@ def test_traces_groups_runs_with_badges(db, client):
     assert runs["s-1"]["status"] == "완료"
 
 
-def test_rate_candidates_flags_company_with_grade_upgradable_gap(db, client):
-    """결손월을 채우면 등급이 오르는 기업만 후보로 나온다(§6 등급 상승 역산 요청)."""
+def test_rate_candidates_flags_company_with_revenue_dominant_scope(db, client):
+    """정식 엔진 기준 — Scope 전표 다수가 매출 환산(수량 없음, revenue/4등급)이면
+    후보로 나온다(db/pcaf_quality.py::quality_upgrade_candidate, 4등급→3등급만 가능)."""
     session, cid = db
-    # 1월치만 실측(수량 있음 → 등급 2) — 나머지 11개월은 가스·경유 결손으로 5등급 가중
-    _add(session, cid, 1, "도시가스", scope=1, emission=1000.0, status="auto")
+    for m in range(1, 13):
+        _add(session, cid, m, "유류대금", scope=1, emission=100.0, status="auto", quantity=None)
 
     res = client.get("/admin/rate-candidates")
-    candidates = {c["company_id"]: c for c in res.json()["candidates"]}
-    assert cid in candidates
-    cand = candidates[cid]
+    candidates = [c for c in res.json()["candidates"] if c["company_id"] == cid]
+    assert len(candidates) == 1
+    cand = candidates[0]
     assert cand["company_name"] == "○○정밀"
-    assert cand["target_grade"] < cand["current_grade"]  # 숫자가 작을수록 좋은 등급
+    assert cand["scope_group"] == "scope_1"
+    assert cand["current_grade"] == 4
+    assert cand["target_grade"] == 3
     assert cand["missing"]
     assert cand["benefit"]
 
 
-def test_rate_candidates_excludes_company_without_gap(db, client):
-    """결손이 없으면(전기·가스·경유 전 월 실측) 후보에서 빠진다."""
+def test_rate_candidates_excludes_company_already_at_best_achievable_grade(db, client):
+    """Scope 전표 다수가 실측 수량 기반(production/3등급 — 이 프로젝트가 도달 가능한
+    최고점)이면 더 오를 데가 없어 후보에서 빠진다."""
     session, cid = db
     for m in range(1, 13):
-        _add(session, cid, m, "도시가스", scope=1, emission=100.0, status="auto")
-        _add(session, cid, m, "전기요금", scope=2, emission=50.0, status="auto")
-        _add(session, cid, m, "경유", scope=1, emission=30.0, status="auto")
+        _add(session, cid, m, "도시가스", scope=1, emission=100.0, status="auto", quantity=100)
+        _add(session, cid, m, "전기요금", scope=2, emission=50.0, status="auto", quantity=100)
 
     res = client.get("/admin/rate-candidates")
     ids = {c["company_id"] for c in res.json()["candidates"]}

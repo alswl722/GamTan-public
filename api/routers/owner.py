@@ -30,11 +30,12 @@ from db.document_requirements import FuelTypes, required_documents
 from db.document_text_extractor import DocumentParseError
 from db.hometax_excel_parser import HometaxExcelFormatError
 from db.models import Company
-from db.pcaf import upgrade_candidate_for_company
+from db.pcaf_quality import quality_upgrade_candidates_for_company
 from db.quality_issues import record_ingestion_failure
 from db.rate_approvals import (
     CompanyNotFoundError,
     DISCLAIMER_TEXT,
+    InvalidScopeError,
     NoUpgradeCandidateError,
     create_rate_request,
 )
@@ -164,17 +165,19 @@ class RateRequestIn(BaseModel):
     # ck_rate_approval_requests_request_type CHECK 제약까지 도달하면 처리 안 된
     # IntegrityError가 그대로 새서 500이 된다(리뷰 지적사항, PR #28).
     request_type: Literal["rate_upgrade", "equipment_finance"] = "rate_upgrade"
+    # rate_upgrade는 Scope별 독립 후보라(정식 엔진) 어느 Scope에 대한 요청인지 필수.
+    scope_group: Literal["scope_1", "scope_2"] | None = None
 
 
 @router.get("/{company_id}/rate-candidate")
 def rate_candidate(company_id: int, session: Session = Depends(get_session)):
-    """자기 기업이 등급 상승 후보인지 — 후보면 프론트가 "안내 요청" 버튼을 노출한다.
+    """자기 기업의 Scope별 등급 상승 후보 목록 — 있으면 프론트가 Scope마다 "안내 요청"
+    버튼을 노출한다(0~2건, 정식 엔진 db/pcaf_quality.py::quality_upgrade_candidates_for_company).
 
-    은행 GET /admin/rate-candidates와 같은 판정(db/pcaf.py::upgrade_candidate_for_company)을
-    자기 기업으로 좁혀 재사용한다. 후보가 아니면 candidate: null.
+    은행 GET /admin/rate-candidates와 같은 판정 로직을 자기 기업으로 좁혀 재사용한다.
     """
-    candidate = upgrade_candidate_for_company(session, company_id)
-    return {"candidate": candidate, "disclaimer_text": DISCLAIMER_TEXT}
+    candidates = quality_upgrade_candidates_for_company(session, company_id)
+    return {"candidates": candidates, "disclaimer_text": DISCLAIMER_TEXT}
 
 
 @router.post("/{company_id}/rate-requests")
@@ -186,16 +189,21 @@ def submit_rate_request(
     여신 결정이 아니다(CLAUDE.md §9) — 이 요청은 관리자 승인요청 큐(GET /admin/rate-requests)로
     가서 담당자가 "안내 대상으로 확인"할 뿐, 금리·여신을 자동으로 확정하지 않는다.
     """
+    if body.request_type == "rate_upgrade" and body.scope_group is None:
+        raise HTTPException(status_code=422, detail="scope_group required for rate_upgrade")
     try:
-        req = create_rate_request(session, company_id, request_type=body.request_type)
+        req = create_rate_request(
+            session, company_id, request_type=body.request_type, scope_group=body.scope_group
+        )
     except CompanyNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    except NoUpgradeCandidateError as e:
+    except (NoUpgradeCandidateError, InvalidScopeError) as e:
         raise HTTPException(status_code=422, detail=str(e))
     return {
         "id": req.id,
         "company_id": req.company_id,
         "request_type": req.request_type,
+        "scope_group": req.scope_group,
         "current_grade": req.current_grade,
         "target_grade": req.target_grade,
         "missing_summary": req.missing_summary,
