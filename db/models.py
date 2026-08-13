@@ -96,6 +96,16 @@ class Classification(Base):
     data_period_end = Column(DateTime(timezone=True))
     calculation_warning = Column(JSON)
 
+    # v1 2주차 — K택소노미·설비투자 리드(회계 data/*.xlsx의 k_taxonomy_mapping 시트,
+    # db/k_taxonomy.py 참고). category='감축투자 후보'류 룰(R051~R058, R031, R032)이
+    # 매칭됐을 때만 채워진다 — 배출량 계산과는 무관(원문: "배출량 계산 대상 아니나
+    # 녹색여신 참고"). finance_lead_type이 채워져도 이건 "리드"일 뿐 여신 결정이
+    # 아니다(CLAUDE.md §9) — 최종 승인은 기존 승인요청 큐(RateApprovalRequest)를 거친다.
+    k_taxonomy_candidate_type = Column(String(50))   # 재생에너지 설비 | 에너지저장장치 | ...
+    k_taxonomy_facility_type = Column(String(50))    # 태양광 설비 | ESS | 전동지게차 | ...
+    finance_lead_type = Column(String(50))           # 녹색여신 후보 | 설비금융 후보 | ...
+    k_taxonomy_hitl_required = Column(Boolean, default=False)
+
     voucher = relationship("Voucher", back_populates="classification")
 
     __table_args__ = (
