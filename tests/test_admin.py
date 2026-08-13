@@ -584,7 +584,15 @@ def test_rate_candidates_flags_company_with_revenue_dominant_scope(db, client):
 def test_rate_candidates_excludes_company_already_at_best_achievable_grade(db, client):
     """Scope 전표 다수가 실측 수량 기반(energy_consumption/2등급 — 이 프로젝트가 도달
     가능한 최고점)이면 더 오를 데가 없어 후보에서 빠진다."""
+    from db.models import Company
+
     session, cid = db
+    # 도시가스+전기만 쓰는 회사로 지정 — 안 그러면 약한 고리 원칙 아래서 한 번도 안
+    # 쓴 경유 버킷의 12개월이 "결손"으로 잡혀 실측을 다 채워도 4등급에 묶인다.
+    session.query(Company).filter_by(id=cid).update(
+        {"fuel_types_json": {"city_gas": True, "electricity": True}}
+    )
+    session.commit()
     for m in range(1, 13):
         _add(session, cid, m, "도시가스", scope=1, emission=100.0, status="auto", quantity=100)
         _add(session, cid, m, "전기요금", scope=2, emission=50.0, status="auto", quantity=100)

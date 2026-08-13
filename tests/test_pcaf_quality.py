@@ -50,7 +50,13 @@ def db(tmp_path):
     Base.metadata.create_all(engine)
     with Session(engine) as session:
         seed_pcaf_quality_rules(session)
-        company = Company(name="○○정밀", industry_code="C251", industry_name="구조용 금속제품 제조")
+        # 도시가스+전기만 쓰고 경유는 안 쓰는 회사로 고정 — 안 그러면 약한 고리 원칙
+        # 아래서 한 번도 안 쓴 경유 버킷의 12개월이 전부 "결손"으로 잡혀 모든 테스트가
+        # 실측 데이터 품질과 무관하게 revenue(4등급)로 떨어진다(_selected_fuels 참고).
+        company = Company(
+            name="○○정밀", industry_code="C251", industry_name="구조용 금속제품 제조",
+            fuel_types_json={"city_gas": True, "electricity": True},
+        )
         session.add(company)
         session.commit()
         yield session, company.id
@@ -149,8 +155,9 @@ def test_missing_months_reported_by_fuel(db):
 def test_scope1_and_scope2_completeness_are_independent(db):
     """Scope 1(가스, 경유/유류)과 Scope 2(전기) 완전성은 서로 다른 슬롯 기준으로 독립
     집계된다(PR #25 리뷰 CONFIRMED — 이전에는 연료 구분 없이 한데 묶여 집계됐다).
-    도시가스만 12개월 채우면 Scope 1은 가스 슬롯만 채워져 50%(가스 12/12, 경유·유류 0/12),
-    Scope 2(전기 전용)는 데이터가 아예 없어 0%다."""
+    db 픽스처의 회사는 도시가스+전기만 선택했으므로(경유 미선택) Scope 1 슬롯은
+    가스 하나뿐이다 — 도시가스 12개월을 다 채우면 100%, Scope 2(전기)는 데이터가
+    아예 없어 0%다."""
     session, cid = db
     for m in range(1, 13):
         _add_voucher(session, cid, m, "도시가스", quantity=100)  # Scope 1(가스)만 채움
@@ -158,7 +165,7 @@ def test_scope1_and_scope2_completeness_are_independent(db):
     scope1 = assess_inventory_completeness(session, cid, YEAR, "scope_1")
     scope2 = assess_inventory_completeness(session, cid, YEAR, "scope_2")
 
-    assert scope1.completeness_pct == 50.0
+    assert scope1.completeness_pct == 100.0
     assert scope2.completeness_pct == 0.0
     assert scope1.activity_basis_breakdown
     assert not scope2.activity_basis_breakdown
@@ -198,16 +205,33 @@ def test_energy_consumption_data_scores_higher_than_revenue_estimate(db):
     assert revenue_result["candidate_score"] == 4
 
 
-def test_mixed_data_within_year_uses_dominant_basis(db):
-    """혼합 데이터 — 더 많이 쓰인 활동자료 근거를 대표값으로 매칭한다."""
+def test_single_revenue_voucher_drags_whole_scope_down_weakest_link(db):
+    """약한 고리 원칙 — 12개월 중 11개월이 실측(energy_consumption)이어도 단 1개월만
+    수량 없는(revenue) 전표면 그 Scope 전체가 revenue(3a)로 떨어진다. 다수결이었다면
+    2a가 나왔을 상황이라 이 회귀를 직접 검증한다."""
     session, cid = db
-    for m in range(1, 9):  # 8개월 energy_consumption
+    for m in range(1, 12):  # 11개월 energy_consumption
         _add_voucher(session, cid, m, "도시가스", quantity=100)
-    for m in (9, 10, 11, 12):  # 4개월 revenue
-        _add_voucher(session, cid, m, "유류대금")
+    _add_voucher(session, cid, 12, "도시가스")  # 1개월만 수량 없음(revenue)
 
     result = assess_borrower_emission_quality(session, cid, YEAR, "scope_1")
-    assert result["option_code"] == "2a"  # energy_consumption이 다수
+    assert result["option_code"] == "3a"
+    assert result["candidate_score"] == 4
+
+
+def test_gap_alone_drags_scope_down_even_with_all_measured_data(db):
+    """약한 고리 원칙 — 있는 데이터는 전부 실측(energy_consumption)이어도 결손월이
+    있으면(9~12월 미연동) 전체 Scope가 revenue(3a) 수준으로 떨어진다. 완전성이
+    16.7%여도 다수결로는 최고 등급이 나왔던 사례(구미정밀 실사용 중 발견)의 회귀
+    테스트다."""
+    session, cid = db
+    for m in range(1, 9):  # 8개월만 존재, 전부 실측 — 9~12월은 결손
+        _add_voucher(session, cid, m, "도시가스", quantity=100)
+
+    result = assess_borrower_emission_quality(session, cid, YEAR, "scope_1")
+    assert result["option_code"] == "3a"
+    assert result["candidate_score"] == 4
+    assert any("약한 고리" in lim for lim in result["limitations"])
 
 
 def test_scope1_basis_not_polluted_by_scope2_data(db):

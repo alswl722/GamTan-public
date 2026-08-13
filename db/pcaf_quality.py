@@ -48,6 +48,19 @@ kWh·도시가스 m³·경유 L)는 전부 연료·전력 소비량이지 생산
 production → energy_consumption 으로 바꿨다. 2b(생산 실적)는 이 프로젝트가
 생산량 데이터를 아예 만들지 않으므로 1a/1b/3b/3c와 같은 성격으로 도달
 불가능한 옵션으로 남는다.
+
+약한 고리 원칙 도입 (2026-08-13): 위 2a/2b 정정 직후 실제 데모 데이터로
+확인해보니, 결손월이 12개월 중 10개월(completeness_pct 16.7%)이어도 남은
+2개월이 전부 실측이면 다수결로 2a/2등급이 나오는 사례가 발견됐다 — 완전성과
+품질점수를 분리한다는 §6.3 설계 의도가 극단적으로는 "거의 데이터가 없어도
+최고 등급"이라는 결과를 낳고 있었다. 일반 탄소회계에서 통용되는 "약한 고리
+원칙"(연간 수치의 신뢰도는 가장 약한 구성요소를 따라간다)을 받아들여
+dominant_basis 다수결(max())을 _weakest_basis로 교체했다 — 결손월이 하나라도
+있거나 revenue 전표가 하나라도 섞이면 그 Scope 전체가 revenue(3a, 4등급)로
+떨어진다. 이 변경과 맞물려 Company.fuel_types_json으로 실제 사용 연료만
+결손 판정 대상에 넣도록(_selected_fuels) 같이 고쳤다 — 안 그러면 기업이
+아예 안 쓰는 연료(예: 경유 지게차 없음)의 매트릭스 슬롯이 영원히 결손으로
+잡혀 모든 기업이 실제 데이터 품질과 무관하게 revenue/4등급에 묶이게 된다.
 """
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -66,6 +79,30 @@ from db.models import (
 
 _FUEL_BUCKET_SCOPE = {"전기": "scope_2", "가스": "scope_1", "경유/유류": "scope_1"}
 _UPGRADE_SCOPES = ("scope_1", "scope_2")
+
+
+def _selected_fuels(fuel_types: dict | None) -> set[str] | None:
+    """companies.fuel_types_json → 이 기업이 실제로 체크한 연료 대분류 집합.
+
+    api/queries.py::_selected_coverage_fuels와 같은 판정을 이 모듈 안에서 독립적으로
+    유지한다(_fuel_bucket과 같은 이유 — db/pcaf.py 계열과 분리). None(연료 체크 전
+    상태)이면 필터를 걸지 않는다 — 체크 전에는 모든 연료를 결손 후보로 본다.
+
+    이 필터가 없으면 기업이 아예 쓰지 않는 연료(예: 경유 지게차가 없는 공장)의 매트릭스
+    슬롯이 영원히 결손으로 잡혀, 약한 고리 원칙 아래서 모든 기업이 실제 데이터 품질과
+    무관하게 최저 등급에 묶이는 문제가 생긴다(CLAUDE.md 원칙6 — 체크하지 않은 연료의
+    결손은 결손 판정 대상에서 제외).
+    """
+    if fuel_types is None:
+        return None
+    selected: set[str] = set()
+    if fuel_types.get("electricity", True):
+        selected.add("전기")
+    if fuel_types.get("city_gas"):
+        selected.add("가스")
+    if fuel_types.get("diesel") or fuel_types.get("gasoline") or fuel_types.get("lpg") in ("yes", "unsure"):
+        selected.add("경유/유류")
+    return selected
 
 
 def default_reporting_year(session: Session, company_id: int) -> int:
@@ -132,17 +169,24 @@ def assess_inventory_completeness(
     """해당 기업·보고연도·Scope의 12개월 충족 여부, 결손월, 활동자료 근거 구성비를 집계.
 
     scope_group: "scope_1"(가스, 경유/유류) | "scope_2"(전기). _FUEL_BUCKET_SCOPE로
-    연료 버킷을 Scope에 매핑해 해당 Scope의 연료만 대상으로 집계한다.
+    연료 버킷을 Scope에 매핑해 해당 Scope의 연료만 대상으로 집계한다. 그중에서도
+    Company.fuel_types_json에 체크된 연료만 대상이다(_selected_fuels) — 안 쓰는
+    연료는 애초에 결손 판정에 들어가지 않는다.
 
-    completeness_pct는 "12개월 × 해당 Scope 연료 개수" 슬롯 중 결손 없는 슬롯의 비율이다
-    — 배출량 가중이 아니라 시간·배출원 커버리지 기준(§6.3). 품질 후보 점수(candidate_score)
-    산정에는 이 값을 참고자료로만 넘기고 직접 곱하지 않는다(완전성과 품질 후보는 분리, §6.3).
+    completeness_pct는 "12개월 × 해당 Scope의 **선택된** 연료 개수" 슬롯 중 결손 없는
+    슬롯의 비율이다 — 배출량 가중이 아니라 시간·배출원 커버리지 기준(§6.3). 품질 후보
+    점수(candidate_score) 산정에는 이 값을 참고자료로만 넘기고 직접 곱하지 않는다
+    (완전성과 품질 후보는 분리, §6.3) — 다만 결손 존재 자체는 약한 고리 원칙에 따라
+    candidate_score에도 영향을 준다(assess_borrower_emission_quality 참고).
 
     "기타"(어느 연료 버킷에도 속하지 않는) 전표는 completeness matrix에 안 잡히는 것과
     동일하게 activity_basis_breakdown 집계에서도 제외한다 — 리포트에 안 보이는 전표가
     옵션 코드 선택에는 영향을 주는 근거-결과 불일치를 막기 위함(PR #25 리뷰).
     """
-    fuels = [f for f, s in _FUEL_BUCKET_SCOPE.items() if s == scope_group]
+    all_scope_fuels = [f for f, s in _FUEL_BUCKET_SCOPE.items() if s == scope_group]
+    company = session.get(Company, company_id)
+    selected = _selected_fuels(company.fuel_types_json if company else None)
+    fuels = all_scope_fuels if selected is None else [f for f in all_scope_fuels if f in selected]
     rows = session.execute(
         select(Voucher, Classification)
         .join(Classification, Classification.voucher_id == Voucher.id)
@@ -274,10 +318,28 @@ def _fuel_bucket(item: str | None) -> str:
     return "기타"
 
 
+def _weakest_basis(activity_basis_breakdown: dict[str, int], *, has_gap: bool) -> str:
+    """약한 고리 원칙(weakest-link) — 다수결이 아니라 그 Scope-연도에 섞여 들어간
+    활동자료 근거 중 가장 신뢰도가 낮은 것을 대표값으로 쓴다.
+
+    일반 탄소회계(GHG Protocol 계열)에서 연간 수치 하나가 실측·추정을 섞어 만들어질
+    때 통용되는 원칙 — "연간 수치 전체의 신뢰도는 가장 약한 구성요소를 따라간다".
+    결손월도 근거가 전혀 없는(실측은커녕 금액 환산 추정치조차 없는) 가장 약한
+    고리이므로, 결손이 하나라도 있으면 그 자체가 이미 이 Scope에서 만들 수 있는
+    최악의 근거다. 이 프로젝트가 만드는 근거는 energy_consumption(2a, 강함)과
+    revenue(3a, 약함) 둘뿐이므로, "결손 있음" 또는 "revenue 전표 존재" 중 하나라도
+    해당하면 전체를 revenue로 낮춘다 — 12개월 전부가 실측 수량으로 채워져 있을
+    때만 energy_consumption을 인정한다.
+    """
+    if has_gap or "revenue" in activity_basis_breakdown:
+        return "revenue"
+    return "energy_consumption"
+
+
 def _select_quality_rule(
     session: Session, activity_basis: str, *, scope3: bool
 ) -> PcafQualityRule | None:
-    """구성비에서 가장 많이 쓰인 활동자료 근거에 맞는 PCAF 옵션 규칙을 선택.
+    """활동자료 근거(약한 고리 원칙으로 정해진 대표값)에 맞는 PCAF 옵션 규칙을 선택.
 
     scope3=True 면 Option 2a(energy_consumption)는 원문 각주 208에 의해 제외한다.
     이 프로젝트는 activity_data_basis 로 revenue/energy_consumption 두 가지만
@@ -308,6 +370,11 @@ def assess_borrower_emission_quality(
     Scope 1과 Scope 2는 각각 별도로 completeness/activity_basis_breakdown을
     집계한다(PR #25 리뷰 CONFIRMED — 이전에는 두 Scope를 한데 묶어 집계해서
     서로 다른 배출원의 activity_basis가 서로의 점수를 오염시켰다).
+
+    약한 고리 원칙(2026-08-13 반영): 대표 근거는 다수결이 아니라 _weakest_basis로
+    정한다 — 결손월이 하나라도 있거나 revenue 전표가 하나라도 섞이면 그 Scope
+    전체가 revenue(3a, 4등급)로 떨어진다. energy_consumption(2a, 2등급)은 해당
+    Scope에 선택된 연료의 12개월이 전부 실측 수량으로 채워져 있을 때만 나온다.
     """
     if scope_group == "scope_3":
         return {
@@ -341,11 +408,9 @@ def assess_borrower_emission_quality(
             "bank_review_required": True,
         }
 
-    dominant_basis = max(
-        completeness.activity_basis_breakdown, key=completeness.activity_basis_breakdown.get
-    )
-    rule = _select_quality_rule(session, dominant_basis, scope3=False)
-    evidence = build_quality_evidence(rule, dominant_basis, completeness)
+    weak_basis = _weakest_basis(completeness.activity_basis_breakdown, has_gap=bool(completeness.missing_months))
+    rule = _select_quality_rule(session, weak_basis, scope3=False)
+    evidence = build_quality_evidence(rule, weak_basis, completeness)
 
     return {
         "standard": "PCAF Part A Third Edition",
@@ -379,6 +444,11 @@ def build_quality_evidence(
     if completeness.missing_months:
         gap_fuels = ", ".join(completeness.missing_months)
         limitations.append(f"일부 배출원 결손월 존재: {gap_fuels}")
+        if activity_basis == "revenue" and "energy_consumption" in completeness.activity_basis_breakdown:
+            limitations.append(
+                "실측 수량이 있는 달도 있으나 결손월이 있어 약한 고리 원칙에 따라 "
+                "전체 등급을 매출 환산 수준으로 낮춰 적용함"
+            )
     if activity_basis == "revenue":
         limitations.append("실측 수량이 아닌 금액 환산 추정치 포함")
 
@@ -453,26 +523,38 @@ def quality_upgrade_candidate(
     실제 도달 가능한 등급 전환은 4등급→2등급 하나뿐이다. candidate_score가 4가 아니면
     (None=활동자료 없음, 2=이미 도달 가능한 최고점) 후보가 아니다.
 
-    4등급이면, 그 Scope 전표 중 실측 수량이 기록된(energy_consumption) 비율을 다수로
-    뒤집는 데 필요한 최소 건수를 activity_basis_breakdown에서 계산해 안내 문구를 만든다.
+    약한 고리 원칙(2026-08-13) 아래서 2등급 도달 조건은 "선택된 연료의 12개월 슬롯이
+    전부 채워져 있고, 그 전표 전부가 실측 수량을 가질 것" — 다수결을 뒤집을 건수가
+    아니라 "결손 몇 개월을 채우고, 실측 없는 전표 몇 건을 보완해야 하는지"로 안내
+    문구를 계산한다.
     """
     assessment = assess_borrower_emission_quality(session, company_id, reporting_year, scope_group)
     if assessment["candidate_score"] != 4:
         return None
 
     completeness = assess_inventory_completeness(session, company_id, reporting_year, scope_group)
-    counts = completeness.activity_basis_breakdown
-    energy_consumption = counts.get("energy_consumption", 0)
-    revenue = counts.get("revenue", 0)
-    needed = revenue - energy_consumption + 1
-    fuels = ", ".join(f for f, s in _FUEL_BUCKET_SCOPE.items() if s == scope_group)
+    revenue_count = completeness.activity_basis_breakdown.get("revenue", 0)
+    missing_count = sum(len(months) for months in completeness.missing_months.values())
+
+    all_scope_fuels = [f for f, s in _FUEL_BUCKET_SCOPE.items() if s == scope_group]
+    company = session.get(Company, company_id)
+    selected = _selected_fuels(company.fuel_types_json if company else None)
+    fuels_list = all_scope_fuels if selected is None else [f for f in all_scope_fuels if f in selected]
+    fuels = ", ".join(fuels_list or all_scope_fuels)
     scope_label = "Scope 1" if scope_group == "scope_1" else "Scope 2"
+
+    parts = []
+    if missing_count:
+        parts.append(f"결손 {missing_count}개월분 연동")
+    if revenue_count:
+        parts.append(f"실측 수량 없는 전표 {revenue_count}건 보완")
+    todo = " + ".join(parts) if parts else "전 전표 실측 수량 확인"
 
     return {
         "scope_group": scope_group,
         "current_grade": 4,
         "target_grade": 2,
-        "missing": f"{fuels} 고지서 중 사용량(수량)이 기록된 건이 {needed}건 더 필요해요",
+        "missing": f"{fuels} 고지서의 {todo}이 필요해요",
         "benefit": f"{scope_label} 4등급 → 2등급 시 우대금리 대상 안내 가능",
     }
 

@@ -47,9 +47,16 @@ def db(tmp_path):
         seed_unit_prices(session)
         seed_industry_distributions(session)
         seed_pcaf_quality_rules(session)
+        # 도시가스+전기만 쓰고 경유는 안 쓰는 회사로 고정 — 안 그러면 약한 고리 원칙
+        # 아래서 한 번도 안 쓴 경유 버킷의 12개월이 전부 "결손"으로 잡혀 실측을 다
+        # 채워도 revenue(4등급)에 묶인다(db/pcaf_quality.py::_selected_fuels 참고).
+        # 이 파일의 모든 테스트가 rate_approvals 흐름(PCAF 등급)만 다루므로 공유
+        # 픽스처에 걸어도 안전하다(test_admin.py는 get_coverage 등 다른 로직도 같은
+        # 픽스처를 쓰기 때문에 거기선 테스트별로 개별 설정했다).
         company = Company(
             name="○○정밀", industry_code="C251", industry_name="구조용 금속제품 제조",
             employee_count=12, revenue_krw=2_400_000_000, region="경북 구미시",
+            fuel_types_json={"city_gas": True, "electricity": True},
         )
         session.add(company)
         session.commit()
@@ -84,9 +91,13 @@ def _add_classified_voucher(session, cid, month, item, *, scope, emission, statu
 
 def _make_upgrade_candidate(session, cid, scope_group="scope_1"):
     """해당 Scope 전표 12개월 전부를 매출 환산(수량 없음, revenue/4등급)으로 채워
-    정식 엔진 기준 등급 상승 후보가 되도록 한다(4등급→2등급, test_admin.py와 동일 패턴)."""
+    정식 엔진 기준 등급 상승 후보가 되도록 한다(4등급→2등급, test_admin.py와 동일 패턴).
+
+    db 픽스처의 회사는 도시가스+전기만 선택했으므로(경유 미선택) scope_1도 "도시가스"를
+    쓴다 — "유류대금"(경유 버킷)을 쓰면 선택 안 된 연료라 매트릭스에서 아예 제외되어
+    activity_basis_breakdown이 비고, candidate_score가 4가 아니라 None이 돼버린다."""
     scope = 1 if scope_group == "scope_1" else 2
-    item = "유류대금" if scope_group == "scope_1" else "전기요금"
+    item = "도시가스" if scope_group == "scope_1" else "전기요금"
     for m in range(1, 13):
         _add_classified_voucher(session, cid, m, item, scope=scope, emission=100.0, quantity=None)
 
