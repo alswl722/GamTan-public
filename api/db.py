@@ -1,7 +1,7 @@
 """공용 SQLAlchemy 엔진 + 세션 의존성.
 
 CLAUDE.md 규칙:
-- Supabase Session 모드 풀러 + pool_size=5, pool_pre_ping=True
+- Supabase Session 모드 풀러 + pool_size=3, pool_pre_ping=True (풀러 한도 15 대비 동시 개발 인원 여유 확보 위해 5→3 축소)
 - 접속 문자열은 .env 의 DATABASE_URL (커밋 금지)
 이후 라우터들이 get_session 을 Depends 로 재사용한다.
 """
@@ -28,7 +28,7 @@ def get_engine():
             raise RuntimeError("DATABASE_URL 이 설정되지 않았습니다 (.env 확인)")
         _engine = create_engine(
             DATABASE_URL,
-            pool_size=5,
+            pool_size=3,
             pool_pre_ping=True,
         )
         _SessionLocal = sessionmaker(bind=_engine, class_=Session, expire_on_commit=False)

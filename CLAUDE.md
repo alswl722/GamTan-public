@@ -29,7 +29,7 @@
 
 ### Supabase 접속 규칙
 
-- Session 모드 풀러, `create_engine(..., pool_size=5, pool_pre_ping=True)`
+- Session 모드 풀러, `create_engine(..., pool_size=3, pool_pre_ping=True)` (풀러 전체 한도 15 대비 동시 개발 인원 여유 확보 위해 5→3 축소)
 - 접속 문자열은 `.env`의 `DATABASE_URL` — **키·URL 커밋 절대 금지** (.gitignore 확인)
 - 무료 티어 자동 pause 있음 → GitHub Actions 1일 1회 핑 쿼리
 - **공유 DB이므로 여러 명이 동시에 접속한다.** `alembic upgrade/downgrade`를 포함한 모든 DDL은 팀 전체에 즉시 영향을 준다 — 적용 전 사용자 확인 필수, 로컬 마이그레이션 파일을 만든 뒤에도 커밋·푸시를 미루지 말 것(리비전 번호 충돌 방지)
