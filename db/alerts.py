@@ -30,19 +30,34 @@ def _monthly_totals(session: Session, company_id: int) -> dict[int, float]:
     제외한다 — 저신뢰 분류 하나가 은행 담당자에게 확정된 "급등"으로 잘못
     보이면 안 된다(보조수단성 원칙, CLAUDE.md §5-5).
     """
-    rows = session.execute(
-        select(Voucher.month, Classification.emission_co2e)
+    return _monthly_totals_by_company(session, company_id=company_id).get(company_id, {})
+
+
+def _monthly_totals_by_company(
+    session: Session, company_id: int | None = None
+) -> dict[int, dict[int, float]]:
+    """월별 배출량 합계를 기업 단위로 한 번에 묶어 반환 — N+1 방지용 벌크 조회.
+
+    company_id 없이 부르면 전 기업을 한 쿼리로 가져와 detect_alerts의 포트폴리오
+    스캔(GET /admin/alerts)이 기업 수만큼 쿼리를 반복하지 않게 한다.
+    """
+    stmt = (
+        select(Voucher.company_id, Voucher.month, Classification.emission_co2e)
         .join(Classification, Classification.voucher_id == Voucher.id)
         .where(
-            Voucher.company_id == company_id,
             Classification.scope.in_((1, 2)),
             Classification.status.in_(("auto", "confirmed")),
         )
-    ).all()
-    totals: dict[int, float] = {}
-    for month, emission in rows:
+    )
+    if company_id is not None:
+        stmt = stmt.where(Voucher.company_id == company_id)
+    rows = session.execute(stmt).all()
+
+    by_company: dict[int, dict[int, float]] = {}
+    for cid, month, emission in rows:
+        totals = by_company.setdefault(int(cid), {})
         totals[int(month)] = totals.get(int(month), 0.0) + float(emission or 0)
-    return totals
+    return by_company
 
 
 def _trend_signal(totals: dict[int, float]) -> dict | None:
@@ -124,9 +139,11 @@ def detect_alerts(session: Session, company_id: int | None = None) -> list[dict]
         stmt = stmt.where(Company.id == company_id)
     companies = session.execute(stmt).scalars().all()
 
+    totals_by_company = _monthly_totals_by_company(session, company_id=company_id)
+
     alerts = []
     for co in companies:
-        totals = _monthly_totals(session, co.id)
+        totals = totals_by_company.get(co.id, {})
         for signal in (_trend_signal(totals), _gap_signal(totals)):
             if signal is None:
                 continue

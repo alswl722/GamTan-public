@@ -18,7 +18,31 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from api.queries import get_coverage, get_distribution
-from db.models import Classification, Company, Voucher
+from db.models import Classification, Company, IndustryDistribution, Voucher
+
+
+def _bulk_distributions(session: Session) -> dict[tuple[str, int], dict]:
+    """industry_distributions 전체를 한 번에 읽어 (industry_code, scope) 로 인덱싱.
+
+    portfolio_summary가 기업마다 get_distribution 을 다시 조회하지 않게 하는
+    캐시 — 업종 코드가 겹치는 기업이 많을수록(대구·경북 소부장 특화 데모 특성상
+    금속가공 업종 집중) 효과가 커진다.
+    """
+    rows = session.execute(select(IndustryDistribution)).scalars().all()
+    out: dict[tuple[str, int], dict] = {}
+    for d in rows:
+        out[(d.industry_code, d.scope)] = {
+            "industry_code": d.industry_code,
+            "industry_name": d.industry_name,
+            "scope": d.scope,
+            "min": d.emission_min_co2e,
+            "median": d.emission_median_co2e,
+            "max": d.emission_max_co2e,
+            "median_per_employee": d.emission_median_per_employee,
+            "year": d.year,
+            "source": d.source,
+        }
+    return out
 
 
 def portfolio_summary(session: Session) -> dict:
@@ -27,8 +51,13 @@ def portfolio_summary(session: Session) -> dict:
     각 기업의 company_pcaf_summary 를 재사용해 실측(after) 우선, 없으면 기준선(before)
     으로 합산한다. 데모는 시연 기업 1곳이지만 로직은 N개 기업으로 그대로 확장된다
     — 프론트가 company_count 를 정직하게 표기(현재 1개 → 결선 포트폴리오).
+
+    기업 수만큼 반복되던 개별 조회(get_distribution 등)를 앞서 한 번에 읽어
+    캐시로 넘긴다 — 결과는 company_pcaf_summary를 직접 부르는 것과 동일하고,
+    쿼리 횟수만 줄인다(N+1 방지).
     """
     companies = session.execute(select(Company).order_by(Company.id)).scalars().all()
+    dist_cache = _bulk_distributions(session)
     grade_dist = {g: 0 for g in range(1, 6)}
     per_company = []
     s1_total = s2_total = 0.0
@@ -36,7 +65,7 @@ def portfolio_summary(session: Session) -> dict:
     measured_total = 0.0      # 전표 실측분 (결손월 업종평균 보정분 제외)
 
     for co in companies:
-        summ = company_pcaf_summary(session, co.id)
+        summ = company_pcaf_summary(session, co.id, dist_cache=dist_cache)
         after = summ["after"]
         used = after or summ["before"]         # 분류 미실행 기업은 기준선(5등급)으로
         s1 = used.get("scope1", 0.0) or 0.0
@@ -108,14 +137,26 @@ def _clip_grade(g: float) -> int:
     return max(1, min(5, round(g)))
 
 
-def company_pcaf_summary(session: Session, company_id: int) -> dict:
-    """기업의 PCAF Before/After + 벤치마킹. 분류 미실행 시 after=None."""
+def company_pcaf_summary(
+    session: Session, company_id: int, dist_cache: dict[tuple[str, int], dict] | None = None
+) -> dict:
+    """기업의 PCAF Before/After + 벤치마킹. 분류 미실행 시 after=None.
+
+    dist_cache를 넘기면 industry_distributions 조회를 그 캐시에서 꺼내 쓴다
+    (portfolio_summary가 전 기업을 순회할 때 기업마다 다시 조회하지 않도록—
+    N+1 방지). 기업 1곳만 볼 때(에이전트 도구, 사장님 리포트)는 생략하면
+    기존과 동일하게 그때그때 조회한다.
+    """
     company = session.get(Company, company_id)
     if company is None:
         raise ValueError(f"company_id={company_id} 없음")
 
-    dist1 = get_distribution(session, company.industry_code, 1)
-    dist2 = get_distribution(session, company.industry_code, 2)
+    if dist_cache is not None:
+        dist1 = dist_cache.get((company.industry_code, 1))
+        dist2 = dist_cache.get((company.industry_code, 2))
+    else:
+        dist1 = get_distribution(session, company.industry_code, 1)
+        dist2 = get_distribution(session, company.industry_code, 2)
 
     before = _before_baseline(company, dist1, dist2)
     after = _after_measured(session, company_id, dist1, dist2)

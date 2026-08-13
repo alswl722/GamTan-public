@@ -35,7 +35,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.db import get_session
@@ -325,26 +325,38 @@ def trace_runs(session: Session = Depends(get_session)):
     """에이전트 실행 이력 목록 — session_id 단위로 묶어 최신순.
 
     드릴다운(스텝 타임라인)은 기존 GET /trace/{session_id} 를 그대로 쓴다.
+    session_id별 메시지는 별도 재조회 없이 아래 한 쿼리 결과를 Python에서
+    그룹핑해 만든다(세션 수만큼 쿼리가 반복되던 N+1 제거).
     """
     rows = session.execute(
         select(
             TraceLog.session_id,
             TraceLog.company_id,
             Company.name,
-            func.min(TraceLog.created_at).label("ran_at"),
-            func.count(TraceLog.id).label("step_count"),
+            TraceLog.created_at,
+            TraceLog.message,
         )
         .join(Company, Company.id == TraceLog.company_id)
-        .group_by(TraceLog.session_id, TraceLog.company_id, Company.name)
-        .order_by(func.min(TraceLog.created_at).desc())
+        .order_by(TraceLog.session_id, TraceLog.created_at)
     ).all()
 
+    grouped: dict[str, dict] = {}
+    for sid, company_id, company_name, created_at, message in rows:
+        g = grouped.setdefault(sid, {
+            "company_id": company_id,
+            "company_name": company_name,
+            "ran_at": created_at,
+            "step_count": 0,
+            "messages": [],
+        })
+        if created_at is not None and (g["ran_at"] is None or created_at < g["ran_at"]):
+            g["ran_at"] = created_at
+        g["step_count"] += 1
+        g["messages"].append(message or "")
+
     runs = []
-    for sid, company_id, company_name, ran_at, step_count in rows:
-        messages = session.execute(
-            select(TraceLog.message).where(TraceLog.session_id == sid)
-        ).scalars().all()
-        blob = " ".join(m or "" for m in messages)
+    for sid, g in grouped.items():
+        blob = " ".join(g["messages"])
 
         badges = [label for needle, label in _BADGE_RULES if needle in blob]
         # 실행 중단은 오케스트레이터가 예외 시 남기는 문구 — 그 외는 완료로 본다
@@ -354,13 +366,14 @@ def trace_runs(session: Session = Depends(get_session)):
 
         runs.append({
             "session_id": sid,
-            "company_id": company_id,
-            "company_name": company_name,
-            "ran_at": ran_at.isoformat() if ran_at else None,
-            "step_count": int(step_count),
+            "company_id": g["company_id"],
+            "company_name": g["company_name"],
+            "ran_at": g["ran_at"].isoformat() if g["ran_at"] else None,
+            "step_count": g["step_count"],
             "status": "실패" if failed else "완료",
             "result_badges": badges,
         })
+    runs.sort(key=lambda r: r["ran_at"] or "", reverse=True)
     return {"runs": runs}
 
 
