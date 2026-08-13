@@ -20,8 +20,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.db import get_session
-from db.models import BorrowerEmissionInventory, Company, OrganizationalBoundary, PcafQualityRule
-from db.pcaf_quality import aggregate_scope_emissions, assess_borrower_emission_quality
+from db.models import BorrowerEmissionInventory, Company, OrganizationalBoundary
+from db.pcaf_quality import assess_borrower_emission_quality, save_quality_assessment_version
 
 router = APIRouter(prefix="/borrowers", tags=["quality"])
 
@@ -109,6 +109,10 @@ def evaluate_quality_assessment(company_id: int, year: int, session: Session = D
     _require_company(session, company_id)
     boundary = _latest_boundary(session, company_id, year)
 
+    # 저장 전에 먼저 산정 가능 여부를 확인 — 둘 다 불가면 422로 명확히 실패시킨다
+    # (CLAUDE.md 실패 가시성 원칙, 목업으로 채우지 않는다). save_quality_assessment_version이
+    # 내부에서 다시 한번 평가하지만(순수 조회라 저렴), 저장 로직 자체는 여기서 복제하지
+    # 않고 공유 헬퍼(db/pcaf_quality.py)를 그대로 쓴다.
     assessments = {
         scope: assess_borrower_emission_quality(session, company_id, year, scope)
         for scope in _INVENTORY_SCOPES_FOR_SCOPE_1_2
@@ -120,47 +124,10 @@ def evaluate_quality_assessment(company_id: int, year: int, session: Session = D
             detail="; ".join(limitations) or "품질 후보를 산정할 수 없습니다",
         )
 
-    saved = []
-    for scope, assessment in assessments.items():
-        rule_id = None
-        if assessment["option_code"]:
-            rule = session.execute(
-                select(PcafQualityRule).where(PcafQualityRule.option_code == assessment["option_code"])
-            ).scalar_one_or_none()
-            rule_id = rule.id if rule else None
-
-        previous = session.execute(
-            select(BorrowerEmissionInventory)
-            .where(
-                BorrowerEmissionInventory.company_id == company_id,
-                BorrowerEmissionInventory.reporting_year == year,
-                BorrowerEmissionInventory.scope_group == scope,
-            )
-            .order_by(BorrowerEmissionInventory.version.desc())
-        ).scalars().first()
-
-        emissions = aggregate_scope_emissions(session, company_id, year, scope)
-
-        inventory = BorrowerEmissionInventory(
-            financial_institution_id=boundary.financial_institution_id,
-            company_id=company_id,
-            reporting_year=year,
-            organizational_boundary_id=boundary.id,
-            scope_group=scope,
-            emission_tco2e=emissions["emission_tco2e"],
-            scope3_status=emissions["scope3_status"],
-            verified=emissions["verified"],
-            completeness_pct=assessment["completeness_pct"],
-            candidate_quality_score=assessment["candidate_score"],
-            candidate_quality_rule_id=rule_id,
-            candidate_quality_basis_json=assessment["basis"],
-            limitations_json=assessment["limitations"],
-            status="draft",
-            version=(previous.version + 1) if previous else 1,
-            supersedes_inventory_id=previous.id if previous else None,
-        )
-        session.add(inventory)
-        saved.append(inventory)
+    saved = [
+        save_quality_assessment_version(session, company_id, boundary, year, scope)
+        for scope in _INVENTORY_SCOPES_FOR_SCOPE_1_2
+    ]
 
     session.commit()
     return {"assessments": [_serialize(inv) for inv in saved]}

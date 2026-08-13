@@ -119,7 +119,7 @@ def company_pcaf_summary(session: Session, company_id: int) -> dict:
 
     before = _before_baseline(company, dist1, dist2)
     after = _after_measured(session, company_id, dist1, dist2)
-    benchmark = _benchmark(company, dist1, dist2, after)
+    benchmark = benchmark_against_industry(company, dist1, dist2, after["total"] if after else None)
 
     return {"before": before, "after": after, "benchmark": benchmark}
 
@@ -277,8 +277,13 @@ def _after_measured(session, company_id, dist1, dist2) -> dict | None:
     }
 
 
-def _benchmark(company, dist1, dist2, after) -> dict:
-    """동종 업종 대비 위치 — min/median/max 안에서의 백분위(낮을수록 상위)."""
+def benchmark_against_industry(company, dist1, dist2, total_emission: float | None) -> dict:
+    """동종 업종 대비 위치 — min/median/max 안에서의 백분위(낮을수록 상위).
+
+    total_emission은 위치 계산에 쓸 배출량(tCO2e) 하나만 받는 순수함수라, 어느
+    엔진(구 db/pcaf.py 또는 정식 db/pcaf_quality.py)의 결과든 총량만 있으면
+    그대로 재사용할 수 있다(api/routers/owner_quality.py 참고).
+    """
     industry_name = (dist1 or dist2 or {}).get("industry_name") or company.industry_name
     result = {
         "industry_code": company.industry_code,
@@ -292,8 +297,7 @@ def _benchmark(company, dist1, dist2, after) -> dict:
         "max": None,
         "percentile_pct": None,
     }
-    # 실측 총량이 있으면 그걸로, 없으면 Before 추정으로 위치 계산
-    value = after["total"] if after else None
+    value = total_emission
     lo = (dist1 or {}).get("min", 0) + (dist2 or {}).get("min", 0)
     hi = (dist1 or {}).get("max", 0) + (dist2 or {}).get("max", 0)
     med = (dist1 or {}).get("median", 0) + (dist2 or {}).get("median", 0)

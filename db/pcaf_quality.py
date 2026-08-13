@@ -42,7 +42,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from db.models import Classification, PcafQualityRule, Voucher
+from db.models import BorrowerEmissionInventory, Classification, OrganizationalBoundary, PcafQualityRule, Voucher
 
 _FUEL_BUCKET_SCOPE = {"전기": "scope_2", "가스": "scope_1", "경유/유류": "scope_1"}
 
@@ -302,3 +302,60 @@ def build_quality_evidence(
         limitations.append("실측 수량이 아닌 금액 환산 추정치 포함")
 
     return {"basis": basis, "limitations": limitations}
+
+
+def save_quality_assessment_version(
+    session: Session,
+    company_id: int,
+    boundary: OrganizationalBoundary,
+    reporting_year: int,
+    scope_group: str,
+) -> BorrowerEmissionInventory:
+    """한 Scope의 품질 후보·배출량을 평가해 새 버전으로 저장(커밋은 호출부 책임).
+
+    은행 담당자용 evaluate 엔드포인트(api/routers/quality.py)와 사장님용 리포트
+    래퍼(api/routers/owner_quality.py)가 이 함수를 공유한다 — 저장 로직을 두 곳에
+    복제하지 않는다. 승인된(status='approved') 인벤토리도 덮어쓰지 않고 새 버전을
+    만든다(CLAUDE.md "승인된 결과는 덮어쓰지 않고 새 버전으로 재산정").
+    """
+    assessment = assess_borrower_emission_quality(session, company_id, reporting_year, scope_group)
+
+    rule_id = None
+    if assessment["option_code"]:
+        rule = session.execute(
+            select(PcafQualityRule).where(PcafQualityRule.option_code == assessment["option_code"])
+        ).scalar_one_or_none()
+        rule_id = rule.id if rule else None
+
+    previous = session.execute(
+        select(BorrowerEmissionInventory)
+        .where(
+            BorrowerEmissionInventory.company_id == company_id,
+            BorrowerEmissionInventory.reporting_year == reporting_year,
+            BorrowerEmissionInventory.scope_group == scope_group,
+        )
+        .order_by(BorrowerEmissionInventory.version.desc())
+    ).scalars().first()
+
+    emissions = aggregate_scope_emissions(session, company_id, reporting_year, scope_group)
+
+    inventory = BorrowerEmissionInventory(
+        financial_institution_id=boundary.financial_institution_id,
+        company_id=company_id,
+        reporting_year=reporting_year,
+        organizational_boundary_id=boundary.id,
+        scope_group=scope_group,
+        emission_tco2e=emissions["emission_tco2e"],
+        scope3_status=emissions["scope3_status"],
+        verified=emissions["verified"],
+        completeness_pct=assessment["completeness_pct"],
+        candidate_quality_score=assessment["candidate_score"],
+        candidate_quality_rule_id=rule_id,
+        candidate_quality_basis_json=assessment["basis"],
+        limitations_json=assessment["limitations"],
+        status="draft",
+        version=(previous.version + 1) if previous else 1,
+        supersedes_inventory_id=previous.id if previous else None,
+    )
+    session.add(inventory)
+    return inventory
