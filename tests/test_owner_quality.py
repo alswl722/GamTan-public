@@ -220,3 +220,35 @@ def test_quality_report_404_for_unknown_company(api_client):
     client, session, cid = api_client
     res = client.get(f"/owner/99999/quality-report?year={YEAR}")
     assert res.status_code == 404
+
+
+# ── GET /owner/{id}/emission-detail — Scope 카드 상세보기 ──────────────────────
+def test_emission_detail_matches_quality_report_total(api_client):
+    """상세 목록 항목들의 emission_co2e 합이 quality-report의 emission_tco2e와 일치한다
+    — 카드에 보이는 숫자와 펼쳤을 때 보이는 전표 목록이 항상 맞아야 함."""
+    client, session, cid = api_client
+    _add_institution_borrower(session, cid)
+    for m in range(1, 13):
+        _add_voucher(session, cid, m, "도시가스", scope=1)
+
+    report = client.get(f"/owner/{cid}/quality-report?year={YEAR}").json()
+    res = client.get(f"/owner/{cid}/emission-detail?scope_group=scope_1&year={YEAR}")
+    assert res.status_code == 200, res.text
+    body = res.json()
+
+    assert body["scope_group"] == "scope_1"
+    assert body["reporting_year"] == YEAR
+    assert len(body["items"]) == 12
+    detail_sum_tco2e = round(sum(item["emission_co2e"] for item in body["items"]) / 1000.0, 2)
+    assert detail_sum_tco2e == report["scope_1"]["emission_tco2e"]
+
+
+def test_emission_detail_empty_for_scope_without_data(api_client):
+    client, session, cid = api_client
+    _add_institution_borrower(session, cid)
+    for m in range(1, 13):
+        _add_voucher(session, cid, m, "도시가스", scope=1)
+
+    res = client.get(f"/owner/{cid}/emission-detail?scope_group=scope_2&year={YEAR}")
+    assert res.status_code == 200
+    assert res.json()["items"] == []

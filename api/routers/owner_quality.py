@@ -6,10 +6,13 @@
 db/organizational_boundary.py, 회계 검수 필요)과 최초 평가 자동 산정을 한 번에 처리한다.
 
 - GET /owner/{company_id}/quality-report?year=  Scope1·2 PCAF 품질 후보 + 동종업계 벤치마크
+- GET /owner/{company_id}/emission-detail       Scope 카드 상세보기 — 배출량을 구성한 전표 목록
 
 여신 결정이 아니다(CLAUDE.md §9). status는 항상 draft 이상으로 올라가지 않으며,
 bank_review_required가 항상 true다 — 은행 담당자 승인 전 자동 확정 없음.
 """
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -19,7 +22,7 @@ from api.queries import get_distribution
 from db.models import BorrowerEmissionInventory, Company, PcafQualityRule
 from db.organizational_boundary import ensure_organizational_boundary
 from db.pcaf import benchmark_against_industry
-from db.pcaf_quality import default_reporting_year, save_quality_assessment_version
+from db.pcaf_quality import default_reporting_year, save_quality_assessment_version, scope_emission_detail
 
 router = APIRouter(prefix="/owner", tags=["owner-quality"])
 
@@ -106,4 +109,23 @@ def owner_quality_report(
         "scope_1": _serialize_scope(session, inventories["scope_1"]),
         "scope_2": _serialize_scope(session, inventories["scope_2"]),
         "benchmark": benchmark,
+    }
+
+
+@router.get("/{company_id}/emission-detail")
+def owner_emission_detail(
+    company_id: int,
+    scope_group: Literal["scope_1", "scope_2"],
+    year: int,
+    session: Session = Depends(get_session),
+):
+    """Scope 카드를 펼쳤을 때 보여줄 전표 상세 — quality-report의 emission_tco2e를
+    구성한 전표 목록(db/pcaf_quality.py::scope_emission_detail이 같은 필터를 써서
+    합계가 항상 일치한다). 판정 근거(basis/limitations)는 여전히 은행 담당자용이라
+    이 응답에도 포함하지 않는다.
+    """
+    return {
+        "scope_group": scope_group,
+        "reporting_year": year,
+        "items": scope_emission_detail(session, company_id, year, scope_group),
     }

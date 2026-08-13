@@ -206,6 +206,46 @@ def aggregate_scope_emissions(
     return {"emission_tco2e": round(total_kg / 1000.0, 2), "scope3_status": None, "verified": False}
 
 
+def scope_emission_detail(
+    session: Session, company_id: int, reporting_year: int, scope_group: str
+) -> list[dict]:
+    """Scope 배출량 합계를 구성한 전표 목록 — 사장님 리포트 Scope 카드 상세보기 +
+    추후 탄소 리포트 내보내기가 함께 쓸 데이터 소스.
+
+    aggregate_scope_emissions와 완전히 동일한 필터(연료버킷→scope 매핑, 반려건
+    제외, emission_co2e 없는 건 제외)를 쓴다 — 그래야 이 목록의 emission_co2e 합이
+    카드에 보이는 합계와 항상 일치한다(숫자 불일치 방지).
+    """
+    if scope_group == "scope_3":
+        return []
+
+    fuels = [f for f, s in _FUEL_BUCKET_SCOPE.items() if s == scope_group]
+    rows = session.execute(
+        select(Voucher, Classification)
+        .join(Classification, Classification.voucher_id == Voucher.id)
+        .where(Voucher.company_id == company_id, Voucher.year == reporting_year)
+        .order_by(Voucher.month, Voucher.id)
+    ).all()
+
+    items = []
+    for voucher, classification in rows:
+        if _fuel_bucket(voucher.item_description) not in fuels:
+            continue
+        if classification.status == "rejected" or not classification.emission_co2e:
+            continue
+        items.append({
+            "voucher_id": voucher.id,
+            "month": voucher.month,
+            "item_description": voucher.item_description,
+            "supplier_name": voucher.supplier_name,
+            "fuel_type": classification.fuel_type,
+            "supply_amount_krw": float(voucher.supply_amount_krw) if voucher.supply_amount_krw else None,
+            "emission_co2e": float(classification.emission_co2e),
+            "status": classification.status,
+        })
+    return items
+
+
 def _fuel_bucket(item: str | None) -> str:
     """api/queries.py::_fuel_class 와 동일 판정(중복 정의 — db/pcaf.py 계열과
     독립적으로 유지하기 위해 이 모듈 안에서 완결시킨다)."""
