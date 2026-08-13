@@ -11,7 +11,6 @@ import { CompanyGradeList } from "@/components/admin/CompanyGradeList";
 import { DocumentAccessLog } from "@/components/admin/DocumentAccessLog";
 import { GradeDonut } from "@/components/admin/GradeDonut";
 import { HitlWorkspace } from "@/components/admin/HitlWorkspace";
-import { QualityIssueLog } from "@/components/admin/QualityIssueLog";
 import { TraceHistory } from "@/components/admin/TraceHistory";
 
 const TABS = [
@@ -21,7 +20,6 @@ const TABS = [
   { id: "risk", label: "여신 리스크" },
   { id: "trace", label: "실행 이력" },
   { id: "audit", label: "변경 이력" },
-  { id: "quality-issues", label: "품질 이슈" },
   { id: "audit-package", label: "감사 대응" },
 ] as const;
 
@@ -108,12 +106,6 @@ export function DashboardShell({ portfolio, hitlQueue, traceRuns, alerts }: Dash
             <div className="min-h-0">
               <DocumentAccessLog />
             </div>
-          </div>
-        )}
-
-        {activeTab === "quality-issues" && (
-          <div className="h-full p-4">
-            <QualityIssueLog />
           </div>
         )}
 

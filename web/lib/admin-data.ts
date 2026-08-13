@@ -11,13 +11,12 @@ import type {
   HitlItem,
   PageMeta,
   PortfolioResponse,
-  QualityIssueEntry,
   ReviewLogEntry,
   TraceRunItem,
   TraceStep,
 } from "@/lib/admin-types";
 
-/** 서버사이드 페이지네이션 요청 공통 파라미터 — review-log/access-log/quality-issues 공유. */
+/** 서버사이드 페이지네이션 요청 공통 파라미터 — review-log/access-log 공유. */
 export interface PageParams {
   page?: number;
   pageSize?: number;
@@ -95,13 +94,6 @@ export function getDocumentAccessLog(
   params: PageParams = {},
 ): Promise<{ entries: DocumentAccessLogEntry[] } & PageMeta> {
   return apiGet(`/admin/documents/access-log?${pageQuery(params)}`);
-}
-
-/** 품질 이슈 로그(열람 전용) — 업로드 반려·실패 이력만 모은다(v1 Tier 2). */
-export function getQualityIssues(
-  params: PageParams = {},
-): Promise<{ issues: QualityIssueEntry[] } & PageMeta> {
-  return apiGet(`/admin/quality-issues?${pageQuery(params)}`);
 }
 
 /** 감사 대응 근거 패키지 CSV 내보내기 URL — 다운로드 링크로 그대로 사용(fetch 불필요). */

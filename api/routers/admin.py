@@ -14,8 +14,6 @@
 - GET   /admin/documents/{id}                 원본문서 열람 (조회 시 접근 로그 자동 기록)
 - GET   /admin/documents/{id}/file            원본문서 파일 바이너리 (PDF, 조회 시 접근 로그 자동 기록)
 - GET   /admin/documents/access-log           원본문서 접근 감사 로그 목록 (page/page_size/company_name)
-- GET   /admin/quality-issues                 품질 이슈 로그 — 업로드 반려·실패 이력 (열람 전용,
-                                               page/page_size/company_name)
 - GET   /admin/audit-package                  감사 대응 근거 패키지 — 기업·기간 지정 시계열 원자료(JSON/CSV/PDF)
 
 여신 결정·스코어링은 하지 않는다(CLAUDE.md §9). AI가 1차 스크리닝한 저신뢰 건을
@@ -45,7 +43,6 @@ from db.audit_report_pdf import build_audit_report_pdf
 from db.document_access_log import access_history, record_access, recent_access_log
 from db.models import Classification, Company, SourceDocument, TraceLog, Voucher
 from db.pcaf import company_pcaf_summary, portfolio_summary
-from db.quality_issues import list_ingestion_failures
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -488,20 +485,6 @@ def download_document_file(
         media_type="application/pdf",
         headers={"Content-Disposition": f"inline; filename*=UTF-8''{display_name}"},
     )
-
-
-# ── 품질 이슈 로그 (v1 Tier 2, owner-admin-flow-spec.md §7) ────────────────────
-
-@router.get("/quality-issues")
-def quality_issues(
-    page: int = 1,
-    page_size: int = 50,
-    company_name: str | None = None,
-    session: Session = Depends(get_session),
-):
-    """업로드 반려·실패 이력 — 열람 전용. 성공한 업로드는 여기 안 남는다
-    (SourceDocument로 이미 남으므로). 실패만 원인별로 모아 보여준다."""
-    return list_ingestion_failures(session, page=page, page_size=page_size, company_name=company_name)
 
 
 # ── 감사 대응 근거 패키지 (v1 Tier 2, owner-admin-flow-spec.md §8) ──────────────

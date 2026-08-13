@@ -1,8 +1,8 @@
 "use client";
 
-// review-log/documents-access-log/quality-issues 3개 관리자 로그 탭이 공유하는
-// 서버사이드 페이지네이션 상태 관리 — 검색어 입력 시 300ms debounce 후 1페이지로
-// 리셋해 재조회한다.
+// review-log/documents-access-log 등 관리자 로그 탭이 공유하는 서버사이드
+// 페이지네이션 상태 관리 — 검색어 입력 시 300ms debounce 후 1페이지로 리셋해
+// 재조회한다.
 import { useEffect, useRef, useState } from "react";
 import type { PageMeta } from "@/lib/admin-types";
 import type { PageParams } from "@/lib/admin-data";

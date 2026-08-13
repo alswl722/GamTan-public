@@ -1,6 +1,6 @@
 "use client";
 
-// review-log/documents-access-log/quality-issues 로그 탭이 공유하는 페이지 이동 바.
+// review-log/documents-access-log 등 로그 탭이 공유하는 페이지 이동 바.
 // "N건 중 M~K" 표시 + 이전/다음 버튼. 페이지 번호 목록은 만들지 않는다 —
 // 서버가 total만 주고 page_size가 고정이라 이전/다음만으로 충분하다.
 

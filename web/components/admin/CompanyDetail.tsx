@@ -3,9 +3,9 @@
 // 실API: GET /admin/companies/{id}/overview (등급·결손·HITL대기·최근알림)
 //
 // 기업 하나를 골라 "이 기업이 뭘 했고 뭐가 있고 없는지"를 한 화면에서 보는 탭.
-// 항목 종류별로 흩어진 다른 탭(변경 이력·문서 열람·품질 이슈·실행 이력)을
-// company_id 하나로 필터해 여기서 다시 모아 보여준다 — 각 데이터의 정본은
-// 여전히 그 탭들이고, 여기서는 계산 로직을 새로 만들지 않는다.
+// 항목 종류별로 흩어진 다른 탭(변경 이력·문서 열람·실행 이력)을 company_id
+// 하나로 필터해 여기서 다시 모아 보여준다 — 각 데이터의 정본은 여전히 그
+// 탭들이고, 여기서는 계산 로직을 새로 만들지 않는다.
 
 import { useEffect, useState } from "react";
 import { getCompanyOverview } from "@/lib/admin-data";
@@ -14,7 +14,6 @@ import { gradeColor } from "@/lib/grade-colors";
 import { AlertsPanel } from "@/components/admin/AlertsPanel";
 import { AuditLog } from "@/components/admin/AuditLog";
 import { DocumentAccessLog } from "@/components/admin/DocumentAccessLog";
-import { QualityIssueLog } from "@/components/admin/QualityIssueLog";
 import { TraceHistory } from "@/components/admin/TraceHistory";
 
 function OverviewCard({ overview }: { overview: CompanyOverview }) {
@@ -178,10 +177,6 @@ export function CompanyDetail({
               <div className="h-96">
                 <DocumentAccessLog companyName={selectedCompanyName} />
               </div>
-            </div>
-
-            <div className="h-96">
-              <QualityIssueLog companyName={selectedCompanyName} />
             </div>
           </div>
         )}

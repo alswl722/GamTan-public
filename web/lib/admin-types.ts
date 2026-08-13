@@ -3,7 +3,7 @@
  * (id·month는 숫자, nullable 필드 명시 — v0 목업의 string 가정과 다름)
  */
 
-/** 서버사이드 페이지네이션 메타 — review-log/documents/access-log/quality-issues 공통. */
+/** 서버사이드 페이지네이션 메타 — review-log/documents/access-log 공통. */
 export interface PageMeta {
   total: number;
   page: number;
@@ -137,20 +137,4 @@ export interface DocumentAccessLogEntry {
   original_filename: string | null;
   accessed_by: string;
   accessed_at: string | null;
-}
-
-/**
- * 품질 이슈 로그 한 건 — GET /admin/quality-issues 응답 항목(열람 전용).
- * 업로드 반려·실패 이력만 모은다 — 성공한 업로드는 여기 안 남는다.
- */
-export interface QualityIssueEntry {
-  id: number;
-  company_id: number;
-  company_name: string;
-  document_type: string | null;
-  original_filename: string | null;
-  failure_reason: "duplicate" | "missing_institution" | "excel_format" | "parse_error";
-  failure_reason_label: string;
-  detail: string;
-  created_at: string | null;
 }
