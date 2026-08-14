@@ -497,6 +497,11 @@ class RateProduct(Base):
     PCAF 품질점수는 1(최고)~5(최저) 순서형이라 "작을수록 우수"다.
     rate_discount_pct: 우대금리 폭(%p). 실제 확정 금리가 아니라 상품 공시상 우대폭
     안내이며, 최종 적용 여부·수치는 은행 담당자 심사에 따른다(원칙10).
+    requires_k_taxonomy_leads: True면 PCAF 등급만으로는 부족하고 db/k_taxonomy.py::
+    k_taxonomy_leads_for_company()가 실제 K택소노미 설비 증거(전표)를 찾아야 자격
+    충족으로 본다 — "K-택소노미 그린 SME 대출"처럼 원 상품 자체가 K택소노미 적합
+    프로젝트 조건을 요구할 때만 True(2026-08-15, PCAF 등급만 보던 걸 실제 조건에
+    맞게 분리). 기본 False는 ESG Grow-Up처럼 PCAF 등급만 보는 기존 상품과 동일.
     """
     __tablename__ = "rate_products"
 
@@ -508,6 +513,7 @@ class RateProduct(Base):
     eligibility_description = Column(Text, nullable=False)
     source_reference = Column(Text, nullable=False)
     disclaimer_note = Column(Text)
+    requires_k_taxonomy_leads = Column(Boolean, nullable=False, default=False, server_default="false")
     created_at = Column(DateTime(timezone=True), default=now)
 
     __table_args__ = (

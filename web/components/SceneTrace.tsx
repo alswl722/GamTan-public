@@ -250,16 +250,6 @@ export function SceneTrace({
       >
         {buttonLabel}
       </button>
-
-      {dataReady && (
-        <button
-          type="button"
-          onClick={runAgent}
-          className="mt-3 w-full text-center text-[12px] text-faint underline underline-offset-2 transition-colors hover:text-muted"
-        >
-          에이전트 재실행
-        </button>
-      )}
     </section>
   );
 }

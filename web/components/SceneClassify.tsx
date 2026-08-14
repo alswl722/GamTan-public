@@ -81,32 +81,6 @@ function ClassifyProgressRing({
   );
 }
 
-function ConfidenceBadge({ value }: { value: number }) {
-  const low = value < 0.7;
-  const pct = Math.round(value * 100);
-  return (
-    <span
-      className={`ml-auto rounded-md px-2 py-0.5 text-[11px] font-bold ${
-        low ? "bg-hitl/25 text-hitl-ink" : "bg-brand-soft text-brand-ink"
-      }`}
-    >
-      AI 확신도 {pct}%
-    </span>
-  );
-}
-
-/** category·fuel 뱃지 — 둘이 같으면(특히 "불명"/"불명" 중복) 하나로 합치고,
- * 둘 다 "불명"이면 처음 보는 사람도 알 수 있게 문구를 바꾼다. */
-function fuelBadgeText(
-  category: string | null,
-  fuel: string | null,
-): string | null {
-  const unique = [...new Set([category, fuel].filter((v): v is string => !!v))];
-  if (unique.length === 0) return null;
-  if (unique.length === 1 && unique[0] === "불명") return "연료 확인 필요";
-  return unique.join(" · ");
-}
-
 function ClassificationCard({
   row,
   open,
@@ -136,12 +110,6 @@ function ClassificationCard({
 
         <div className="flex flex-wrap items-center gap-1.5 text-[11.5px]">
           <ScopeTag scope={row.scope} />
-          {fuelBadgeText(row.category, row.fuel) && (
-            <span className="rounded-md border border-line px-1.5 py-0.5 text-muted">
-              {fuelBadgeText(row.category, row.fuel)}
-            </span>
-          )}
-          <ConfidenceBadge value={row.confidence} />
         </div>
       </button>
 

@@ -18,6 +18,7 @@ db/pcaf_quality.py의 PCAF Scope별 데이터 품질 평가(assess_borrower_emis
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from db.k_taxonomy import k_taxonomy_leads_for_company
 from db.models import RateProduct
 from db.pcaf_quality import (
     assess_borrower_emission_quality,
@@ -30,11 +31,16 @@ from db.pcaf_quality import (
 _UPGRADE_SCOPES = ("scope_1", "scope_2")
 
 
-def _matching_products(session: Session, candidate_score: int) -> list[dict]:
+def _matching_products(session: Session, candidate_score: int, has_k_taxonomy_leads: bool) -> list[dict]:
     """candidate_score 이하(=이 등급 이상 고품질)를 요구하는 상품만 자격 충족.
 
     PCAF 품질점수는 1(최고)~5(최저) 순서형이라 "숫자가 작을수록 우수"다 —
     RateProduct.min_data_quality_score는 "이 점수까지는 인정"하는 하한선.
+
+    requires_k_taxonomy_leads=True인 상품(예: K-택소노미 그린 SME 대출)은 PCAF
+    등급만으로는 부족하다 — 그 상품의 실제 조건이 K-택소노미 적합 설비 투자
+    증빙이라, 전표에서 그 근거(db/k_taxonomy.py 리드)가 실제로 확인돼야만
+    매칭시킨다(2026-08-15, PCAF 등급만 보던 걸 실제 상품 조건에 맞게 분리).
     """
     rows = session.execute(
         select(RateProduct).where(RateProduct.min_data_quality_score >= candidate_score)
@@ -48,6 +54,7 @@ def _matching_products(session: Session, candidate_score: int) -> list[dict]:
             "source_reference": p.source_reference,
         }
         for p in rows
+        if not p.requires_k_taxonomy_leads or has_k_taxonomy_leads
     ]
 
 
@@ -64,7 +71,8 @@ def rate_product_status_for_scope(
     if score is None:
         return None  # 활동자료 없음 — 기존과 동일하게 카드 자체가 없음
 
-    products = _matching_products(session, score)
+    has_k_taxonomy_leads = bool(k_taxonomy_leads_for_company(session, company_id))
+    products = _matching_products(session, score, has_k_taxonomy_leads)
     if products:
         return {
             "scope_group": scope_group,
@@ -76,7 +84,7 @@ def rate_product_status_for_scope(
     candidate = quality_upgrade_candidate(session, company_id, reporting_year, scope_group)
     if candidate is None:
         return None
-    target_products = _matching_products(session, candidate["target_grade"])
+    target_products = _matching_products(session, candidate["target_grade"], has_k_taxonomy_leads)
     benefit = candidate["benefit"]
     if target_products:
         names = ", ".join(p["product_name"] for p in target_products)
