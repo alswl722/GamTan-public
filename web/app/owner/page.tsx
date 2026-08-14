@@ -115,19 +115,22 @@ export default function OwnerHomePage() {
         href="/owner/measure"
         className="btn-cta group mt-5 block rounded-3xl bg-surface px-5 py-5 shadow-card transition-transform"
       >
-        <span className="flex items-center justify-between gap-2">
-          <span className="max-w-[58%] text-[19px] font-extrabold leading-snug text-ink">
-            우리 기업 탄소 배출량을
-            <br />
-            확인해보세요
+        <span className="flex items-end justify-between gap-2">
+          <span className="mb-2 max-w-[58%]">
+            <span className="block text-[12px] font-bold text-brand-ink">탄소 측정</span>
+            <span className="text-[19px] font-extrabold leading-snug text-ink">
+              우리 기업 탄소 배출량을
+              <br />
+              확인해보세요
+            </span>
           </span>
-          <span className="flex shrink-0 items-center gap-1">
-            <Image src="/ddockdi_1.png" alt="" width={90} height={103} className="shrink-0" />
-            <ChevronRight size={16} className="shrink-0 text-faint" />
+          <span className="flex shrink-0 items-end gap-1">
+            <Image src="/dandi_ddockdi.png" alt="" width={447} height={183} className="h-16 w-auto shrink-0" />
+            <ChevronRight size={16} className="mb-1 shrink-0 text-faint" />
           </span>
         </span>
 
-        <span className="mt-4 block h-1 overflow-hidden rounded-full bg-line">
+        <span className="mt-0 block h-1 overflow-hidden rounded-full bg-line">
           <span
             className="block h-full rounded-full bg-brand transition-all duration-300"
             style={{ width: `${(doneCount / MEASURE_STAGES.length) * 100}%` }}
