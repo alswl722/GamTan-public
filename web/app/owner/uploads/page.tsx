@@ -270,7 +270,7 @@ export default function OwnerUploadsPage() {
                 </div>
 
                 {!notApplicable && (
-                  <div className="mt-3 grid grid-cols-6 gap-1.5">
+                  <div className="mt-3 grid grid-cols-6 gap-x-1.5 gap-y-2.5">
                     {Array.from({ length: 12 }, (_, i) => i + 1).map((month) => {
                       const count = row.months[String(month)] ?? 0;
                       const filled = count > 0;
@@ -281,15 +281,36 @@ export default function OwnerUploadsPage() {
                           key={month}
                           type="button"
                           onClick={() => toggleCell(row.document_type, month)}
-                          className={`rounded-xl py-2 text-[11.5px] font-semibold transition-colors ${
-                            isOpen
-                              ? "bg-brand text-white"
-                              : filled
-                                ? "bg-brand-soft text-brand-ink"
-                                : "bg-bg text-faint"
-                          }`}
+                          className="flex flex-col items-center gap-1"
                         >
-                          {month}월
+                          <span
+                            className={`flex aspect-square w-full items-center justify-center rounded-full border-2 transition-colors ${
+                              isOpen
+                                ? "border-brand bg-brand-soft"
+                                : filled
+                                  ? "border-brand-soft bg-white"
+                                  : "border-dashed border-line bg-bg"
+                            }`}
+                          >
+                            {filled ? (
+                              <Image
+                                src="/carbon_stamp.png"
+                                alt="업로드 완료 도장"
+                                width={56}
+                                height={56}
+                                className="h-12 w-12 -rotate-6 object-contain"
+                              />
+                            ) : (
+                              <span className="h-1.5 w-1.5 rounded-full bg-line" />
+                            )}
+                          </span>
+                          <span
+                            className={`text-[10.5px] font-semibold ${
+                              isOpen ? "text-brand-ink" : filled ? "text-ink" : "text-faint"
+                            }`}
+                          >
+                            {month}월
+                          </span>
                         </button>
                       );
                     })}
