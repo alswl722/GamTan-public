@@ -3,7 +3,12 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { getRateCandidate, type RateCandidate, type RateCandidateResponse } from "@/lib/api";
+import {
+  getRateCandidate,
+  type RateCandidate,
+  type RateCandidateResponse,
+  type RateProduct,
+} from "@/lib/api";
 
 /** 우대금리 안내 카드 — "금융 혜택" 페이지(/owner/benefits)의 한 섹션. 예전엔 메인
  * 화면(/owner)에 바로 떠 있었으나, K택소노미(설비금융) 카드와 성격이 같은 "금융
@@ -121,6 +126,57 @@ function DiscountHighlight({ pct, caption }: { pct: number; caption?: string }) 
   );
 }
 
+/** source_reference는 "iM뱅크 ESG Grow-Up 특별대출 (https://...)"처럼 이름+URL이
+ * 한 문장에 섞여 있다 — URL 부분만 잘라 링크로 만들고 나머지는 그대로 보여준다. */
+function SourceReference({ text }: { text: string }) {
+  const match = text.match(/https?:\/\/\S+/);
+  if (!match) return <p className="text-[11px] leading-relaxed text-faint">{text}</p>;
+  const url = match[0];
+  const label = text.slice(0, match.index).trim();
+  return (
+    <p className="text-[11px] leading-relaxed text-faint">
+      {label}{" "}
+      <a href={url} target="_blank" rel="noreferrer" className="underline decoration-dotted">
+        상품 안내 바로가기
+      </a>
+    </p>
+  );
+}
+
+/** 카드 기본 화면은 상품명·우대율만 압축해서 보여주고, 근거(공시처·자격조건 원문)는
+ * "상품 상세보기"를 눌러야 펼쳐지는 접이식 패널에 둔다 — 지어낸 금리가 아니라는
+ * 근거는 여전히 필요하지만 항상 펼쳐놓으면 카드가 다시 번잡해지므로(2026-08-14
+ * 컴팩트화) 기본은 접고 원하는 사람만 펼쳐보게 한다. */
+function ProductDetail({
+  product,
+  showEligibility = true,
+}: {
+  product: RateProduct;
+  showEligibility?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mt-2">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="text-[11.5px] font-semibold text-muted underline decoration-dotted underline-offset-2"
+      >
+        {open ? "상세 정보 접기" : "상품 상세보기"}
+      </button>
+      {open && (
+        <div className="mt-2 space-y-1.5 rounded-xl bg-bg p-3">
+          <p className="text-[11.5px] font-semibold text-ink">{product.provider_name}</p>
+          {showEligibility && (
+            <p className="text-[12px] leading-relaxed text-muted">{product.eligibility_description}</p>
+          )}
+          <SourceReference text={product.source_reference} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function groupByProductNames<T extends { scope_group: string }>(
   items: T[],
   productNamesOf: (item: T) => string[]
@@ -176,6 +232,7 @@ export function RateProductCard({ companyId }: { companyId: number | null }) {
               <DiscountHighlight pct={p.rate_discount_pct} caption="우대" />
             </div>
             <p className="mt-2.5 text-[12px] leading-relaxed text-muted">{p.eligibility_description}</p>
+            <ProductDetail product={p} showEligibility={false} />
           </div>
         ));
       })}
@@ -217,6 +274,7 @@ export function RateProductCard({ companyId }: { companyId: number | null }) {
               </div>
             ))}
             <GuidanceBubble items={group.flatMap((c) => c.missing_items ?? [])} />
+            {headline && <ProductDetail product={headline} />}
           </div>
         );
       })}

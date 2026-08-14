@@ -86,14 +86,14 @@ function Pill({
   onClick?: () => void;
 }) {
   const selectedClass =
-    tone === "hitl" ? "border-hitl bg-hitl/25 text-hitl-ink" : "border-brand bg-brand text-white";
+    tone === "hitl" ? "border-hitl bg-hitl/25 text-hitl-ink" : "border-brand-soft bg-brand-soft text-brand-ink";
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
       aria-pressed={selected}
-      className={`shrink-0 whitespace-nowrap rounded-full border-2 px-3.5 py-2 text-[13px] font-bold transition-colors ${
+      className={`flex-1 whitespace-nowrap rounded-full border-2 px-2 py-2 text-center text-[13px] font-bold transition-colors ${
         selected ? selectedClass : "border-transparent bg-surface text-muted"
       } ${disabled ? "opacity-70" : ""}`}
     >
@@ -305,7 +305,7 @@ export function SceneUpload({
                 type="button"
                 onClick={() => setTaxMode(m)}
                 className={`rounded-lg py-2 text-[12.5px] font-semibold transition-colors ${
-                  taxMode === m ? "bg-brand text-white" : "text-muted"
+                  taxMode === m ? "bg-surface text-ink shadow-sm" : "text-muted"
                 }`}
               >
                 {m === "ocr" ? "사진·PDF" : "홈택스 엑셀"}
@@ -408,7 +408,7 @@ export function SceneUpload({
         선택하신 연료에 맞춰 필요한 자료만 안내해 드려요.
       </p>
 
-      <div className="mt-5 flex justify-between gap-1.5 overflow-x-auto">
+      <div className="mt-5 flex gap-1.5 overflow-x-auto">
         {FUEL_PILLS.map((f) => (
           <Pill key={f.key} label={f.label} selected={fuel[f.key]} onClick={() => toggleFuel(f.key)} />
         ))}
@@ -427,10 +427,17 @@ export function SceneUpload({
         </div>
       )}
 
-      <div className="mt-5 space-y-2.5">
+      <div className="mt-5">
+        <div className="mb-2 text-[12.5px] font-bold text-ink">계산서</div>
         <DocCard docType="tax_invoice" />
-        <DocCard docType="electric_bill" />
-        <DocCard docType="gas_bill" />
+      </div>
+
+      <div className="mt-4">
+        <div className="mb-2 text-[12.5px] font-bold text-ink">고지서</div>
+        <div className="space-y-2.5">
+          <DocCard docType="electric_bill" />
+          <DocCard docType="gas_bill" />
+        </div>
       </div>
 
       <button
