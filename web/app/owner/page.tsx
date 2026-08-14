@@ -128,7 +128,7 @@ export default function OwnerHomePage() {
         </button>
 
         {pickerOpen && companies && (
-          <div className="absolute inset-x-0 top-[calc(100%+8px)] z-10 max-h-72 overflow-y-auto rounded-2xl bg-surface p-1.5 shadow-card">
+          <div className="absolute inset-x-0 top-[calc(100%+8px)] z-20 max-h-72 overflow-y-auto rounded-2xl bg-surface p-1.5 shadow-card">
             {companies.map((c) => (
               <button
                 key={c.id}
@@ -200,7 +200,7 @@ export default function OwnerHomePage() {
           <Link
             key={card.title}
             href={card.href}
-            className="btn-cta relative flex min-h-[168px] flex-col justify-between overflow-hidden rounded-3xl bg-surface p-4 shadow-card transition-transform"
+            className="btn-cta relative z-0 flex min-h-[168px] flex-col justify-between overflow-hidden rounded-3xl bg-surface p-4 shadow-card transition-transform"
           >
             <div className="relative z-10">
               <div className="text-[12px] font-bold text-brand-ink">{card.caption}</div>
