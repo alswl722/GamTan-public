@@ -68,6 +68,9 @@ export default function OwnerBenefitsPage() {
         </div>
       ) : (
         <>
+          {rate && rate.candidates.length > 0 && (
+            <h2 className="mt-5 text-[13px] font-semibold text-ink">우대금리</h2>
+          )}
           <RateProductCard companyId={companyId} />
           <KTaxonomyCard companyId={companyId} />
         </>
