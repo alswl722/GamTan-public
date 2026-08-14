@@ -2,9 +2,11 @@
 
 import Image from "next/image";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { Trash2, UploadCloud, X } from "lucide-react";
 import {
+  apiPost,
   apiUpload,
   deleteDocument,
   getCompanyId,
@@ -90,6 +92,17 @@ export default function OwnerUploadsPage() {
 
   const [uploadCompleteMessage, setUploadCompleteMessage] = useState<string | null>(null);
 
+  /** 위저드 밖(이 탭)에서 올린 전표는 "AI 분류" 단계를 거칠 기회가 없어 미분류로
+   * 남는다 — 그대로 두면 홈 진행바·리포트가 "미완료"로 보인다(api/queries.py::
+   * get_owner_progress). 이미 분류된 전표는 건너뛰므로 매 업로드마다 불러도 안전. */
+  async function classifyNewVouchers(cid: number) {
+    try {
+      await apiPost(`/classify/${cid}`);
+    } catch (err) {
+      console.error("업로드 후 자동 분류 실패:", err);
+    }
+  }
+
   async function loadGrid() {
     setError(null);
     try {
@@ -131,6 +144,29 @@ export default function OwnerUploadsPage() {
     void loadCell(docType, month);
   }
 
+  const searchParams = useSearchParams();
+  const deepLinkAppliedRef = useRef(false);
+
+  /** /owner/benefits의 결손월 안내 칩(?type=gas_bill&month=4)에서 넘어왔을 때, 그
+   * 칸을 자동으로 펼치고 해당 문서종류 구간으로 스크롤한다 — 안내가 텍스트로 끝나지
+   * 않고 실제 업로드 화면까지 데려다준다. 그리드가 로드되기 전엔 어느 문서종류가
+   * 유효한지 알 수 없어 grid를 기다린다. 한 번 적용한 뒤엔 사용자가 셀을 직접
+   * 여닫아도 다시 강제로 펼치지 않도록 1회만 실행한다. */
+  useEffect(() => {
+    if (!grid || deepLinkAppliedRef.current) return;
+    const type = searchParams.get("type");
+    const monthParam = searchParams.get("month");
+    if (!type || !monthParam || !(type in DOC_LABEL)) return;
+    const month = Number(monthParam);
+    if (!Number.isInteger(month) || month < 1 || month > 12) return;
+
+    deepLinkAppliedRef.current = true;
+    const docType = type as DocumentType;
+    setExpanded({ docType, month });
+    void loadCell(docType, month);
+    document.getElementById(`doc-row-${docType}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [grid, searchParams]);
+
   async function handleDelete(documentId: number) {
     if (!confirm("이 파일을 삭제할까요? 여기서 만들어진 전표·분류도 함께 지워지고 되돌릴 수 없어요.")) {
       return;
@@ -158,6 +194,7 @@ export default function OwnerUploadsPage() {
       form.append("document_type", expanded.docType);
       form.append("mode", "ocr");
       await apiUpload(`/owner/${companyId}/documents/upload`, form);
+      await classifyNewVouchers(companyId);
       await loadCell(expanded.docType, expanded.month);
       await loadGrid();
       setUploadCompleteMessage(`${DOC_LABEL[expanded.docType]} ${expanded.month}월 자료가 등록됐어요.`);
@@ -183,6 +220,7 @@ export default function OwnerUploadsPage() {
         `/owner/${companyId}/documents/upload`,
         form
       );
+      await classifyNewVouchers(companyId);
       await loadGrid();
       setUploadCompleteMessage(`${DOC_LABEL[res.document_type]} ${res.month}월로 인식해 등록했어요.`);
     } catch (err) {
@@ -254,6 +292,7 @@ export default function OwnerUploadsPage() {
             return (
               <div
                 key={row.document_type}
+                id={`doc-row-${row.document_type}`}
                 className={`rounded-3xl bg-surface p-5 shadow-card ${notApplicable ? "opacity-50" : ""}`}
               >
                 <div className="flex items-center gap-1.5">
