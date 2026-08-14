@@ -8,6 +8,7 @@
 // 남기고, 기업별로 모아 "전송" 버튼을 눌러야 사장님 화면에 실제로 노출된다.
 
 import { useEffect, useMemo, useState } from "react";
+import { Check } from "lucide-react";
 import {
   bulkConfirm,
   bulkReject,
@@ -144,6 +145,30 @@ function MethodBadge({ method }: { method: "rule" | "llm" }) {
   );
 }
 
+function StatusBadge({
+  status,
+  edited,
+}: {
+  status: "review_required" | "confirmed";
+  /** 확정 시 값을 고쳤으면 "수정됨"으로, 그대로 확정했으면 "확정됨"으로 표시. */
+  edited?: boolean;
+}) {
+  const label =
+    status === "confirmed" ? (edited ? "수정됨" : "확정됨") : "검토 대기";
+  return (
+    <span
+      className={cn(
+        "rounded-full border px-2 py-0.5 text-[11px] font-semibold",
+        status === "confirmed"
+          ? "border-brand-ink/25 bg-brand-soft text-brand-ink"
+          : "border-hitl-ink/30 bg-hitl/30 text-hitl-ink",
+      )}
+    >
+      {label}
+    </span>
+  );
+}
+
 interface DetailPaneProps {
   item: HitlItem;
   /** 확정은 큐에 "검토 완료"로 남기고(mode: "confirm"), 반려는 큐에서 뺀다(mode: "reject"). */
@@ -164,6 +189,22 @@ function DetailPane({ item, onDone }: DetailPaneProps) {
   const categoryDirty = category !== (item.category ?? "");
   const fuelDirty = fuel !== (item.fuel ?? "");
   const hasEdits = scopeDirty || categoryDirty || fuelDirty;
+
+  // evidence는 "AI 판단 근거 | 담당자 조치"로 누적된다(아직 조치 전이면 " | "가
+  // 없어 원본 판단 근거만 있다) — 원본만 판단 근거 박스에 보여주고, 담당자 조치는
+  // 뱃지로만 표시한다("담당자 수정: ..." 같은 문장은 숨김).
+  const evidenceSplitIdx = (item.evidence ?? "").lastIndexOf(" | ");
+  const evidenceOriginal =
+    evidenceSplitIdx === -1 ? item.evidence : item.evidence!.slice(0, evidenceSplitIdx);
+  const evidenceAction =
+    evidenceSplitIdx === -1 ? null : item.evidence!.slice(evidenceSplitIdx + 3);
+  const actionKind: "confirmed" | "edited" | null = !evidenceAction
+    ? null
+    : evidenceAction.startsWith("담당자 수정")
+      ? "edited"
+      : evidenceAction.startsWith("담당자")
+        ? "confirmed"
+        : null;
 
   // 기업이 체크한 연료만 보여준다(CLAUDE.md §5 원칙6) — 단, AI가 이미 판정한 현재
   // 값은 체크 목록에 없어도 항상 옵션에 남긴다. 그래야 "체크 안 한 연료로 잘못
@@ -253,43 +294,32 @@ function DetailPane({ item, onDone }: DetailPaneProps) {
             </div>
           </section>
 
-          {/* 2. 검토가 필요한 이유 / 검토 완료 안내 */}
+          {/* 2. 판단 근거 / 계산 실패 사유 / 담당자 조치 — 성격이 다른 정보라 구역을 나눈다 */}
           <section>
-            <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-faint">
-              {isConfirmed ? "검토 완료 — 전송 대기" : "검토가 필요한 이유"}
+            <h4 className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-faint">
+              검토가 필요한 이유
+              <StatusBadge status={item.status} edited={actionKind === "edited"} />
             </h4>
-            <div
-              className={cn(
-                "space-y-2 rounded-md border p-4",
-                isConfirmed
-                  ? "border-brand/40 bg-brand-soft"
-                  : "border-hitl/60 bg-hitl/10",
-              )}
-            >
-              <div className="flex items-center gap-2">
-                <ConfidenceBadge value={item.confidence} />
-                <MethodBadge method={item.method} />
-                {item.method === "rule" && (
-                  <span className="text-[11px] text-faint">
-                    규칙 분류 경로 적용
+            <div className="space-y-2">
+              <div className="rounded-md border border-hitl/60 bg-hitl/10 p-4">
+                <div className="mb-1.5 flex items-center gap-2">
+                  <span className="text-[11px] font-semibold text-muted">AI 판단 근거</span>
+                  <ConfidenceBadge value={item.confidence} />
+                </div>
+                <p className="text-sm leading-relaxed text-ink">
+                  {evidenceOriginal ?? "판단 근거 없음"}
+                </p>
+              </div>
+              {item.calc_failure_reason && (
+                <div className="rounded-md border border-line bg-bg p-4">
+                  <span className="mb-1.5 block text-[11px] font-semibold text-muted">
+                    계산 실패 사유
                   </span>
-                )}
-              </div>
-              <p className="text-sm leading-relaxed text-ink">
-                {item.evidence ?? "판단 근거 없음"}
-              </p>
-              <div
-                className={cn(
-                  "mt-1 text-xs font-medium",
-                  isConfirmed ? "text-brand-ink" : "text-hitl-ink",
-                )}
-              >
-                {isConfirmed
-                  ? "→ 담당자가 확정했습니다. 아직 전송 전이라 필요하면 값을 고치거나 반려로 되돌릴 수 있어요. 좌측 상단 \"전송\" 버튼을 눌러야 사장님 화면에 반영됩니다."
-                  : item.confidence < 0.5
-                    ? "→ 담당자 확인 필요: 연료종류 또는 활동 유형 불확실"
-                    : "→ 검토 권장: 경계값 근처의 분류"}
-              </div>
+                  <p className="text-sm leading-relaxed text-ink">
+                    {item.calc_failure_reason}
+                  </p>
+                </div>
+              )}
             </div>
           </section>
 
@@ -382,7 +412,7 @@ function DetailPane({ item, onDone }: DetailPaneProps) {
               <button
                 onClick={handleReject}
                 disabled={busy}
-                className="w-32 rounded-md border border-line bg-surface px-4 py-2.5 text-sm font-semibold text-muted transition-colors hover:bg-bg disabled:opacity-60"
+                className="w-32 rounded-md border border-line bg-surface px-4 py-2.5 text-sm font-semibold text-ink transition-colors hover:bg-bg disabled:opacity-60"
               >
                 반려
               </button>
@@ -472,7 +502,7 @@ function CompanyList({
   }
 
   return (
-    <div className="w-72 flex-shrink-0 overflow-y-auto border-r border-line bg-bg xl:w-80">
+    <div className="w-48 flex-shrink-0 overflow-y-auto border-r border-line bg-bg">
       <div className="flex items-center justify-between border-b border-line px-4 py-3">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-faint">
           기업
@@ -512,7 +542,7 @@ function CompanyList({
               </div>
             )}
           </div>
-          <span className="flex-shrink-0 rounded-full bg-line px-2 py-0.5 text-[11px] font-semibold text-muted">
+          <span className="flex-shrink-0 rounded-full bg-line px-2 py-0.5 text-[11px] font-semibold text-ink">
             {c.count}
           </span>
         </button>
@@ -743,7 +773,7 @@ export function HitlWorkspace({
   }
 
   const selectCls =
-    "rounded-md border border-line bg-surface px-2.5 py-1.5 text-xs text-muted transition-colors focus:outline-none focus:ring-1 focus:ring-brand";
+    "rounded-md border border-line bg-surface px-2.5 py-1.5 text-xs text-ink transition-colors focus:outline-none focus:ring-1 focus:ring-brand";
 
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-md border border-line bg-surface shadow-card">
@@ -835,7 +865,7 @@ export function HitlWorkspace({
               type="button"
               onClick={handleBulkReject}
               disabled={bulkBusy}
-              className="rounded-md border border-line bg-surface px-3 py-1.5 text-xs font-semibold text-muted transition-colors hover:bg-bg disabled:opacity-60"
+              className="rounded-md border border-line bg-surface px-3 py-1.5 text-xs font-semibold text-ink transition-colors hover:bg-bg disabled:opacity-60"
             >
               일괄 반려
             </button>
@@ -900,7 +930,7 @@ export function HitlWorkspace({
             ) : (
               <>
                 <div className="flex items-center justify-between gap-2 border-b border-line bg-surface px-4 py-2">
-                  <label className="flex items-center gap-2 text-xs text-faint">
+                  <label className="flex items-center gap-2 text-xs text-muted">
                     <input
                       type="checkbox"
                       className="h-3.5 w-3.5 accent-brand"
@@ -949,13 +979,17 @@ export function HitlWorkspace({
                       <span className="truncate text-sm font-semibold text-ink">
                         {item.raw}
                       </span>
-                      {isConfirmed ? (
-                        <span className="flex-shrink-0 rounded-full border border-brand-ink/25 bg-brand-soft px-2 py-0.5 text-[11px] font-semibold text-brand-ink">
-                          검토 완료
-                        </span>
-                      ) : (
+                      <span className="flex flex-shrink-0 items-center gap-1.5">
                         <ConfidenceBadge value={item.confidence} />
-                      )}
+                        {isConfirmed && (
+                          <span
+                            className="flex h-4 w-4 items-center justify-center rounded-full bg-brand text-white"
+                            title="검토 완료"
+                          >
+                            <Check className="h-3 w-3" strokeWidth={3} />
+                          </span>
+                        )}
+                      </span>
                     </button>
                   </div>
                   );

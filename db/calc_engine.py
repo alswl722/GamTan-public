@@ -103,7 +103,7 @@ def compute_emission(item: ClassifiedItemInput, price_index: dict, factor_index:
 
     # 2) LPG — 프로판/부탄·단위 구분 문제로 자동계산 제외 → 사람검토
     if item.fuel_type in _LPG_FUELS:
-        return _review("LPG(프로판/부탄·단위 구분) 자동계산 제외 — 사람 검토 필요")
+        return _review("LPG(프로판/부탄·단위 구분) 자동계산 제외")
 
     # 3) 계수 인덱스에 없음 — 두 경우를 구분한다:
     #    (a) 연료 불명 센티넬(가스종류 불명 등) → 애초에 계산 대상 아님, 정상 스킵
@@ -114,7 +114,7 @@ def compute_emission(item: ClassifiedItemInput, price_index: dict, factor_index:
         if item.fuel_type in _UNKNOWN_FUELS:
             return _skip(f"배출계수 없음 — 연료 불명({item.fuel_type})")
         return _review(
-            f"배출계수 미등록 — '{item.fuel_type}' 계수를 회계 담당이 추가해야 함 (사람 검토)"
+            f"배출계수 미등록 — '{item.fuel_type}' 계수를 회계 담당이 추가해야 함"
         )
 
     # 4) 1순위 — 실측 수량이 있으면 그대로 사용 (spend 추정보다 정확 = PCAF 상위등급)
@@ -124,12 +124,12 @@ def compute_emission(item: ClassifiedItemInput, price_index: dict, factor_index:
         method = "measured"
     elif item.fuel_type in _QUANTITY_ONLY:
         # 전기·도시가스는 금액 역산 안 함 → 수량 없으면 사람검토
-        return _review(f"{item.fuel_type} 사용량 미기재 — 금액 역산 대신 사람 검토")
+        return _review(f"{item.fuel_type} 사용량 미기재 — 금액 역산 불가")
     else:
         # 2순위 — 휘발유·경유: 금액÷월별단가 추정
         price_entry = price_index.get((item.fuel_type, item.year, item.month))
         if price_entry is None or not price_entry.get("price"):
-            raise CalcDataGap(f"단가 없음 — {item.fuel_type} {item.year}-{item.month:02d} (HITL 회부)")
+            raise CalcDataGap(f"단가 없음 — {item.fuel_type} {item.year}-{item.month:02d}")
         activity = round(item.amount_krw / price_entry["price"], 4)
         unit = factor["unit"] or price_entry.get("unit")
         method = "spend"
