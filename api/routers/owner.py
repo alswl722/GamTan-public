@@ -3,6 +3,9 @@
 - GET   /owner/alerts/{company_id}              자기 기업의 이상 신호 알림
 - PATCH /owner/{company_id}/fuel-types          2단계(연료 유형 체크) 저장 + 3단계 필수서류 안내
 - POST  /owner/{company_id}/documents/upload    3~4단계 업로드(세금계산서 OCR|엑셀, 전기·도시가스 OCR)
+- GET   /owner/{company_id}/documents/grid      데이터 업로드 탭 — 문서종류 × 월 그리드
+- GET   /owner/{company_id}/documents           그리드 한 칸의 업로드 파일 목록
+- DELETE /owner/{company_id}/documents/{id}     업로드 파일 삭제(전표·분류까지 연쇄 삭제)
 - GET   /owner/{company_id}/progress            5단계 위저드 실제 완료 상태 — 홈 화면 진행바·이어하기용
 - GET   /owner/{company_id}/rate-candidate      우대금리 상품 자격 상태(이미 대상 | 개선 필요)
 - POST  /owner/{company_id}/rate-requests       우대금리·설비금융 안내 요청 생성 → 관리자 승인요청 큐
@@ -13,6 +16,7 @@ GET /admin/alerts(은행 담당자용 포트폴리오 전체)와 같은 판정 �
 은행이 먼저 알고 사장은 모르는 구도를 만들지 않기 위함(CLAUDE.md §9,
 "하지 말 것" — 알림은 항상 사장에게 먼저).
 """
+import os
 from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -21,17 +25,24 @@ from sqlalchemy.orm import Session
 
 from api.db import get_session
 from api.document_ingestion import (
+    REPO_ROOT,
     DuplicateDocumentError,
     MissingInstitutionAttributionError,
     ingest_uploaded_document,
 )
 from api.queries import get_coverage, get_owner_progress
 from db.alerts import detect_alerts
+from db.document_coverage import (
+    delete_source_document,
+    document_upload_grid,
+    documents_for_cell,
+)
 from db.document_requirements import FuelTypes, required_documents
 from db.document_text_extractor import DocumentParseError
 from db.hometax_excel_parser import HometaxExcelFormatError
 from db.k_taxonomy import k_taxonomy_leads_for_company
-from db.models import Company
+from db.models import Company, SourceDocument
+from db.pcaf_quality import default_reporting_year
 from db.rate_products import rate_product_status_for_company
 from db.quality_issues import record_ingestion_failure
 from db.rate_approvals import (
@@ -160,6 +171,51 @@ async def upload_document(
             failure_reason="parse_error", detail=str(e),
         )
         raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.get("/{company_id}/documents/grid")
+def documents_grid(
+    company_id: int, year: int | None = None, session: Session = Depends(get_session)
+):
+    """"데이터 업로드" 탭 — 문서종류 3종 × 1~12월 업로드 현황(db/document_coverage.py
+    ::document_upload_grid). year 생략 시 그 기업의 최신 전표 연도를 쓴다(사장님 리포트·
+    우대금리 판정과 같은 기준 공유, db/pcaf_quality.py::default_reporting_year).
+    """
+    resolved_year = year if year is not None else default_reporting_year(session, company_id)
+    return document_upload_grid(session, company_id, resolved_year)
+
+
+@router.get("/{company_id}/documents")
+def documents_in_cell(
+    company_id: int,
+    document_type: str,
+    year: int,
+    month: int,
+    session: Session = Depends(get_session),
+):
+    """그리드에서 칸(문서종류·월)을 눌렀을 때 그 칸에 업로드된 파일 목록."""
+    if document_type not in _VALID_DOCUMENT_TYPES:
+        raise HTTPException(status_code=400, detail=f"invalid document_type: {document_type}")
+    return {"documents": documents_for_cell(session, company_id, document_type, year, month)}
+
+
+@router.delete("/{company_id}/documents/{document_id}")
+def delete_document(company_id: int, document_id: int, session: Session = Depends(get_session)):
+    """업로드 파일 삭제 — 거기서 만들어진 전표·분류·접근로그까지 연쇄 삭제하고 물리
+    파일도 지운다(db/document_coverage.py::delete_source_document). 다른 기업 소유
+    문서는 404로 명확히 막는다(테넌트 경계, CLAUDE.md 원칙9).
+    """
+    doc = session.get(SourceDocument, document_id)
+    if doc is None or doc.company_id != company_id:
+        raise HTTPException(status_code=404, detail=f"document_id={document_id} 없음")
+
+    file_path = delete_source_document(session, doc)
+    if file_path:
+        abs_path = os.path.join(REPO_ROOT, file_path)
+        if os.path.exists(abs_path):
+            os.remove(abs_path)  # best-effort — DB 삭제는 이미 커밋됨
+
+    return {"deleted": True, "document_id": document_id}
 
 
 class RateRequestIn(BaseModel):
