@@ -3,6 +3,7 @@
 - GET   /owner/alerts/{company_id}              자기 기업의 이상 신호 알림
 - PATCH /owner/{company_id}/fuel-types          2단계(연료 유형 체크) 저장 + 3단계 필수서류 안내
 - POST  /owner/{company_id}/documents/upload    3~4단계 업로드(세금계산서 OCR|엑셀, 전기·도시가스 OCR)
+                                                 — document_type 생략 시 자동판별("그냥 업로드", mode=ocr 전용)
 - GET   /owner/{company_id}/documents/grid      데이터 업로드 탭 — 문서종류 × 월 그리드
 - GET   /owner/{company_id}/documents           그리드 한 칸의 업로드 파일 목록
 - DELETE /owner/{company_id}/documents/{id}     업로드 파일 삭제(전표·분류까지 연쇄 삭제)
@@ -116,7 +117,7 @@ def owner_progress(company_id: int, session: Session = Depends(get_session)):
 async def upload_document(
     company_id: int,
     file: UploadFile = File(...),
-    document_type: str = Form(...),
+    document_type: str | None = Form(None),
     mode: str = Form("ocr"),
     session: Session = Depends(get_session),
 ):
@@ -125,8 +126,12 @@ async def upload_document(
     실제 처리는 api/document_ingestion.py — source_documents 적재 후 vouchers를
     만들어 기존 classify_vouchers 파이프라인이 그대로 이어받게 한다. mode="excel"은
     document_type="tax_invoice"에서만 의미 있음(대량 홈택스 엑셀 파서 경로).
+
+    document_type을 생략(None)하면 어느 칸인지 모르고 올린 "그냥 업로드"다(mode=
+    "ocr" 전용) — OCR/비전이 스스로 종류를 판별한다. 판별 자체가 안 되면 추정으로
+    채우지 않고 422로 명확히 실패한다(실패 가시성 원칙).
     """
-    if document_type not in _VALID_DOCUMENT_TYPES:
+    if document_type is not None and document_type not in _VALID_DOCUMENT_TYPES:
         raise HTTPException(status_code=400, detail=f"invalid document_type: {document_type}")
     if mode not in ("ocr", "excel"):
         raise HTTPException(status_code=400, detail=f"invalid mode: {mode}")

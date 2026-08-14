@@ -130,6 +130,25 @@ def test_ocr_upload_creates_one_source_document_and_one_voucher(db_with_institut
     assert vouchers[0].raw_json["quantity_unit"] == "kWh"
 
 
+def test_ocr_upload_without_document_type_auto_detects(db_with_institution):
+    """document_type=None("그냥 업로드")이면 추출이 판별한 종류로 저장된다 —
+    사장님이 문서종류를 몰라도 올릴 수 있어야 한다."""
+    session, company_id, _inst_id, _ib_id = db_with_institution
+    result = ingest_uploaded_document(
+        session, company_id, _gas_bill_pdf(month="05"), "고지서.pdf",
+        None, mode="ocr",
+    )
+    assert result["document_type"] == "gas_bill"
+    assert result["vouchers_created"] == 1
+
+    doc = session.execute(select(SourceDocument)).scalars().first()
+    assert doc.document_type == "gas_bill"
+    assert doc.month == 5
+
+    voucher = session.execute(select(Voucher)).scalars().first()
+    assert voucher.source == "gas_bill"
+
+
 def test_excel_upload_creates_one_source_document_and_multiple_vouchers(db_with_institution):
     session, company_id, _inst_id, _ib_id = db_with_institution
     xlsx = _xlsx_bytes([

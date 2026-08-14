@@ -54,7 +54,22 @@ def test_electric_bill_parses_date_amount_quantity():
         "quantity_unit": "kWh",
         "year": 2025,
         "month": 1,
+        "document_type": "electric_bill",
     }
+
+
+def test_parse_document_text_without_expected_type_auto_detects():
+    """expected_document_type 생략("그냥 업로드")하면 대조 없이 판별된 종류를
+    그대로 신뢰하고 반환 dict의 document_type으로 알려준다."""
+    text = extract_pdf_text(_pdf([
+        "전기요금 고지서",
+        "청구월: 2025-06 계약종별: 산업용(을) 고압A",
+        "사용량(kWh) 1,234",
+        "청구금액(원) 987,654",
+    ]))
+    result = parse_document_text(text)
+    assert result["document_type"] == "electric_bill"
+    assert result["year"] == 2025 and result["month"] == 6
 
 
 def test_gas_bill_parses_date_amount_quantity():

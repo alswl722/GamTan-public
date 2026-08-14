@@ -78,16 +78,21 @@ def ingest_uploaded_document(
     company_id: int,
     file_bytes: bytes,
     filename: str,
-    document_type: str,
+    document_type: str | None,
     mode: str = "ocr",
 ) -> dict:
-    """업로드 1건 처리 → {"source_document_id", "vouchers_created"} 반환.
+    """업로드 1건 처리 → {"source_document_id", "vouchers_created", "document_type"} 반환.
 
-    mode="excel"은 document_type="tax_invoice"에서만 의미가 있다(여러 행 → 여러
-    voucher). 그 외에는 항상 PDF 실 추출 1건 → voucher 1건 — 실패하면 값을
-    지어내지 않고 DocumentParseError를 그대로 던진다(db/document_extraction.py).
+    document_type=None(mode="ocr" 전용, "그냥 업로드")이면 어느 칸인지 힌트 없이
+    OCR/비전이 스스로 종류를 판별한다(db/document_extraction.py) — 실제 저장되는
+    종류는 항상 추출 결과(row["document_type"])를 신뢰하고, 파라미터로 받은 값은
+    검증 힌트로만 쓰인다. mode="excel"은 document_type="tax_invoice" 필수(여러
+    행 → 여러 voucher, 라우터가 이미 강제하므로 자동판별과 무관).
+
+    실패하면 값을 지어내지 않고 DocumentParseError를 그대로 던진다(db/
+    document_extraction.py).
     """
-    if document_type not in DOCUMENT_TYPE_TO_VOUCHER_SOURCE:
+    if document_type is not None and document_type not in DOCUMENT_TYPE_TO_VOUCHER_SOURCE:
         raise ValueError(f"알 수 없는 document_type: {document_type}")
 
     file_hash = _file_hash(file_bytes)
@@ -108,16 +113,20 @@ def ingest_uploaded_document(
         rows, skipped_rows = parse_hometax_excel(file_bytes)
         extracted: dict = {"rows": rows, "skipped_rows": skipped_rows}
         source_system = "upload:excel"
+        resolved_document_type = "tax_invoice"
     else:
         row = extract_document(file_bytes, document_type)
         rows = [row]
         extracted = row
         source_system = "upload:ocr"
+        # document_type 파라미터는 검증 힌트일 뿐 — 실제 저장은 항상 추출이
+        # 판별한 값을 신뢰한다("그냥 업로드"에선 애초에 힌트 자체가 없다).
+        resolved_document_type = row["document_type"]
 
     doc = SourceDocument(
         financial_institution_id=financial_institution_id,
         company_id=company_id,
-        document_type=document_type,
+        document_type=resolved_document_type,
         source_system=source_system,
         original_filename=filename,
         file_hash=file_hash,
@@ -130,7 +139,7 @@ def ingest_uploaded_document(
         year=rows[0]["year"] if mode == "ocr" else None,
         month=rows[0]["month"] if mode == "ocr" else None,
     )
-    voucher_source = DOCUMENT_TYPE_TO_VOUCHER_SOURCE[document_type]
+    voucher_source = DOCUMENT_TYPE_TO_VOUCHER_SOURCE[resolved_document_type]
     created: list[Voucher] = []
     try:
         # doc 추가부터 commit까지 통째로 감싼다 — 중간의 session.flush()가 doc의
@@ -169,6 +178,7 @@ def ingest_uploaded_document(
         "source_document_id": doc.id,
         "vouchers_created": len(created),
         "skipped_rows": skipped_rows,
+        "document_type": resolved_document_type,
     }
     if mode == "ocr":
         # 프론트가 더 이상 업로드 전에 월을 묻지 않으므로, 문서에서 실제로 읽어낸

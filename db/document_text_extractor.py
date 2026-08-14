@@ -81,26 +81,32 @@ def _line_value(text: str, label_pattern: str, *, field_label: str) -> str:
     return m.group(1).strip()
 
 
-def parse_document_text(text: str, expected_document_type: DocumentType) -> dict:
+def parse_document_text(text: str, expected_document_type: DocumentType | None = None) -> dict:
     """텍스트에서 문서종류·날짜·공급자·금액·수량을 뽑는다.
 
-    실제 내용이 업로드한 칸(expected_document_type)과 다르면(엉뚱한 카드에
-    업로드) 값을 억지로 맞추지 않고 명확히 실패시킨다.
+    expected_document_type이 주어졌는데 실제 내용이 다르면(엉뚱한 카드에 업로드)
+    값을 억지로 맞추지 않고 명확히 실패시킨다. 생략(None)하면 대조 없이 판별된
+    종류를 그대로 신뢰한다("그냥 업로드" — 어느 칸인지 모르고 올릴 때).
+
+    반환 dict에는 항상 "document_type"(실제 판별값)이 포함된다 — 호출부가
+    사용자가 지정 안 한 경우에도 실제 종류를 알 수 있어야 하기 때문.
     """
     detected = detect_document_type(text)
     if detected is None:
         raise DocumentParseError("인식할 수 없는 문서 형식이에요")
-    if detected != expected_document_type:
+    if expected_document_type is not None and detected != expected_document_type:
         raise DocumentParseError(
             f"업로드하신 파일은 {DOCUMENT_TYPE_LABEL[detected]}로 보여요 — "
             f"{DOCUMENT_TYPE_LABEL[expected_document_type]} 칸에 다시 올려 주세요"
         )
 
     if detected == "electric_bill":
-        return _parse_electric_bill(text)
-    if detected == "gas_bill":
-        return _parse_gas_bill(text)
-    return _parse_tax_invoice(text)
+        result = _parse_electric_bill(text)
+    elif detected == "gas_bill":
+        result = _parse_gas_bill(text)
+    else:
+        result = _parse_tax_invoice(text)
+    return {**result, "document_type": detected}
 
 
 def _parse_electric_bill(text: str) -> dict:

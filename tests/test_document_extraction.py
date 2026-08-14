@@ -44,6 +44,21 @@ def test_real_pdf_text_is_extracted():
     assert result["quantity"] == 1234
 
 
+def test_extract_document_auto_detects_type_when_omitted():
+    """document_type 생략("그냥 업로드")하면 텍스트에서 판별한 종류를 그대로
+    신뢰하고 반환 dict의 document_type으로 알려준다."""
+    pdf = _minimal_pdf([
+        "도시가스 요금고지서",
+        "고객명(사업장): 테스트기업 (경북 구미)",
+        "사용월: 2025-04",
+        "사용량(m³) 800",
+        "청구금액(원) 800,000",
+    ])
+    result = extract_document(pdf)
+    assert result["document_type"] == "gas_bill"
+    assert result["year"] == 2025 and result["month"] == 4
+
+
 def test_gas_bill_includes_quantity_fields():
     pdf = _minimal_pdf([
         "도시가스 요금고지서",

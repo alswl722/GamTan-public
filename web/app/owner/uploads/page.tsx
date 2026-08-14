@@ -44,6 +44,11 @@ export default function OwnerUploadsPage() {
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  const [autoUploading, setAutoUploading] = useState(false);
+  const [autoUploadError, setAutoUploadError] = useState<string | null>(null);
+  const [autoUploadResult, setAutoUploadResult] = useState<string | null>(null);
+  const autoFileInputRef = useRef<HTMLInputElement | null>(null);
+
   async function loadGrid() {
     setError(null);
     try {
@@ -123,6 +128,31 @@ export default function OwnerUploadsPage() {
     }
   }
 
+  async function handleAutoUpload(file: File) {
+    if (companyId === null) return;
+    setAutoUploading(true);
+    setAutoUploadError(null);
+    setAutoUploadResult(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("mode", "ocr");
+      // document_type을 안 보낸다 — OCR/비전이 스스로 문서종류를 판별한다("그냥 업로드").
+      const res = await apiUpload<{ document_type: DocumentType; month: number }>(
+        `/owner/${companyId}/documents/upload`,
+        form
+      );
+      setAutoUploadResult(`${DOC_LABEL[res.document_type]} · ${res.month}월로 인식해 등록했어요.`);
+      await loadGrid();
+    } catch (err) {
+      console.error("자동 업로드 실패:", err);
+      setAutoUploadError(err instanceof Error ? err.message : "업로드에 실패했습니다.");
+    } finally {
+      setAutoUploading(false);
+      if (autoFileInputRef.current) autoFileInputRef.current.value = "";
+    }
+  }
+
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col px-5 pb-16">
       <div className="pt-5">
@@ -135,6 +165,34 @@ export default function OwnerUploadsPage() {
       </div>
 
       <h1 className="mt-4 text-[17px] font-bold leading-snug text-ink">데이터 업로드</h1>
+
+      <div className="mt-4 rounded-3xl bg-surface p-5 shadow-card">
+        <div className="text-[13.5px] font-bold text-ink">어떤 문서인지 모르겠다면</div>
+        <p className="mt-1 text-[12px] leading-relaxed text-muted">
+          사진이나 PDF를 올리면 AI가 문서종류와 월을 알아서 인식해요.
+        </p>
+        <label className="btn-cta mt-3 flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-2xl bg-brand py-3 text-[13px] font-bold text-white disabled:opacity-60">
+          <UploadCloud size={16} />
+          {autoUploading ? "인식하는 중…" : "그냥 업로드하기"}
+          <input
+            ref={autoFileInputRef}
+            type="file"
+            accept="image/*,.pdf"
+            className="hidden"
+            disabled={autoUploading}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void handleAutoUpload(file);
+            }}
+          />
+        </label>
+        {autoUploadResult && (
+          <p className="mt-2 text-[11.5px] text-brand-ink">{autoUploadResult}</p>
+        )}
+        {autoUploadError && (
+          <p className="mt-2 text-[11.5px] text-red-600">{autoUploadError}</p>
+        )}
+      </div>
 
       <div className="mt-4 flex-1 space-y-4">
         {error ? (
