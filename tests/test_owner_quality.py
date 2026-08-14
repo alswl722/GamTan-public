@@ -254,6 +254,39 @@ def test_emission_detail_empty_for_scope_without_data(api_client):
     assert res.json()["items"] == []
 
 
+# ── GET /owner/{id}/reporting-years (연도 선택기) ──────────────────────────────
+def test_reporting_years_lists_all_years_with_vouchers_newest_first(api_client):
+    client, session, cid = api_client
+    _add_institution_borrower(session, cid)
+    for m in range(1, 13):
+        _add_voucher(session, cid, m, "도시가스")
+    for m in range(1, 13):
+        v = Voucher(
+            company_id=cid, source="hometax", year=YEAR - 1, month=m,
+            supplier_name="테스트", item_description="도시가스",
+            supply_amount_krw=100000, raw_json={"quantity": 100},
+        )
+        session.add(v)
+    session.commit()
+
+    res = client.get(f"/owner/{cid}/reporting-years")
+    assert res.status_code == 200
+    assert res.json()["years"] == [YEAR, YEAR - 1]
+
+
+def test_reporting_years_empty_when_no_vouchers(api_client):
+    client, session, cid = api_client
+    res = client.get(f"/owner/{cid}/reporting-years")
+    assert res.status_code == 200
+    assert res.json()["years"] == []
+
+
+def test_reporting_years_404_for_unknown_company(api_client):
+    client, _, _ = api_client
+    res = client.get("/owner/999999/reporting-years")
+    assert res.status_code == 404
+
+
 # ── format=pdf (탄소배출량 산정 결과서, db/owner_report_pdf.py) ──────────────────
 def test_quality_report_pdf_returns_valid_pdf_bytes(api_client):
     """format=pdf는 새 계산 없이 같은 산정값을 PDF로 내려준다 — 회사명·연료별

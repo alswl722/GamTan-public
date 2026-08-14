@@ -12,6 +12,8 @@ import {
   getCompanyId,
   getDocumentGrid,
   getDocumentsForCell,
+  getReportingYears,
+  getUploadStreak,
   type DocumentGridResponse,
   type DocumentType,
   type UploadedDocument,
@@ -77,6 +79,8 @@ function UploadCompleteModal({ message, onClose }: { message: string; onClose: (
 export default function OwnerUploadsPage() {
   const [companyId, setCompanyId] = useState<number | null>(null);
   const [grid, setGrid] = useState<DocumentGridResponse | null>(null);
+  const [years, setYears] = useState<number[] | null>(null);
+  const [streakMonths, setStreakMonths] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<{ docType: DocumentType; month: number } | null>(null);
   const [cellDocs, setCellDocs] = useState<Record<CellKey, UploadedDocument[]>>({});
@@ -103,13 +107,28 @@ export default function OwnerUploadsPage() {
     }
   }
 
-  async function loadGrid() {
+  /** year 생략 시 백엔드가 그 기업의 최신 전표 연도를 기본값으로 쓴다 — 리포트
+   * 화면(ScenePcaf.tsx)과 같은 기준(db/pcaf_quality.py::default_reporting_year).
+   * 연도 선택기에서 다른 연도를 고르면 이 함수를 다시 불러 그 해로 갈아끼운다. */
+  async function loadGrid(year?: number) {
     setError(null);
     try {
       const cid = await getCompanyId();
       setCompanyId(cid);
-      const res = await getDocumentGrid(cid);
+      const res = await getDocumentGrid(cid, year);
       setGrid(res);
+      setExpanded(null);
+      setCellDocs({});
+      if (years === null) {
+        getReportingYears(cid)
+          .then((r) => setYears(r.years))
+          .catch((err) => console.error("연도 목록 조회 실패(부가 정보라 화면은 계속 진행):", err));
+        // 스트릭은 "이번 달 직전까지"만 세므로 방금 올린 업로드로는 안 바뀐다 —
+        // 연도 선택기와 마찬가지로 최초 1회만 조회하면 충분하다.
+        getUploadStreak(cid)
+          .then((r) => setStreakMonths(r.streak_months))
+          .catch((err) => console.error("업로드 스트릭 조회 실패(부가 정보라 화면은 계속 진행):", err));
+      }
     } catch (err) {
       console.error("업로드 현황 조회 실패:", err);
       setError("불러오지 못했습니다. 서버 연결 상태를 확인한 뒤 다시 시도해 주세요.");
@@ -243,7 +262,33 @@ export default function OwnerUploadsPage() {
         </Link>
       </div>
 
-      <h1 className="mt-4 text-[17px] font-bold leading-snug text-ink">데이터 업로드</h1>
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <h1 className="text-[17px] font-bold leading-snug text-ink">데이터 업로드</h1>
+        {streakMonths !== null && streakMonths > 0 && (
+          <span className="rounded-full bg-brand-soft px-2.5 py-1 text-[11px] font-semibold text-brand-ink">
+            {streakMonths}개월 연속 업로드 중
+          </span>
+        )}
+      </div>
+
+      {years !== null && years.length > 1 && grid && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {years.map((y) => (
+            <button
+              key={y}
+              type="button"
+              onClick={() => y !== grid.reporting_year && void loadGrid(y)}
+              className={`rounded-full px-2.5 py-1 text-[11.5px] font-semibold transition-colors ${
+                y === grid.reporting_year
+                  ? "bg-brand text-white"
+                  : "bg-line text-muted hover:bg-brand-soft hover:text-brand-ink"
+              }`}
+            >
+              {y}년
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="mt-4 rounded-3xl bg-surface p-5 shadow-card">
         <div className="text-[13.5px] font-bold text-ink">어떤 문서인지 모르겠다면</div>

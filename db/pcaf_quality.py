@@ -123,6 +123,22 @@ def default_reporting_year(session: Session, company_id: int) -> int:
     return latest_year or datetime.now(timezone.utc).year
 
 
+def available_reporting_years(session: Session, company_id: int) -> list[int]:
+    """이 기업이 전표를 가진 연도 전부 — 리포트·업로드 그리드의 연도 선택기가 쓴다.
+
+    default_reporting_year와 같은 테이블(Voucher.year)을 보되, 최신값 하나가 아니라
+    전체 목록을 최신순으로 반환한다. 2년 이상 전표가 쌓인 기업만 실제로 선택기가
+    뜨고(프론트에서 length<=1이면 숨김), 전표가 없으면 빈 리스트를 반환한다(추정으로
+    채우지 않음)."""
+    years = session.execute(
+        select(Voucher.year)
+        .where(Voucher.company_id == company_id)
+        .distinct()
+        .order_by(Voucher.year.desc())
+    ).scalars().all()
+    return list(years)
+
+
 def classify_activity_data_method(voucher: Voucher, classification: Classification) -> str:
     """전표 1건의 활동자료 근거(PcafQualityRule.activity_data_basis 값)를 판정.
 

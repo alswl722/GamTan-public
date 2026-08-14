@@ -37,6 +37,7 @@ from db.document_coverage import (
     delete_source_document,
     document_upload_grid,
     documents_for_cell,
+    upload_streak,
 )
 from db.document_requirements import FuelTypes, required_documents
 from db.document_text_extractor import DocumentParseError
@@ -188,6 +189,13 @@ def documents_grid(
     """
     resolved_year = year if year is not None else default_reporting_year(session, company_id)
     return document_upload_grid(session, company_id, resolved_year)
+
+
+@router.get("/{company_id}/upload-streak")
+def upload_streak_endpoint(company_id: int, session: Session = Depends(get_session)):
+    """도장판 위 동기부여 배지 — 필수 문서를 전부 채운 달이 이번 달 직전부터 몇 개월
+    연속 이어지는지(db/document_coverage.py::upload_streak)."""
+    return upload_streak(session, company_id)
 
 
 @router.get("/{company_id}/documents")

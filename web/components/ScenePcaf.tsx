@@ -3,7 +3,7 @@
 import { ChevronDown, Download } from "lucide-react";
 import Image from "next/image";
 import { useEffect, useState } from "react";
-import { apiGet, BASE_URL, getCompanyId } from "@/lib/api";
+import { apiGet, BASE_URL, getCompanyId, getReportingYears } from "@/lib/api";
 import type { AlertItem } from "@/lib/admin-types";
 
 /** 장면 ⑤ — PCAF 정식 엔진(db/pcaf_quality.py) 리포트. GET /owner/{id}/quality-report
@@ -466,6 +466,7 @@ export function ScenePcaf({ showHeading = true }: { showHeading?: boolean } = {}
   const [error, setError] = useState<string | null>(null);
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [companyId, setCompanyId] = useState<number | null>(null);
+  const [years, setYears] = useState<number[] | null>(null);
 
   const [expandedScope, setExpandedScope] = useState<"scope_1" | "scope_2" | null>(null);
   const [detailByScope, setDetailByScope] = useState<Record<string, EmissionDetailItem[]>>({});
@@ -501,13 +502,19 @@ export function ScenePcaf({ showHeading = true }: { showHeading?: boolean } = {}
     }
   }
 
-  async function load() {
+  /** year 생략 시 백엔드가 그 기업의 최신 전표 연도를 기본값으로 쓴다
+   * (db/pcaf_quality.py::default_reporting_year) — 연도 선택기에서 다른 연도를
+   * 고르면 이 함수를 다시 불러 그 해로 갈아끼운다. */
+  async function load(year?: number) {
     setError(null);
     try {
       const cid = await getCompanyId();
       setCompanyId(cid);
-      const res = await apiGet<QualityReportResponse>(`/owner/${cid}/quality-report`);
+      const yearQuery = year ? `?year=${year}` : "";
+      const res = await apiGet<QualityReportResponse>(`/owner/${cid}/quality-report${yearQuery}`);
       setData(res);
+      setExpandedScope(null);
+      setDetailByScope({});
       // 이상 신호는 은행 담당자와 동일한 판정 로직(GET /admin/alerts와 같은
       // db/alerts.py::detect_alerts)을 자기 기업분만 조회 — 은행이 먼저 알고
       // 사장은 모르는 구도를 만들지 않는다(CLAUDE.md §9).
@@ -517,10 +524,16 @@ export function ScenePcaf({ showHeading = true }: { showHeading?: boolean } = {}
       // 우대금리 카드는 이제 메인 화면(web/components/RateProductCard.tsx)이 조회한다.
       // K택소노미 리드 카드도 마찬가지로 메인 화면(web/components/KTaxonomyCard.tsx)이 조회한다.
       // 월별 배출 추이만 구 엔진에서 재사용(파일 상단 주석 참고) — 부가 정보라
-      // 실패해도 리포트 본문(Scope 품질 후보)은 그대로 보여준다.
+      // 실패해도 리포트 본문(Scope 품질 후보)은 그대로 보여준다. 구 엔진은 연도
+      // 필터가 없어 선택한 연도와 무관하게 항상 전체 전표 기준으로 나온다(기존 한계).
       apiGet<LegacyPcafResponse>(`/pcaf/${cid}`)
         .then((r) => setMonthly(r.after?.monthly ?? null))
         .catch((err) => console.error("월별 추이 조회 실패(부가 정보라 화면은 계속 진행):", err));
+      if (years === null) {
+        getReportingYears(cid)
+          .then((r) => setYears(r.years))
+          .catch((err) => console.error("연도 목록 조회 실패(부가 정보라 화면은 계속 진행):", err));
+      }
     } catch (err) {
       // 목업으로 위장하지 않는다 — 실패는 실패로 표시
       console.error("PCAF 품질 조회 실패:", err);
@@ -581,6 +594,24 @@ export function ScenePcaf({ showHeading = true }: { showHeading?: boolean } = {}
           측정이 끝났어요
         </h2>
       )}
+      {years !== null && years.length > 1 && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {years.map((y) => (
+            <button
+              key={y}
+              type="button"
+              onClick={() => y !== data.reporting_year && void load(y)}
+              className={`rounded-full px-2.5 py-1 text-[11.5px] font-semibold transition-colors ${
+                y === data.reporting_year
+                  ? "bg-brand text-white"
+                  : "bg-line text-muted hover:bg-brand-soft hover:text-brand-ink"
+              }`}
+            >
+              {y}년
+            </button>
+          ))}
+        </div>
+      )}
       <div className="mt-1.5 flex flex-wrap items-center justify-between gap-1.5">
         <div className="flex flex-wrap items-center gap-1.5">
           {bankReviewRequired && (
@@ -633,26 +664,28 @@ export function ScenePcaf({ showHeading = true }: { showHeading?: boolean } = {}
       {monthly && <MonthlyTrendChart monthly={monthly} />}
 
       {alerts.length > 0 && (
-        <div className="mt-3 space-y-2 rounded-2xl bg-surface p-5">
-          <div className="flex items-center gap-2">
+        <div className="mt-3 rounded-2xl bg-surface p-5">
+          <div className="text-[13px] font-semibold text-ink">이상 신호 알림</div>
+          <div className="mt-2.5 flex items-start gap-2">
             <span className="relative h-8 w-8 shrink-0 overflow-hidden rounded-full bg-brand-soft">
               <Image src="/ddockdi_3.png" alt="" fill className="object-cover" />
             </span>
-            <div className="text-[13px] font-semibold text-ink">이상 신호 알림</div>
-          </div>
-          {alerts.map((a, i) => (
-            <div
-              key={`${a.type}-${a.month}`}
-              className={`relative rounded-2xl bg-bg px-3.5 py-2.5 text-[12.5px] leading-relaxed text-muted ${
-                i === 0 ? "rounded-tl-sm" : ""
-              }`}
-            >
-              {i === 0 && (
-                <span className="absolute -top-1.5 left-3 h-3 w-3 rotate-45 rounded-sm bg-bg" />
-              )}
-              {a.message}
+            <div className="min-w-0 flex-1 space-y-2">
+              {alerts.map((a, i) => (
+                <div
+                  key={`${a.type}-${a.month}`}
+                  className={`relative rounded-2xl bg-bg px-3.5 py-2.5 text-[12.5px] leading-relaxed text-muted ${
+                    i === 0 ? "rounded-tl-sm" : ""
+                  }`}
+                >
+                  {i === 0 && (
+                    <span className="absolute -left-1.5 top-3 h-3 w-3 rotate-45 rounded-sm bg-bg" />
+                  )}
+                  {a.message}
+                </div>
+              ))}
             </div>
-          ))}
+          </div>
         </div>
       )}
 

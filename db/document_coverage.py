@@ -5,6 +5,8 @@ LLM 미호출 — 전부 결정론적 코드(CLAUDE.md 원칙1과 같은 결).
 0017 마이그레이션 전제: `SourceDocument.year/month`(OCR 업로드만 채워짐)와
 `Voucher.source_document_id`(실제 FK)가 있어야 이 모듈의 쿼리가 성립한다.
 """
+from datetime import datetime, timezone
+
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
@@ -47,6 +49,50 @@ def document_upload_grid(session: Session, company_id: int, year: int) -> dict:
             for dt in _DOCUMENT_TYPES
         ],
     }
+
+
+def upload_streak(session: Session, company_id: int) -> dict:
+    """"필수 문서를 전부 채운 달"이 오늘 기준 몇 개월 연속 이어지는지 — 업로드
+    그리드 위 동기부여 배지 재료. document_upload_grid와 같은 데이터 소스
+    (SourceDocument.year/month — OCR 업로드만 채워짐, 파일 상단 모듈 docstring
+    참고)를 써서 같은 한계를 그대로 공유한다(엑셀 업로드는 스트릭에 안 잡힘).
+
+    이번 달은 아직 진행 중이라 스트릭에서 제외하고(원칙7과 같은 결 — 미완료를
+    완료로 세지 않음) 그 직전 달부터 거꾸로 센다. electric_bill은 연료 체크 여부와
+    무관하게 항상 필수라(required_documents) 연료를 아직 안 골랐어도 스트릭은
+    성립할 수 있다 — document_upload_grid와 같은 규칙을 그대로 따른 결과다."""
+    company = session.get(Company, company_id)
+    fuel_types: FuelTypes = (company.fuel_types_json or {}) if company else {}
+    required = {dt for dt, status in required_documents(fuel_types).items() if status == "required"}
+
+    rows = session.execute(
+        select(SourceDocument.year, SourceDocument.month, SourceDocument.document_type)
+        .where(
+            SourceDocument.company_id == company_id,
+            SourceDocument.document_type.in_(required),
+            SourceDocument.year.isnot(None),
+            SourceDocument.month.isnot(None),
+        )
+        .distinct()
+    ).all()
+
+    filled: dict[tuple[int, int], set[str]] = {}
+    for year, month, doc_type in rows:
+        filled.setdefault((year, month), set()).add(doc_type)
+
+    now = datetime.now(timezone.utc)
+    year, month = now.year, now.month - 1
+    if month == 0:
+        year, month = year - 1, 12
+
+    streak = 0
+    while required <= filled.get((year, month), set()):
+        streak += 1
+        month -= 1
+        if month == 0:
+            year, month = year - 1, 12
+
+    return {"streak_months": streak}
 
 
 def documents_for_cell(

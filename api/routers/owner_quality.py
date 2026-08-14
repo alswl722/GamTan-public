@@ -29,6 +29,7 @@ from db.pcaf import benchmark_against_industry
 from db.pcaf_quality import (
     assess_borrower_emission_quality,
     assess_inventory_completeness,
+    available_reporting_years,
     default_reporting_year,
     save_quality_assessment_version,
     scope_emission_detail,
@@ -87,6 +88,16 @@ def _fuel_breakdown(session: Session, company_id: int, year: int, scope_group: s
         {"fuel_type": fuel, "emission_tco2e": round(v["emission_kg"] / 1000.0, 3), "voucher_count": v["voucher_count"]}
         for fuel, v in totals.items()
     ]
+
+
+@router.get("/{company_id}/reporting-years")
+def owner_reporting_years(company_id: int, session: Session = Depends(get_session)):
+    """리포트·데이터 업로드 탭의 연도 선택기가 쓰는 목록 — 이 기업이 전표를 가진
+    연도 전부를 최신순으로 반환한다(db/pcaf_quality.py::available_reporting_years).
+    회사가 없으면 404 — 다른 엔드포인트와 동일한 실패 규칙."""
+    if session.get(Company, company_id) is None:
+        raise HTTPException(status_code=404, detail=f"company_id={company_id} 없음")
+    return {"years": available_reporting_years(session, company_id)}
 
 
 @router.get("/{company_id}/quality-report")
