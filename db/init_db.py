@@ -275,9 +275,10 @@ def seed_rate_products(session: Session):
         min_data_quality_score=2,
         rate_discount_pct=0.40,
         eligibility_description=(
-            "PCAF 데이터 품질 2등급(에너지원별 소비량 실측 기반, Option 2a) 이상 — "
-            "K-택소노미 적합 프로젝트에 조달자금을 배정하는 iM뱅크 한국형 녹색채권 "
-            "트랜치 기반 중소기업 대출"
+            "PCAF 데이터 품질 2등급(에너지원별 소비량 실측 기반, Option 2a) 이상 + "
+            "전표에서 K-택소노미 적합 설비(태양광·ESS 등) 투자 근거 확인 — K-택소노미 "
+            "적합 프로젝트에 조달자금을 배정하는 iM뱅크 한국형 녹색채권 트랜치 기반 "
+            "중소기업 대출"
         ),
         source_reference=(
             "iM뱅크 한국형 녹색채권(아이엠뱅크46-09이24A-26(녹), 2025.9 발행, 1,100억원, "
@@ -286,6 +287,7 @@ def seed_rate_products(session: Session):
         disclaimer_note=(
             "실제 적용 여부·금리는 은행 담당자 심사에 따라 달라질 수 있습니다."
         ),
+        requires_k_taxonomy_leads=True,
     ))
     session.commit()
     print("[OK] 우대금리 상품 2건 적재 (iM뱅크 ESG Grow-Up 특별대출 + K-택소노미 그린 SME 대출)")

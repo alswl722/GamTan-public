@@ -41,7 +41,7 @@ def db(tmp_path):
         yield session, company.id
 
 
-def _add_voucher(session, cid, month, item, *, quantity=None, scope=1):
+def _add_voucher(session, cid, month, item, *, quantity=None, scope=1, k_taxonomy_lead=False):
     v = Voucher(
         company_id=cid, source="hometax", year=YEAR, month=month,
         supplier_name="테스트", item_description=item,
@@ -50,10 +50,16 @@ def _add_voucher(session, cid, month, item, *, quantity=None, scope=1):
     )
     session.add(v)
     session.flush()
+    # k_taxonomy_lead=True면 db/k_taxonomy.py::k_taxonomy_leads()가 찾는 필드
+    # (finance_lead_type)를 직접 채운다 — 실제 룰 매칭 파이프라인을 안 태우고도
+    # "이 회사는 K택소노미 설비 증거가 있다"를 가볍게 재현(이 테스트 파일의 기존
+    # 관례처럼 Classification을 직접 구성).
     session.add(Classification(
         voucher_id=v.id, scope=scope, category="고정연소", fuel_type="도시가스",
         amount_krw=100000, emission_co2e=500.0, confidence=0.9,
         evidence="테스트", method="rule", status="auto",
+        finance_lead_type="녹색여신 후보" if k_taxonomy_lead else None,
+        k_taxonomy_facility_type="태양광 설비" if k_taxonomy_lead else None,
     ))
     session.commit()
     return v.id
@@ -79,8 +85,10 @@ def test_seed_creates_green_sme_loan_referencing_real_bond_issuance(db):
 
 
 def test_full_year_measured_data_is_eligible(db):
-    """12개월 전부 실측(energy_consumption, 2등급)이면 이미 상품 자격을 충족한다 —
-    다수결로도, 약한 고리 원칙으로도 2등급이 나오는 가장 단순한 사례."""
+    """12개월 전부 실측(energy_consumption, 2등급)이면 ESG Grow-Up 자격을 충족한다 —
+    다수결로도, 약한 고리 원칙으로도 2등급이 나오는 가장 단순한 사례. K-택소노미
+    그린 SME 대출은 PCAF 등급만으로는 안 뜬다 — 이 회사는 K택소노미 설비 증거가
+    없어서(requires_k_taxonomy_leads=True) 매칭에서 빠진다."""
     session, cid = db
     for m in range(1, 13):
         _add_voucher(session, cid, m, "도시가스", quantity=100)
@@ -89,7 +97,35 @@ def test_full_year_measured_data_is_eligible(db):
     assert status["status"] == "eligible"
     assert status["candidate_score"] == 2
     product_names = {p["product_name"] for p in status["products"]}
+    assert product_names == {"ESG Grow-Up 특별대출"}
+
+
+def test_green_sme_loan_appears_only_with_k_taxonomy_evidence(db):
+    """같은 2등급이어도 전표에 K택소노미 설비 증거(태양광 등)가 있어야 K-택소노미
+    그린 SME 대출까지 같이 뜬다 — 두 상품이 항상 세트로 뜨던 문제(2026-08-15) 수정
+    확인용."""
+    session, cid = db
+    for m in range(1, 13):
+        _add_voucher(session, cid, m, "도시가스", quantity=100)
+    _add_voucher(session, cid, 1, "태양광 설비 설치", quantity=100, k_taxonomy_lead=True)
+
+    status = rate_product_status_for_scope(session, cid, YEAR, "scope_1")
+    assert status["status"] == "eligible"
+    product_names = {p["product_name"] for p in status["products"]}
     assert product_names == {"ESG Grow-Up 특별대출", "K-택소노미 그린 SME 대출"}
+
+
+def test_upgrade_needed_target_products_also_respect_k_taxonomy_gate(db):
+    """upgrade_needed 상태의 target_products(목표 등급에서 자격을 얻을 상품)도
+    같은 규칙을 따른다 — K택소노미 증거 없으면 ESG Grow-Up만 목표로 안내한다."""
+    session, cid = db
+    for m in range(1, 13):
+        _add_voucher(session, cid, m, "도시가스", quantity=None)  # revenue, 4등급
+
+    status = rate_product_status_for_scope(session, cid, YEAR, "scope_1")
+    assert status["status"] == "upgrade_needed"
+    target_names = {p["product_name"] for p in status["target_products"]}
+    assert target_names == {"ESG Grow-Up 특별대출"}
 
 
 def test_revenue_dominant_scope_needs_upgrade(db):

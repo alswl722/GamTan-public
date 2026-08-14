@@ -131,7 +131,7 @@ def test_create_rate_request_allows_already_eligible_status(db):
     req = create_rate_request(session, cid, request_type="rate_upgrade", scope_group="scope_1")
     assert req.current_grade == 2
     assert req.target_grade == 2
-    assert req.matched_product_name == "ESG Grow-Up 특별대출, K-택소노미 그린 SME 대출"
+    assert req.matched_product_name == "ESG Grow-Up 특별대출"
     assert "이미 조건을 충족" in req.missing_summary
 
 
@@ -314,7 +314,7 @@ def test_owner_submit_request_succeeds_when_already_at_best_achievable_grade(db,
         json={"request_type": "rate_upgrade", "scope_group": "scope_1"},
     )
     assert res.status_code == 200, res.text
-    assert res.json()["matched_product_name"] == "ESG Grow-Up 특별대출, K-택소노미 그린 SME 대출"
+    assert res.json()["matched_product_name"] == "ESG Grow-Up 특별대출"
 
 
 def test_owner_submit_request_fails_clearly_when_scope_group_missing(db, client):
