@@ -2,7 +2,7 @@
 
 - GET   /admin/portfolio                      포트폴리오 금융배출량 집계 + PCAF 등급 분포
 - GET   /admin/companies/{id}/overview        기업 상세 탭 — 등급·결손·HITL대기·최근알림 요약
-- GET   /admin/hitl                           전 기업 담당자 검토 큐 (저신뢰 분류 건)
+- GET   /admin/hitl                           전 기업 담당자 검토 작업대 (검토 대기 + 확정·미전송 건)
 - PATCH /admin/classifications/{id}/confirm   그대로 확정 (저장만 — 사장님껜 아직 비공개)
 - PATCH /admin/classifications/{id}           분류 수정 후 확정 (담당자 교정, 저장만)
 - PATCH /admin/classifications/{id}/reject    반려 — 집계에서 제외
@@ -130,14 +130,23 @@ def company_overview(company_id: int, session: Session = Depends(get_session)):
 
 
 def _load_reviewable(session: Session, voucher_id: int) -> Classification:
-    """검토 대기 상태의 분류를 가져온다 — 아니면 404/409."""
+    """검토 대기(review_required) 또는 확정됐지만 아직 전송 전(confirmed,
+    sent_to_owner_at is null)인 분류를 가져온다 — 아니면 404/409.
+
+    확정은 저장일 뿐 마감이 아니다. 담당자가 기업 배치를 아직 전송하지 않았다면
+    잘못 확정한 값을 다시 고치거나 반려로 되돌릴 수 있어야 한다. 이미 전송된
+    건은 사장님이 이미 봤을 수 있는 값이라 더 이상 손대지 못하게 막는다.
+    """
     obj = session.query(Classification).filter_by(voucher_id=voucher_id).one_or_none()
     if obj is None:
         raise HTTPException(status_code=404, detail=f"voucher_id={voucher_id} 분류 없음")
-    if obj.status != "review_required":
+    reviewable = obj.status == "review_required" or (
+        obj.status == "confirmed" and obj.sent_to_owner_at is None
+    )
+    if not reviewable:
         raise HTTPException(
             status_code=409,
-            detail=f"처리 불가 — 현재 상태 '{obj.status}' (검토필요 건만 가능)",
+            detail=f"처리 불가 — 현재 상태 '{obj.status}' (검토 대기 또는 전송 전 확정 건만 가능)",
         )
     return obj
 

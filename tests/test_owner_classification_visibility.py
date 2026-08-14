@@ -20,7 +20,12 @@ from sqlalchemy.orm import Session
 
 from api.db import get_session
 from api.main import app
-from api.queries import get_classifications, get_hitl_pending_count, get_pending_send_count
+from api.queries import (
+    get_classifications,
+    get_hitl_pending_count,
+    get_hitl_queue,
+    get_pending_send_count,
+)
 from db.models import Base, Classification, Company, Voucher
 
 YEAR = 2025
@@ -183,3 +188,29 @@ def test_company_overview_includes_pending_send_count(db, client):
     res = client.get(f"/admin/companies/{cid}/overview")
     assert res.status_code == 200
     assert res.json()["pending_send_count"] == 1
+
+
+# ── HITL 검토 작업대(get_hitl_queue) — 확정해도 전송 전까지 남는다 ─────────────
+def test_hitl_queue_keeps_confirmed_unsent_items_with_status_flag(db, client):
+    """검토 대기 건과 확정만 된(미전송) 건이 같은 큐에 status로 구분돼 함께 보인다."""
+    session, cid = db
+    v1 = _add_voucher_with_classification(session, cid, 1, "검토중건", status="review_required")
+    v2 = _add_voucher_with_classification(session, cid, 2, "확정된건", status="review_required")
+    client.patch(f"/admin/classifications/{v2}/confirm")
+
+    queue = get_hitl_queue(session)
+    assert len(queue) == 2
+    by_id = {item["voucher_id"]: item["status"] for item in queue}
+    assert by_id[v1] == "review_required"
+    assert by_id[v2] == "confirmed"
+
+
+def test_hitl_queue_drops_item_only_after_send(db, client):
+    """전송 버튼을 눌러야 그 건이 검토 작업대에서도 함께 사라진다."""
+    session, cid = db
+    vid = _add_voucher_with_classification(session, cid, 1, "검토중건", status="review_required")
+    client.patch(f"/admin/classifications/{vid}/confirm")
+    assert len(get_hitl_queue(session)) == 1  # 확정만으론 안 빠짐
+
+    client.post(f"/admin/companies/{cid}/send-classifications")
+    assert get_hitl_queue(session) == []

@@ -200,9 +200,13 @@ def _selected_hitl_fuel_labels(fuel_types: dict | None) -> list[str] | None:
 
 
 def get_hitl_queue(session: Session) -> list[dict]:
-    """전 기업의 HITL 대기 건(status='review_required') — 관리자 검토 큐.
+    """전 기업의 HITL 검토 작업대 — 검토 대기(review_required) + 확정됐지만 아직
+    사장님께 전송 안 한(confirmed, sent_to_owner_at is null) 건을 모두 반환한다.
 
-    은행 담당자가 여러 기업의 저신뢰 분류를 한 화면에서 확인·확정한다.
+    담당자가 확정해도 이 큐에서 즉시 사라지지 않는다 — status가 'confirmed'로
+    바뀐 채 목록에 남아 "검토 완료" 표시만 되고, 담당자가 기업별로 모아서
+    "전송" 버튼(POST /admin/companies/{id}/send-classifications)을 눌러야
+    사장님 화면에 실제로 노출된다. 전송 이후에는 이 큐에서도 사라진다.
     (데모는 시연 기업 1곳이지만 쿼리는 기업 무관 — 결선 포트폴리오로 그대로 확장.)
     정렬: 기업 → 월 → 발행일.
     """
@@ -210,7 +214,10 @@ def get_hitl_queue(session: Session) -> list[dict]:
         select(Classification, Voucher, Company)
         .join(Voucher, Classification.voucher_id == Voucher.id)
         .join(Company, Voucher.company_id == Company.id)
-        .where(Classification.status == "review_required")
+        .where(
+            (Classification.status == "review_required")
+            | ((Classification.status == "confirmed") & Classification.sent_to_owner_at.is_(None))
+        )
         .order_by(Company.id, Voucher.month, Voucher.issue_date)
     )
     rows = session.execute(stmt).all()
@@ -230,6 +237,7 @@ def get_hitl_queue(session: Session) -> list[dict]:
             "month": v.month,
             "source_document_id": c.source_document_id,
             "company_fuel_types": _selected_hitl_fuel_labels(co.fuel_types_json),
+            "status": c.status,
         }
         for c, v, co in rows
     ]

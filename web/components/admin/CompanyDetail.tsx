@@ -8,7 +8,7 @@
 // 탭들이고, 여기서는 계산 로직을 새로 만들지 않는다.
 
 import { useEffect, useState } from "react";
-import { getCompanyOverview, sendClassificationsToOwner } from "@/lib/admin-data";
+import { getCompanyOverview } from "@/lib/admin-data";
 import type { Company, CompanyOverview, TraceRunItem } from "@/lib/admin-types";
 import { gradeColor } from "@/lib/grade-colors";
 import { AlertsPanel } from "@/components/admin/AlertsPanel";
@@ -18,15 +18,10 @@ import { CompanyTable } from "@/components/admin/CompanyTable";
 import { DocumentAccessLog } from "@/components/admin/DocumentAccessLog";
 import { TraceHistory } from "@/components/admin/TraceHistory";
 
-function OverviewCard({
-  overview,
-  onSend,
-  sending,
-}: {
-  overview: CompanyOverview;
-  onSend: () => void;
-  sending: boolean;
-}) {
+// 확정→사장님 전송은 담당자가 실제 검토 작업을 하는 "검토" 탭(HitlWorkspace)에서만
+// 가능하다 — 이 탭은 현황을 훑어보는 곳이라 읽기 전용으로 "확정·전송 대기 N건"만
+// 보여주고, 전송 버튼은 두지 않는다.
+function OverviewCard({ overview }: { overview: CompanyOverview }) {
   const gapCount = overview.coverage.gaps.length;
   const pendingSend = overview.pending_send_count;
 
@@ -73,29 +68,15 @@ function OverviewCard({
           )}
         </p>
       </div>
-      <div
-        className={
-          pendingSend > 0
-            ? "rounded-md border border-brand/40 bg-brand-soft p-4"
-            : "rounded-md border border-line bg-surface p-4"
-        }
-      >
+      <div className="rounded-md border border-line bg-surface p-4">
         <p className="text-[11px] text-faint">확정·전송 대기</p>
-        <div className="mt-1.5 flex items-center justify-between gap-2">
-          <span className="text-sm font-semibold text-ink">
-            {pendingSend > 0 ? `${pendingSend}건` : "없음"}
-          </span>
-          {pendingSend > 0 && (
-            <button
-              type="button"
-              onClick={onSend}
-              disabled={sending}
-              className="rounded-md bg-brand px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-brand-ink disabled:opacity-50"
-            >
-              {sending ? "전송 중…" : "사장님께 전송"}
-            </button>
+        <p className="mt-1.5 text-sm font-semibold text-ink">
+          {pendingSend > 0 ? (
+            <span className="text-brand-ink">{pendingSend}건</span>
+          ) : (
+            "없음"
           )}
-        </div>
+        </p>
       </div>
     </div>
   );
@@ -141,7 +122,6 @@ export function CompanyDetail({
   const [overview, setOverview] = useState<CompanyOverview | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [sending, setSending] = useState(false);
 
   useEffect(() => {
     if (companyId === "") {
@@ -158,21 +138,6 @@ export function CompanyDetail({
       })
       .finally(() => setLoading(false));
   }, [companyId]);
-
-  async function handleSend() {
-    if (companyId === "") return;
-    setSending(true);
-    try {
-      await sendClassificationsToOwner(companyId);
-      const fresh = await getCompanyOverview(companyId);
-      setOverview(fresh);
-    } catch (err) {
-      console.error("전송 실패:", err);
-      setError("전송에 실패했습니다. 잠시 후 다시 시도해 주세요.");
-    } finally {
-      setSending(false);
-    }
-  }
 
   const companyTraceRuns =
     companyId === "" ? [] : traceRuns.filter((r) => r.company_id === companyId);
@@ -211,7 +176,7 @@ export function CompanyDetail({
           </div>
         ) : (
           <div className="space-y-5">
-            <OverviewCard overview={overview} onSend={handleSend} sending={sending} />
+            <OverviewCard overview={overview} />
 
             <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
               <CoverageGaps overview={overview} />
