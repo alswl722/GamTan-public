@@ -69,6 +69,8 @@ export interface HitlItem {
   amount_krw: number | null;
   confidence: number;
   evidence: string | null;
+  /** 계산 엔진이 물량·배출량 산출에 실패해 사람검토로 넘긴 사유 — evidence(판단 근거)와 분리된 필드. */
+  calc_failure_reason: string | null;
   method: "rule" | "llm";
   month: number;
   source_document_id: number | null;

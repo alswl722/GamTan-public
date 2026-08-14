@@ -83,7 +83,12 @@ class Classification(Base):
     activity_unit = Column(String(20))
     emission_co2e = Column(Float)                     # kgCO2e (결정론적 계산 결과, 표시 시 ÷1000)
     confidence = Column(Float)                        # 0.0 ~ 1.0
-    evidence = Column(Text)                           # LLM 판단 근거
+    evidence = Column(Text)                           # AI/룰의 순수 분류 판단 근거만 — 계산 실패
+                                                        # 사유·담당자 조치는 섞지 않는다(원문과
+                                                        # 조치를 구분해 보여주기 위한 필드 분리)
+    calc_failure_reason = Column(Text)                # 결정론적 계산 엔진이 물량·배출량 산출에
+                                                        # 실패해 사람검토로 넘긴 사유(db/calc_engine.py
+                                                        # _review()/CalcDataGap). 계산 성공 시 null
     method = Column(String(10))                       # rule | llm
     mixed_item = Column(Integer, default=0)           # 1 = "외 1종" 혼합 품목
     status = Column(String(20), default="auto")       # auto | review_required | confirmed

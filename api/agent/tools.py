@@ -149,13 +149,14 @@ def _build_classification(
         classification.activity_unit = result["activity_unit"]
         classification.emission_co2e = result["emission_co2e"]
         # 회계 규칙상 사람검토 대상(LPG·전기/가스 사용량 미기재) → HITL
+        # 계산 실패 사유는 evidence(판단 근거)와 섞지 않고 별도 컬럼에 저장한다.
         if result.get("needs_review"):
             classification.status = "review_required"
-            classification.evidence = f"{evidence} | {result['reason']}"
+            classification.calc_failure_reason = result["reason"]
     except CalcDataGap as gap:
         # 계수는 있는데 해당 월 단가가 없는 진짜 데이터 갭 — 사람 검토로 이관
         classification.status = "review_required"
-        classification.evidence = f"{evidence} | 계산 불가: {gap}"
+        classification.calc_failure_reason = str(gap)
 
     return classification
 

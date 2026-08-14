@@ -233,6 +233,7 @@ def get_hitl_queue(session: Session) -> list[dict]:
             "amount_krw": int(c.amount_krw) if c.amount_krw is not None else None,
             "confidence": c.confidence,
             "evidence": c.evidence,
+            "calc_failure_reason": c.calc_failure_reason,
             "method": c.method,
             "month": v.month,
             "source_document_id": c.source_document_id,
