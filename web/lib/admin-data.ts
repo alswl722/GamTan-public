@@ -1,7 +1,7 @@
 /**
  * 관리자 대시보드 데이터 접근 — 백엔드 실제 응답(apiGet/apiPatch)만 다룬다.
  */
-import { apiGet, apiPatch, BASE_URL } from "@/lib/api";
+import { apiGet, apiPatch, apiPost, BASE_URL } from "@/lib/api";
 import type {
   BulkActionResult,
   ClassificationEdit,
@@ -86,6 +86,14 @@ export function getTraceSteps(sessionId: string): Promise<TraceStep[]> {
 /** 기업 상세 탭 — 등급·결손·HITL대기·최근알림 요약. */
 export function getCompanyOverview(companyId: number): Promise<CompanyOverview> {
   return apiGet(`/admin/companies/${companyId}/overview`);
+}
+
+/** 확정(저장)된 건을 모아 사장님 화면에 한 번에 전송 — 확정 자체는 이 액션과 무관하게
+ * 언제든 저장되지만, 이 버튼을 눌러야 그 시점까지 확정된 건이 사장님에게 보인다. */
+export function sendClassificationsToOwner(
+  companyId: number,
+): Promise<{ company_id: number; sent_count: number; sent_at: string }> {
+  return apiPost(`/admin/companies/${companyId}/send-classifications`);
 }
 
 /** 원본문서 접근 감사 로그 — 열람 이벤트 자체의 기록(review-log와 다른 축). */

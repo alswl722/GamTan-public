@@ -2,7 +2,7 @@
 
 여기 모아두면 "전표/분포를 DB에서 꺼내는" 로직이 한 곳에만 존재한다.
 """
-from sqlalchemy import case, func, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from db.document_requirements import required_documents
@@ -111,18 +111,25 @@ def get_unit_prices(session: Session) -> list[UnitPrice]:
 
 
 def get_classifications(session: Session, company_id: int) -> list[dict]:
-    """장면③(AI 분류+근거)용 — Scope 1/2 확정 건 + HITL 대기 건만 반환.
+    """장면③(AI 분류+근거)용 — 담당자가 확정 후 "전송"까지 마친 건만 반환.
 
-    정렬: 사람 검토가 필요한 HITL 건을 최상단에 먼저 보여주고, 그 다음은 월·발행일순.
-    (제외/참고분류는 감사·집계 목적으로 DB엔 남아있지만 이 화면에는 안 보여줌)
+    확정(status: confirmed)과 사장님 전송(sent_to_owner_at)은 분리된 별개 동작이다.
+    담당자가 HITL 큐에서 개별 건을 확정해도 사장님 화면에는 바로 안 나타나고,
+    담당자가 해당 기업의 확정 건을 모아 "전송" 액션(send_classifications_to_owner)을
+    실행해야 그 시점의 sent_to_owner_at이 채워지며 이 목록에 나타난다 — 검토 중인
+    기업 배치가 건별로 흘러들어가는 것을 막기 위함.
+    HITL 대기(review_required) 건과 확정됐지만 미전송인 건은 원문·Scope·판단 근거를
+    사장님에게 노출하지 않는다 — 건수만 get_hitl_pending_count()로 별도 안내.
+    정렬: 월·발행일순.
     """
-    hitl_first = case((Classification.status == "review_required", 0), else_=1)
     stmt = (
         select(Classification, Voucher)
         .join(Voucher, Classification.voucher_id == Voucher.id)
         .where(Voucher.company_id == company_id)
-        .where((Classification.scope.in_((1, 2))) | (Classification.status == "review_required"))
-        .order_by(hitl_first, Voucher.month, Voucher.issue_date)
+        .where(Classification.scope.in_((1, 2)))
+        .where(Classification.status == "confirmed")
+        .where(Classification.sent_to_owner_at.isnot(None))
+        .order_by(Voucher.month, Voucher.issue_date)
     )
     rows = session.execute(stmt).all()
     return [
@@ -136,10 +143,39 @@ def get_classifications(session: Session, company_id: int) -> list[dict]:
             "confidence": c.confidence,
             "evidence": c.evidence,
             "method": c.method,
-            "hitl": c.status == "review_required",
         }
         for c, v in rows
     ]
+
+
+def get_hitl_pending_count(session: Session, company_id: int) -> int:
+    """장면③ 상단 안내("N건은 담당자가 검토 중이에요")용 — 검토 대기 + 확정됐지만
+    아직 전송 안 한 건을 합쳐서 반환한다(둘 다 사장님에게는 아직 "검토중"으로 보임).
+    """
+    stmt = (
+        select(func.count())
+        .select_from(Classification)
+        .join(Voucher, Classification.voucher_id == Voucher.id)
+        .where(Voucher.company_id == company_id)
+        .where(
+            (Classification.status == "review_required")
+            | ((Classification.status == "confirmed") & Classification.sent_to_owner_at.is_(None))
+        )
+    )
+    return session.execute(stmt).scalar_one()
+
+
+def get_pending_send_count(session: Session, company_id: int) -> int:
+    """관리자 "이 기업 전송" 버튼용 — 확정됐지만 아직 전송 안 한 건수(전송 대상)."""
+    stmt = (
+        select(func.count())
+        .select_from(Classification)
+        .join(Voucher, Classification.voucher_id == Voucher.id)
+        .where(Voucher.company_id == company_id)
+        .where(Classification.status == "confirmed")
+        .where(Classification.sent_to_owner_at.is_(None))
+    )
+    return session.execute(stmt).scalar_one()
 
 
 def _selected_hitl_fuel_labels(fuel_types: dict | None) -> list[str] | None:

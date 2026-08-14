@@ -52,6 +52,8 @@ export interface CompanyOverview {
   scope1: number;
   scope2: number;
   hitl_count: number;
+  /** 확정은 했지만 아직 "전송" 전인 건수 — 0보다 크면 전송 버튼을 강조 표시. */
+  pending_send_count: number;
   coverage: CoverageInfo;
   alerts: AlertItem[];
 }

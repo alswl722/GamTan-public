@@ -3,12 +3,13 @@
 - GET   /admin/portfolio                      포트폴리오 금융배출량 집계 + PCAF 등급 분포
 - GET   /admin/companies/{id}/overview        기업 상세 탭 — 등급·결손·HITL대기·최근알림 요약
 - GET   /admin/hitl                           전 기업 담당자 검토 큐 (저신뢰 분류 건)
-- PATCH /admin/classifications/{id}/confirm   그대로 확정
-- PATCH /admin/classifications/{id}           분류 수정 후 확정 (담당자 교정)
+- PATCH /admin/classifications/{id}/confirm   그대로 확정 (저장만 — 사장님껜 아직 비공개)
+- PATCH /admin/classifications/{id}           분류 수정 후 확정 (담당자 교정, 저장만)
 - PATCH /admin/classifications/{id}/reject    반려 — 집계에서 제외
 - GET   /admin/traces                         에이전트 실행 이력 목록 (드릴다운은 /trace/{sid})
-- PATCH /admin/classifications/bulk-confirm   여러 건 일괄 확정 (건별 성공/실패 반환)
+- PATCH /admin/classifications/bulk-confirm   여러 건 일괄 확정 (건별 성공/실패 반환, 저장만)
 - PATCH /admin/classifications/bulk-reject    여러 건 일괄 반려 (건별 성공/실패 반환)
+- POST  /admin/companies/{id}/send-classifications  확정 건을 모아 사장님 화면에 한 번에 전송
 - GET   /admin/review-log                     담당자 조치 이력(감사 로그) — evidence 누적 기록을 노출
                                                (page/page_size/company_name 서버사이드 페이지네이션)
 - GET   /admin/documents/{id}                 원본문서 열람 (조회 시 접근 로그 자동 기록)
@@ -34,7 +35,13 @@ from sqlalchemy.orm import Session
 
 from api.db import get_session
 from api.document_ingestion import REPO_ROOT
-from api.queries import get_coverage, get_emission_factors, get_hitl_queue, get_unit_prices
+from api.queries import (
+    get_coverage,
+    get_emission_factors,
+    get_hitl_queue,
+    get_pending_send_count,
+    get_unit_prices,
+)
 from db.alerts import detect_alerts
 from db.calc_engine import CalcDataGap, ClassifiedItemInput, compute_emission, \
     index_emission_factors, index_unit_prices
@@ -115,6 +122,8 @@ def company_overview(company_id: int, session: Session = Depends(get_session)):
         "scope1": round(used.get("scope1", 0.0) or 0.0, 2),
         "scope2": round(used.get("scope2", 0.0) or 0.0, 2),
         "hitl_count": hitl_count,
+        # 확정은 했지만 아직 "전송" 전인 건수 — 0보다 크면 관리자 화면에 전송 버튼을 강조.
+        "pending_send_count": get_pending_send_count(session, company_id),
         "coverage": get_coverage(session, company_id),
         "alerts": detect_alerts(session, company_id=company_id),
     }
@@ -189,6 +198,33 @@ def bulk_reject(payload: BulkAction, session: Session = Depends(get_session)):
             session, payload.voucher_ids, "rejected", "담당자 일괄 반려 — 분류 신뢰 불가, 집계 제외"
         )
     }
+
+
+@router.post("/companies/{company_id}/send-classifications")
+def send_classifications_to_owner(company_id: int, session: Session = Depends(get_session)):
+    """확정(저장)과 사장님 전송을 분리한다 — 이 엔드포인트를 눌러야 그 시점까지
+
+    확정된(status: confirmed, 아직 미전송) 건 전체가 한 번에 사장님 화면에 노출된다.
+    검토 중인 기업 배치가 건별로 조금씩 흘러들어가는 것을 막기 위함. 재실행해도
+    이미 전송된 건은 건드리지 않는다(그 사이 새로 확정된 건만 대상).
+    """
+    company = session.get(Company, company_id)
+    if company is None:
+        raise HTTPException(status_code=404, detail="기업을 찾을 수 없습니다")
+
+    stmt = (
+        select(Classification)
+        .join(Voucher, Classification.voucher_id == Voucher.id)
+        .where(Voucher.company_id == company_id)
+        .where(Classification.status == "confirmed")
+        .where(Classification.sent_to_owner_at.is_(None))
+    )
+    pending = session.execute(stmt).scalars().all()
+    sent_at = datetime.now(timezone.utc)
+    for c in pending:
+        c.sent_to_owner_at = sent_at
+    session.commit()
+    return {"company_id": company_id, "sent_count": len(pending), "sent_at": sent_at}
 
 
 @router.patch("/classifications/{voucher_id}")

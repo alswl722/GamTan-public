@@ -90,6 +90,12 @@ class Classification(Base):
     classified_at = Column(DateTime(timezone=True), default=now)
     reviewed_at = Column(DateTime(timezone=True))      # 담당자 확정/반려 시각 (review_required 건만)
 
+    # 확정(저장)과 사장님 전송을 분리 — 담당자가 confirm/edit 해도 바로 사장님 화면에
+    # 뜨지 않고, "이 기업 전송" 액션(POST /admin/companies/{id}/send-classifications)을
+    # 눌러야 sent_to_owner_at 이 채워지며 그 순간부터 get_classifications()에 노출된다.
+    # review_required 건은 애초에 이 필드와 무관(확정 전이라 전송 대상이 아님).
+    sent_to_owner_at = Column(DateTime(timezone=True))
+
     # v1 §7.1 보완 — 기존 method(분류방법)와 분리해 활동자료 방법·증빙·계수버전까지 추적
     classification_method = Column(String(10))    # rule | llm | manual
     activity_data_method = Column(String(30))      # reported_quantity | invoice_quantity | spend_converted | economic_estimate | industry_estimate

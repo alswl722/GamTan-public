@@ -15,10 +15,11 @@ type Row = {
   confidence: number;
   evidence: string | null;
   method: "rule" | "llm";
-  hitl: boolean;
 };
 
-type ClassifyResponse = { results: Row[] };
+/** results 는 담당자가 확정한 건만 담긴다 — 검토 대기(HITL) 건은 담당자 확정
+ * 전까지 상세를 사장님에게 보여주지 않고 hitl_pending_count(건수)로만 안내한다. */
+type ClassifyResponse = { results: Row[]; hitl_pending_count: number };
 type ProgressResponse = { done: number; total: number; finished: boolean };
 
 function ScopeTag({ scope }: { scope: 1 | 2 | null }) {
@@ -116,11 +117,7 @@ function ClassificationCard({
   onToggle: () => void;
 }) {
   return (
-    <div
-      className={`rounded-xl bg-surface shadow-card transition-all duration-200 hover:-translate-y-0.5 hover:shadow-float ${
-        row.hitl ? "ring-1 ring-hitl/40" : ""
-      }`}
-    >
+    <div className="rounded-xl bg-surface shadow-card transition-all duration-200 hover:-translate-y-0.5 hover:shadow-float">
       <button
         type="button"
         onClick={onToggle}
@@ -131,11 +128,6 @@ function ClassificationCard({
             <span className="font-mono text-[13px] font-semibold text-ink">
               {row.raw}
             </span>
-            {row.hitl && (
-              <span className="rounded-md bg-hitl-ink px-1.5 py-0.5 text-[10px] font-bold text-white">
-                검토 예정
-              </span>
-            )}
           </div>
           <span className="text-[13px] font-semibold tabular-nums text-ink">
             {(row.amount_krw ?? 0).toLocaleString()}원
@@ -168,6 +160,7 @@ function ClassificationCard({
 
 export function SceneClassify({ onNext }: { onNext: () => void }) {
   const [rows, setRows] = useState<Row[]>([]);
+  const [hitlCount, setHitlCount] = useState(0);
   const [status, setStatus] = useState<"idle" | "loading" | "done" | "error">(
     "idle",
   );
@@ -182,9 +175,11 @@ export function SceneClassify({ onNext }: { onNext: () => void }) {
       .then((cid) => apiGet<ClassifyResponse>(`/classify/${cid}`))
       .then((res) => {
         if (!alive) return;
-        if (res.results.length > 0) {
-          // 이미 분류된 건이 있으면(재진입) 결과만 보여줌 — 재실행 없음
+        // 확정 건 + 검토 대기 건수를 합쳐 "이미 분류가 실행된 적 있는지" 판단한다 —
+        // 전량이 검토 대기라 results가 비어 있어도 재실행하면 안 된다.
+        if (res.results.length > 0 || res.hitl_pending_count > 0) {
           setRows(res.results);
+          setHitlCount(res.hitl_pending_count);
           setStatus("done");
         } else {
           // 처음 진입 시 — 버튼 없이 화면 진입과 동시에 바로 분류 시작
@@ -221,6 +216,7 @@ export function SceneClassify({ onNext }: { onNext: () => void }) {
 
       const res = await apiPost<ClassifyResponse>(`/classify/${cid}`);
       setRows(res.results);
+      setHitlCount(res.hitl_pending_count);
       setStatus("done");
     } catch (err) {
       console.error("분류 실행 실패:", err);
@@ -234,9 +230,7 @@ export function SceneClassify({ onNext }: { onNext: () => void }) {
     }
   }
 
-  const hitlRows = rows.filter((r) => r.hitl);
-  const autoRows = rows.filter((r) => !r.hitl);
-  const hitlCount = hitlRows.length;
+  const autoRows = rows;
 
   return (
     <section>
@@ -286,29 +280,14 @@ export function SceneClassify({ onNext }: { onNext: () => void }) {
         </div>
       )}
 
-      {rows.length > 0 && (
+      {(rows.length > 0 || hitlCount > 0) && (
         <>
           {hitlCount > 0 && (
-            <>
-              <div className="mt-4 flex items-center gap-2 rounded-xl bg-hitl/20 px-3.5 py-2.5 text-[12px] font-semibold text-hitl-ink">
-                <span className="h-1.5 w-1.5 rounded-full bg-hitl-ink" />
-                {hitlCount}건은 신뢰도가 낮아 은행 담당자가 검토할 예정이에요
-              </div>
-              <div className="mt-2.5 space-y-2">
-                {hitlRows.map((r) => (
-                  <ClassificationCard
-                    key={r.voucher_id}
-                    row={r}
-                    open={expanded === r.voucher_id}
-                    onToggle={() =>
-                      setExpanded(
-                        expanded === r.voucher_id ? null : r.voucher_id,
-                      )
-                    }
-                  />
-                ))}
-              </div>
-            </>
+            <div className="mt-4 flex items-center gap-2 rounded-xl bg-hitl/20 px-3.5 py-2.5 text-[12px] font-semibold text-hitl-ink">
+              <span className="h-1.5 w-1.5 rounded-full bg-hitl-ink" />
+              {hitlCount}건은 신뢰도가 낮아 은행 담당자가 검토 중이에요. 검토가
+              끝나면 이 화면에 자동으로 반영돼요.
+            </div>
           )}
 
           {autoRows.length > 0 && (
@@ -322,7 +301,7 @@ export function SceneClassify({ onNext }: { onNext: () => void }) {
                   <span className="grid h-7 w-7 place-items-center rounded-lg bg-brand-soft text-[12px] font-extrabold text-brand-ink">
                     {autoRows.length}
                   </span>
-                  자동확정 {autoRows.length}건 {showAuto ? "접기" : "보기"}
+                  확정 {autoRows.length}건 {showAuto ? "접기" : "보기"}
                 </span>
                 <span
                   className={`text-[14px] text-muted transition-transform duration-200 ${showAuto ? "rotate-180" : ""}`}

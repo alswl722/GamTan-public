@@ -11,7 +11,7 @@ from api.agent import progress
 from api.agent.run_lock import company_run_lock
 from api.agent.tools import classify_vouchers
 from api.db import get_session
-from api.queries import get_classifications
+from api.queries import get_classifications, get_hitl_pending_count
 
 router = APIRouter(prefix="/classify", tags=["classify"])
 
@@ -28,13 +28,20 @@ def run_classification(company_id: int, session: Session = Depends(get_session))
             company_id,
             on_progress=lambda done, total: progress.tick(company_id, done, total),
         )
-    return {**summary, "results": get_classifications(session, company_id)}
+    return {
+        **summary,
+        "results": get_classifications(session, company_id),
+        "hitl_pending_count": get_hitl_pending_count(session, company_id),
+    }
 
 
 @router.get("/{company_id}")
 def list_classifications(company_id: int, session: Session = Depends(get_session)):
-    """저장된 분류 결과 조회 (Scope1/2 확정 건 + HITL 대기 건)."""
-    return {"results": get_classifications(session, company_id)}
+    """저장된 분류 결과 조회 — 담당자 확정 건 + HITL 대기 건수(상세는 비공개)."""
+    return {
+        "results": get_classifications(session, company_id),
+        "hitl_pending_count": get_hitl_pending_count(session, company_id),
+    }
 
 
 @router.get("/progress/{company_id}")
