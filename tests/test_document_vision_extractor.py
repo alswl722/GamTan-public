@@ -78,6 +78,26 @@ def test_extract_via_vision_omits_quantity_when_not_read(monkeypatch):
     assert "quantity_unit" not in result
 
 
+def test_extract_via_vision_auto_detects_document_type_when_expected_omitted(monkeypatch):
+    """expected_document_type 생략("그냥 업로드")하면 대조 없이 Gemini가 판별한
+    종류를 그대로 신뢰하고 반환 dict의 document_type으로 알려준다."""
+    monkeypatch.setattr(
+        vision, "_call_gemini_vision",
+        lambda *a, **k: _ok_result(document_type="gas_bill", quantity=800, quantity_unit="m3"),
+    )
+    result = extract_via_vision(_JPEG_MAGIC)
+    assert result["document_type"] == "gas_bill"
+    assert result["year"] == 2025 and result["month"] == 6
+
+
+def test_extract_via_vision_auto_detect_unknown_type_raises(monkeypatch):
+    """자동판별 모드에서 Gemini가 종류를 못 알아보면("unknown") 추정으로 채우지
+    않고 명확히 실패한다 — 사장님이 직접 종류를 골라 다시 올려야 한다."""
+    monkeypatch.setattr(vision, "_call_gemini_vision", lambda *a, **k: _ok_result(document_type="unknown"))
+    with pytest.raises(DocumentParseError, match="판별하지 못했어요"):
+        extract_via_vision(_JPEG_MAGIC)
+
+
 def test_extract_via_vision_wrong_document_type_raises(monkeypatch):
     monkeypatch.setattr(vision, "_call_gemini_vision", lambda *a, **k: _ok_result(document_type="gas_bill"))
     with pytest.raises(DocumentParseError, match="도시가스고지서"):

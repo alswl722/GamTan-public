@@ -98,6 +98,25 @@ def test_ocr_upload_electric_bill_succeeds(db, client):
     assert res.json()["vouchers_created"] == 1
 
 
+def test_ocr_upload_without_document_type_auto_detects(db, client):
+    """"그냥 업로드" — document_type 필드 자체를 안 보내도 OCR이 스스로 종류를
+    판별해 처리한다(사장님이 어느 칸인지 몰라도 올릴 수 있어야 함)."""
+    _, company_id = db
+    res = client.post(
+        f"/owner/{company_id}/documents/upload",
+        files={"file": ("고지서.pdf", _gas_bill_pdf(month="05"), "application/pdf")},
+        data={"mode": "ocr"},
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["document_type"] == "gas_bill"
+    assert body["month"] == 5
+
+    grid = client.get(f"/owner/{company_id}/documents/grid?year=2025").json()
+    gas_row = next(r for r in grid["document_types"] if r["document_type"] == "gas_bill")
+    assert gas_row["months"]["5"] == 1
+
+
 def test_excel_upload_tax_invoice_succeeds(db, client):
     _, company_id = db
     wb = openpyxl.Workbook()
@@ -209,6 +228,7 @@ def test_ocr_image_upload_succeeds_via_vision_fallback(db, client, monkeypatch):
             "supplier_name": "한국전력공사", "item_description": "전기요금 (산업용 을)",
             "supply_amount_krw": 987_654, "year": 2025, "month": 6,
             "quantity": 1234, "quantity_unit": "kWh",
+            "document_type": "electric_bill",
         },
     )
 

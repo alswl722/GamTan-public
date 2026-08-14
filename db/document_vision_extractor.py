@@ -81,7 +81,13 @@ def _detect_mime_type(file_bytes: bytes) -> str:
     )
 
 
-def _build_prompt(expected_document_type: str) -> str:
+def _build_prompt(expected_document_type: str | None) -> str:
+    if expected_document_type is None:
+        return (
+            "사장님이 어느 칸인지 지정하지 않고 올린 이미지다("
+            "\"그냥 업로드\"). 위 시스템 안내에 따라 문서 종류부터 스스로 "
+            "판별하고 JSON으로 읽어내라."
+        )
     label = DOCUMENT_TYPE_LABEL.get(expected_document_type, expected_document_type)
     return f'사장님이 "{label}" 칸에 업로드한 이미지다. 위 시스템 안내에 따라 JSON으로 읽어내라.'
 
@@ -103,11 +109,15 @@ def _call_gemini_vision(file_bytes: bytes, mime_type: str, prompt: str) -> dict:
     return json.loads(resp.text)
 
 
-def extract_via_vision(file_bytes: bytes, expected_document_type: str) -> dict:
+def extract_via_vision(file_bytes: bytes, expected_document_type: str | None = None) -> dict:
     """실 추출(pdfplumber+정규식)이 실패했을 때만 호출되는 마지막 폴백.
 
-    document_type 불일치·낮은 confidence는 DocumentParseError(형식 불일치와
-    동급 실패). Gemini 호출 자체의 반복 실패는 VisionExtractionError.
+    expected_document_type을 생략(None)하면 대조 없이 Gemini가 판별한 종류를
+    그대로 신뢰한다("그냥 업로드") — 다만 판별 자체가 안 되면("unknown") 추정으로
+    채우지 않고 명확히 실패시킨다.
+
+    document_type 불일치·판별 실패·낮은 confidence는 DocumentParseError(형식
+    불일치와 동급 실패). Gemini 호출 자체의 반복 실패는 VisionExtractionError.
     """
     mime_type = _detect_mime_type(file_bytes)
     prompt = _build_prompt(expected_document_type)
@@ -129,11 +139,18 @@ def extract_via_vision(file_bytes: bytes, expected_document_type: str) -> dict:
         raise VisionExtractionError(f"이미지를 읽지 못했어요(AI 호출 오류) — {last_error}")
 
     detected_type = result.get("document_type")
-    if detected_type != expected_document_type:
-        detected_label = DOCUMENT_TYPE_LABEL.get(detected_type, "알 수 없는 문서")
-        expected_label = DOCUMENT_TYPE_LABEL.get(expected_document_type, expected_document_type)
+    if expected_document_type is not None:
+        if detected_type != expected_document_type:
+            detected_label = DOCUMENT_TYPE_LABEL.get(detected_type, "알 수 없는 문서")
+            expected_label = DOCUMENT_TYPE_LABEL.get(expected_document_type, expected_document_type)
+            raise DocumentParseError(
+                f"업로드하신 파일은 {detected_label}로 보여요 — {expected_label} 칸에 다시 올려 주세요"
+            )
+    elif detected_type not in DOCUMENT_TYPE_LABEL:
+        # "그냥 업로드" — Gemini가 스스로 판별 못 했으면("unknown" 또는 누락)
+        # 추정으로 채우지 않고 명확히 실패시킨다(실패 가시성 원칙).
         raise DocumentParseError(
-            f"업로드하신 파일은 {detected_label}로 보여요 — {expected_label} 칸에 다시 올려 주세요"
+            "문서종류를 판별하지 못했어요 — 어떤 문서인지 직접 선택해서 다시 올려 주세요"
         )
 
     confidence = result.get("confidence") or 0.0
@@ -153,6 +170,7 @@ def extract_via_vision(file_bytes: bytes, expected_document_type: str) -> dict:
         "supply_amount_krw": result.get("supply_amount_krw"),
         "year": result["year"],
         "month": result["month"],
+        "document_type": detected_type,
     }
     if result.get("quantity") is not None and result.get("quantity_unit"):
         parsed["quantity"] = result["quantity"]
