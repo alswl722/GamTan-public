@@ -186,4 +186,27 @@ export function getRateCandidate(companyId: number): Promise<RateCandidateRespon
   return apiGet<RateCandidateResponse>(`/owner/${companyId}/rate-candidate`);
 }
 
+// GET /owner/{company_id}/k-taxonomy-leads — db/k_taxonomy.py::k_taxonomy_leads_for_company.
+// 룰 매칭 경로에서만 채워지는 필드라(LLM 분류 경로는 항상 비어 있음) 대다수 기업·기간은
+// 빈 배열이 정상이다. 이전엔 ScenePcaf.tsx 로컬 타입이었으나 web/components/KTaxonomyCard.tsx로
+// 카드가 옮겨가며 공유 타입이 됐다.
+export interface KTaxonomyLead {
+  k_taxonomy_facility_type: string;
+  k_taxonomy_candidate_type: string | null;
+  finance_lead_type: string;
+  hint: string;
+  item_description: string;
+  voucher_month: number;
+  occurrence_count: number;
+}
+export interface KTaxonomyLeadsResponse {
+  leads: KTaxonomyLead[];
+}
+
+/** 사장님 메인 화면의 K택소노미(친환경 설비 투자) 안내 카드 — 읽기 전용(요청 제출
+ * 플로우는 관리자측 승인요청 큐가 이번 스코프에서 빠지며 함께 보류, 우대금리 카드와 동일). */
+export function getKTaxonomyLeads(companyId: number): Promise<KTaxonomyLeadsResponse> {
+  return apiGet<KTaxonomyLeadsResponse>(`/owner/${companyId}/k-taxonomy-leads`);
+}
+
 export { BASE_URL };
