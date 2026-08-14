@@ -8,6 +8,7 @@ import { getReviewLog } from "@/lib/admin-data";
 import type { ReviewLogEntry } from "@/lib/admin-types";
 import { usePaginatedLog } from "@/lib/use-paginated-log";
 import { cn } from "@/lib/utils";
+import { splitEvidence } from "@/lib/evidence";
 import { DateText } from "@/lib/use-formatted-date";
 import { PaginationBar } from "@/components/admin/PaginationBar";
 
@@ -15,14 +16,6 @@ const STATUS_MAP: Record<string, { label: string; cls: string }> = {
   confirmed: { label: "확정", cls: "bg-brand-soft text-brand-ink border-brand/30" },
   rejected: { label: "반려", cls: "bg-hitl/20 text-hitl-ink border-hitl/40" },
 };
-
-/** evidence 문자열의 마지막 " | " 뒤를 "이번 조치 내용"으로, 그 앞을 원본 판단 근거로 분리. */
-function splitEvidence(evidence: string | null): { original: string | null; action: string | null } {
-  if (!evidence) return { original: null, action: null };
-  const idx = evidence.lastIndexOf(" | ");
-  if (idx === -1) return { original: null, action: evidence };
-  return { original: evidence.slice(0, idx), action: evidence.slice(idx + 3) };
-}
 
 function StatusBadge({ status }: { status: string }) {
   const s = STATUS_MAP[status] ?? { label: status, cls: "bg-bg text-muted border-line" };
