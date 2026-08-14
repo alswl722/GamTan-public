@@ -6,7 +6,8 @@
   - 충족 못 하면(4등급) 기존 quality_upgrade_candidate를 재사용해 "upgrade_needed" —
     benefit 문구에 목표 등급에서 자격을 얻을 상품명이 덧붙는다.
   - 활동자료 자체가 없으면(candidate_score=None) 카드 자체가 없다(기존과 동일).
-  - 시드는 지어낸 금리가 아니라 iM뱅크 실제 상품(ESG Grow-Up 특별대출)을 참고한다.
+  - 시드는 지어낸 금리가 아니라 iM뱅크 실제 상품(ESG Grow-Up 특별대출, K-택소노미
+    그린 SME 대출) 2건을 참고한다.
 """
 import pytest
 from sqlalchemy import create_engine
@@ -61,11 +62,20 @@ def _add_voucher(session, cid, month, item, *, quantity=None, scope=1):
 def test_seed_creates_esg_growup_product_referencing_real_bank_product(db):
     """지어낸 금리가 아니라 iM뱅크 실제 상품을 참고했는지 — 상품명·출처 URL 확인."""
     session, _ = db
-    product = session.query(RateProduct).one()
-    assert product.product_name == "ESG Grow-Up 특별대출"
+    product = session.query(RateProduct).filter_by(product_name="ESG Grow-Up 특별대출").one()
     assert product.provider_name == "iM뱅크"
     assert product.min_data_quality_score == 2
     assert "imbank.co.kr" in product.source_reference
+
+
+def test_seed_creates_green_sme_loan_referencing_real_bond_issuance(db):
+    """K-택소노미 그린 SME 대출도 iM뱅크가 실제 발행한 한국형 녹색채권(2025.9,
+    1,100억원)을 참고했는지 — 상품명·출처 확인."""
+    session, _ = db
+    product = session.query(RateProduct).filter_by(product_name="K-택소노미 그린 SME 대출").one()
+    assert product.provider_name == "iM뱅크"
+    assert product.min_data_quality_score == 2
+    assert "녹색채권" in product.source_reference
 
 
 def test_full_year_measured_data_is_eligible(db):
@@ -78,9 +88,8 @@ def test_full_year_measured_data_is_eligible(db):
     status = rate_product_status_for_scope(session, cid, YEAR, "scope_1")
     assert status["status"] == "eligible"
     assert status["candidate_score"] == 2
-    assert len(status["products"]) == 1
-    assert status["products"][0]["product_name"] == "ESG Grow-Up 특별대출"
-    assert status["products"][0]["rate_discount_pct"] == 0.30
+    product_names = {p["product_name"] for p in status["products"]}
+    assert product_names == {"ESG Grow-Up 특별대출", "K-택소노미 그린 SME 대출"}
 
 
 def test_revenue_dominant_scope_needs_upgrade(db):

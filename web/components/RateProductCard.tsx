@@ -181,9 +181,13 @@ export function RateProductCard({ companyId }: { companyId: number | null }) {
       })}
 
       {[...upgradeGroups.values()].map((group) => {
-        const targetProducts = group[0].target_products ?? [];
+        // 우대율이 가장 큰 상품을 헤드라인으로 — 매칭 상품이 여러 개면(2026-08-14부터
+        // 2건 이상 가능) 나머지도 밑에 이름만 작게 나열해 조용히 숨기지 않는다.
+        const targetProducts = [...(group[0].target_products ?? [])].sort(
+          (a, b) => b.rate_discount_pct - a.rate_discount_pct
+        );
+        const [headline, ...rest] = targetProducts;
         const scopeLabels = group.map((c) => SCOPE_LABEL[c.scope_group]).join(" · ");
-        const headline = targetProducts[0];
         return (
           <div key={scopeLabels} className="rounded-3xl bg-surface p-4 shadow-card">
             {headline ? (
@@ -192,6 +196,11 @@ export function RateProductCard({ companyId }: { companyId: number | null }) {
                   <div className="text-[14.5px] font-bold leading-snug text-ink">
                     {headline.product_name}
                   </div>
+                  {rest.length > 0 && (
+                    <p className="mt-0.5 truncate text-[11px] text-faint">
+                      + {rest.map((p) => p.product_name).join(", ")}
+                    </p>
+                  )}
                 </div>
                 <DiscountHighlight pct={headline.rate_discount_pct} />
               </div>

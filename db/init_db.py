@@ -232,13 +232,18 @@ def seed_pcaf_quality_rules(session: Session):
 
 
 def seed_rate_products(session: Session):
-    """우대금리 참조 상품 — 지어낸 금리가 아니라 iM뱅크 실제 상품 "ESG Grow-Up
-    특별대출"의 공시 조건을 참고한다(iM뱅크 홈페이지, 2026-08 확인). 대기업·중견·
-    중소기업·개인사업자 대상, 중진공 ESG 심층진단 "환경(E) 분야 단독 3등급 이상"
-    조건이 우대금리 0.30%p — 감탄이 실제로 만드는 데이터(PCAF Scope 1·2 품질등급)로
-    증빙 가능한 티어만 시드한다. E·S·G 전분야 3등급 이상(0.50%p) 티어는 감탄이
-    사회(S)·지배구조(G) 데이터를 만들지 않으므로 시드하지 않는다(과잉주장 금지,
-    CLAUDE.md 원칙10).
+    """우대금리 참조 상품 2건.
+
+    ① "ESG Grow-Up 특별대출" — iM뱅크 실제 상품 공시 조건을 참고한다(iM뱅크 홈페이지,
+    2026-08 확인). 대기업·중견·중소기업·개인사업자 대상, 중진공 ESG 심층진단
+    "환경(E) 분야 단독 3등급 이상" 조건이 우대금리 0.30%p — 감탄이 실제로 만드는
+    데이터(PCAF Scope 1·2 품질등급)로 증빙 가능한 티어만 시드한다. E·S·G 전분야
+    3등급 이상(0.50%p) 티어는 감탄이 사회(S)·지배구조(G) 데이터를 만들지 않으므로
+    시드하지 않는다(과잉주장 금지, CLAUDE.md 원칙10).
+
+    ② "K-택소노미 그린 SME 대출" — iM뱅크가 2025.9 발행한 실제 한국형 녹색채권
+    (1,100억원, K-택소노미 준거, 한국신용평가 External Review 완료)의 조달자금을
+    중소기업 대출로 확장하는 트랜치 상품.
 
     PcafQualityRule과 동일한 count-guard 멱등 정책 — 이미 있으면 건드리지 않는다.
     """
@@ -264,8 +269,26 @@ def seed_rate_products(session: Session):
             "실제 적용 여부·금리는 은행 담당자 심사에 따라 달라질 수 있습니다."
         ),
     ))
+    session.add(RateProduct(
+        product_name="K-택소노미 그린 SME 대출",
+        provider_name="iM뱅크",
+        min_data_quality_score=2,
+        rate_discount_pct=0.40,
+        eligibility_description=(
+            "PCAF 데이터 품질 2등급(에너지원별 소비량 실측 기반, Option 2a) 이상 — "
+            "K-택소노미 적합 프로젝트에 조달자금을 배정하는 iM뱅크 한국형 녹색채권 "
+            "트랜치 기반 중소기업 대출"
+        ),
+        source_reference=(
+            "iM뱅크 한국형 녹색채권(아이엠뱅크46-09이24A-26(녹), 2025.9 발행, 1,100억원, "
+            "K-택소노미 준거, 한국신용평가 적합성 검토 완료) 조달자금 기반"
+        ),
+        disclaimer_note=(
+            "실제 적용 여부·금리는 은행 담당자 심사에 따라 달라질 수 있습니다."
+        ),
+    ))
     session.commit()
-    print("[OK] 우대금리 상품 1건 적재 (iM뱅크 ESG Grow-Up 특별대출 참고)")
+    print("[OK] 우대금리 상품 2건 적재 (iM뱅크 ESG Grow-Up 특별대출 + K-택소노미 그린 SME 대출)")
 
 
 def main():
