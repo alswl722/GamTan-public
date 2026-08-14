@@ -252,3 +252,37 @@ def test_emission_detail_empty_for_scope_without_data(api_client):
     res = client.get(f"/owner/{cid}/emission-detail?scope_group=scope_2&year={YEAR}")
     assert res.status_code == 200
     assert res.json()["items"] == []
+
+
+# ── format=pdf (탄소배출량 산정 결과서, db/owner_report_pdf.py) ──────────────────
+def test_quality_report_pdf_returns_valid_pdf_bytes(api_client):
+    """format=pdf는 새 계산 없이 같은 산정값을 PDF로 내려준다 — 회사명·연료별
+    내역·PCAF 등급이 실제로 렌더링됐는지 pdfplumber로 텍스트까지 확인한다
+    (admin.py의 audit-package PDF 테스트와 같은 검증 깊이)."""
+    import io
+
+    import pdfplumber
+
+    client, session, cid = api_client
+    _add_institution_borrower(session, cid)
+    # 도시가스만 선택 — 안 쓰는 연료(경유/유류)까지 결손 후보로 잡히면 약한 고리
+    # 원칙(db/pcaf_quality.py)에 따라 4등급으로 떨어져 이 테스트의 "실측 → 2등급"
+    # 전제가 깨진다(db/rate_products.py 테스트 픽스처와 같은 이유로 명시).
+    session.get(Company, cid).fuel_types_json = {"city_gas": True, "electricity": True}
+    session.commit()
+    for m in range(1, 13):
+        _add_voucher(session, cid, m, "도시가스")
+
+    res = client.get(f"/owner/{cid}/quality-report?year={YEAR}&format=pdf")
+    assert res.status_code == 200, res.text
+    assert res.headers["content-type"] == "application/pdf"
+    assert f"gamtan_report_{YEAR}.pdf" in res.headers["content-disposition"]
+    assert res.content[:4] == b"%PDF"
+
+    with pdfplumber.open(io.BytesIO(res.content)) as pdf:
+        text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+    assert "○○정밀" in text
+    assert "탄소배출량 산정 결과서" in text
+    assert "도시가스" in text
+    assert "2등급" in text  # 12개월 전부 실측 → energy_consumption(2등급)
+    assert "Scope 3" in text  # 산정 범위에서 제외된다는 안내 문구

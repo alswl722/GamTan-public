@@ -1,8 +1,9 @@
 "use client";
 
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Download } from "lucide-react";
+import Image from "next/image";
 import { useEffect, useState } from "react";
-import { apiGet, getCompanyId } from "@/lib/api";
+import { apiGet, BASE_URL, getCompanyId } from "@/lib/api";
 import type { AlertItem } from "@/lib/admin-types";
 
 /** 장면 ⑤ — PCAF 정식 엔진(db/pcaf_quality.py) 리포트. GET /owner/{id}/quality-report
@@ -464,6 +465,7 @@ export function ScenePcaf({ showHeading = true }: { showHeading?: boolean } = {}
   const [monthly, setMonthly] = useState<MonthlyRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
+  const [companyId, setCompanyId] = useState<number | null>(null);
 
   const [expandedScope, setExpandedScope] = useState<"scope_1" | "scope_2" | null>(null);
   const [detailByScope, setDetailByScope] = useState<Record<string, EmissionDetailItem[]>>({});
@@ -503,6 +505,7 @@ export function ScenePcaf({ showHeading = true }: { showHeading?: boolean } = {}
     setError(null);
     try {
       const cid = await getCompanyId();
+      setCompanyId(cid);
       const res = await apiGet<QualityReportResponse>(`/owner/${cid}/quality-report`);
       setData(res);
       // 이상 신호는 은행 담당자와 동일한 판정 로직(GET /admin/alerts와 같은
@@ -578,11 +581,22 @@ export function ScenePcaf({ showHeading = true }: { showHeading?: boolean } = {}
           측정이 끝났어요
         </h2>
       )}
-      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-        {bankReviewRequired && (
-          <span className="rounded-full bg-hitl/25 px-2 py-0.5 text-[10.5px] font-semibold text-hitl-ink">
-            은행 검토 대기
-          </span>
+      <div className="mt-1.5 flex flex-wrap items-center justify-between gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5">
+          {bankReviewRequired && (
+            <span className="rounded-full bg-hitl/25 px-2 py-0.5 text-[10.5px] font-semibold text-hitl-ink">
+              은행 검토 대기
+            </span>
+          )}
+        </div>
+        {companyId !== null && (
+          <a
+            href={`${BASE_URL}/owner/${companyId}/quality-report?year=${data.reporting_year}&format=pdf`}
+            className="flex shrink-0 items-center gap-1 rounded-full bg-brand-soft px-2.5 py-1 text-[11px] font-semibold text-brand-ink transition-colors hover:bg-brand hover:text-white"
+          >
+            <Download size={12} />
+            리포트 저장하기
+          </a>
         )}
       </div>
 
@@ -620,12 +634,22 @@ export function ScenePcaf({ showHeading = true }: { showHeading?: boolean } = {}
 
       {alerts.length > 0 && (
         <div className="mt-3 space-y-2 rounded-2xl bg-surface p-5">
-          <div className="text-[13px] font-semibold text-ink">이상 신호 알림</div>
-          {alerts.map((a) => (
+          <div className="flex items-center gap-2">
+            <span className="relative h-8 w-8 shrink-0 overflow-hidden rounded-full bg-brand-soft">
+              <Image src="/ddockdi_3.png" alt="" fill className="object-cover" />
+            </span>
+            <div className="text-[13px] font-semibold text-ink">이상 신호 알림</div>
+          </div>
+          {alerts.map((a, i) => (
             <div
               key={`${a.type}-${a.month}`}
-              className="rounded-xl bg-bg px-3.5 py-2.5 text-[12.5px] leading-relaxed text-muted"
+              className={`relative rounded-2xl bg-bg px-3.5 py-2.5 text-[12.5px] leading-relaxed text-muted ${
+                i === 0 ? "rounded-tl-sm" : ""
+              }`}
             >
+              {i === 0 && (
+                <span className="absolute -top-1.5 left-3 h-3 w-3 rotate-45 rounded-sm bg-bg" />
+              )}
               {a.message}
             </div>
           ))}
