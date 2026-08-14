@@ -180,6 +180,11 @@ export interface RateProduct {
   eligibility_description: string;
   source_reference: string;
 }
+export interface RateMissingItem {
+  document_type: DocumentType;
+  fuel_label: string;
+  months: number[];
+}
 export interface RateCandidate {
   scope_group: "scope_1" | "scope_2";
   status: "eligible" | "upgrade_needed";
@@ -188,6 +193,7 @@ export interface RateCandidate {
   current_grade?: number;
   target_grade?: number;
   missing?: string;
+  missing_items?: RateMissingItem[];
   benefit?: string;
   target_products?: RateProduct[];
 }

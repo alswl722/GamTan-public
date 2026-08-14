@@ -88,6 +88,7 @@ def rate_product_status_for_scope(
         "current_grade": candidate["current_grade"],
         "target_grade": candidate["target_grade"],
         "missing": candidate["missing"],
+        "missing_items": candidate["missing_items"],
         "benefit": benefit,
         "target_products": target_products,
     }

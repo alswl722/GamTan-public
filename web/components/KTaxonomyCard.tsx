@@ -3,9 +3,9 @@
 import { useEffect, useState } from "react";
 import { getKTaxonomyLeads, type KTaxonomyLeadsResponse } from "@/lib/api";
 
-/** 사장님 메인 화면(/owner)의 K택소노미(친환경 설비 투자) 안내 카드 — 예전엔 리포트
- * 화면(ScenePcaf.tsx)에 붙어 있었으나, 우대금리 카드(RateProductCard.tsx)와 같은 이유로
- * 메인으로 옮겼다.
+/** K택소노미(친환경 설비 투자) 안내 카드 — "금융 혜택" 페이지(/owner/benefits)의 한
+ * 섹션. 예전엔 메인 화면(/owner)에 바로 떠 있었으나, 우대금리 카드(RateProductCard.tsx)와
+ * 같은 "금융 혜택 안내" 성격이라 한 페이지로 묶었다(하단바 "혜택" 탭 추가).
  *
  * GET /owner/{id}/k-taxonomy-leads(db/k_taxonomy.py::k_taxonomy_leads_for_company)는
  * 룰 매칭 경로에서만 채워지는 필드라(LLM 분류 경로는 항상 비어 있음) 대다수 기업·기간은

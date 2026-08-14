@@ -80,6 +80,10 @@ from db.models import (
 _FUEL_BUCKET_SCOPE = {"전기": "scope_2", "가스": "scope_1", "경유/유류": "scope_1"}
 _UPGRADE_SCOPES = ("scope_1", "scope_2")
 
+# 결손월 안내를 web/app/owner/uploads 그리드(문서종류 × 월)의 실제 칸으로 딥링크
+# 시키기 위한 매핑 — db/document_requirements.py의 DocumentType과 동일 어휘.
+_FUEL_TO_DOCUMENT_TYPE = {"전기": "electric_bill", "가스": "gas_bill", "경유/유류": "tax_invoice"}
+
 
 def _selected_fuels(fuel_types: dict | None) -> set[str] | None:
     """companies.fuel_types_json → 이 기업이 실제로 체크한 연료 대분류 집합.
@@ -550,11 +554,19 @@ def quality_upgrade_candidate(
         parts.append(f"실측 수량 없는 전표 {revenue_count}건의 수량 데이터를 보완해주세요.")
     missing_text = "\n".join(parts) if parts else f"{fuels} 전표의 실측 수량 데이터를 보완해주세요."
 
+    # 결손월만 딥링크 대상 — revenue_count(실측 수량 보완)는 이미 올라온 전표의 값을
+    # 고치는 문제라 "새로 업로드할 문서 칸"이 없어 구조화하지 않는다.
+    missing_items = [
+        {"document_type": _FUEL_TO_DOCUMENT_TYPE[fuel], "fuel_label": fuel, "months": sorted(months)}
+        for fuel, months in completeness.missing_months.items()
+    ]
+
     return {
         "scope_group": scope_group,
         "current_grade": 4,
         "target_grade": 2,
         "missing": missing_text,
+        "missing_items": missing_items,
         "benefit": f"{scope_label} 4등급 → 2등급 시 우대금리 대상 안내 가능",
     }
 

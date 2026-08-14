@@ -97,6 +97,20 @@ def test_revenue_dominant_scope_needs_upgrade(db):
     assert "ESG Grow-Up 특별대출" in status["benefit"]
 
 
+def test_upgrade_needed_includes_structured_missing_items(db):
+    """결손월은 프론트가 /owner/uploads 그리드로 바로 딥링크할 수 있게 문서종류·월
+    단위로도 구조화돼 나온다(missing 문장과 별개, web/app/owner/benefits 소비 대상)."""
+    session, cid = db
+    for m in (1, 2, 3):
+        _add_voucher(session, cid, m, "도시가스", quantity=100)
+
+    status = rate_product_status_for_scope(session, cid, YEAR, "scope_1")
+    assert status["status"] == "upgrade_needed"
+    assert status["missing_items"] == [
+        {"document_type": "gas_bill", "fuel_label": "가스", "months": list(range(4, 13))}
+    ]
+
+
 def test_no_activity_data_yields_no_status(db):
     """활동자료 자체가 없으면 카드가 아예 없다(None) — 추정으로 채우지 않는다."""
     session, cid = db
