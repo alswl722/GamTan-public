@@ -1,8 +1,9 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { Trash2, UploadCloud } from "lucide-react";
+import { Trash2, UploadCloud, X } from "lucide-react";
 import {
   apiUpload,
   deleteDocument,
@@ -32,6 +33,45 @@ const STATUS_LABEL: Record<string, string> = {
 
 type CellKey = `${DocumentType}-${number}`;
 
+/** 추가 업로드(초기 온보딩 위저드 제외) 완료 시 뜨는 축하 모달. */
+function UploadCompleteModal({ message, onClose }: { message: string; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-6">
+      <div className="relative w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl">
+        <button
+          type="button"
+          onClick={onClose}
+          className="absolute right-4 top-4 text-faint transition-colors hover:text-ink"
+          aria-label="닫기"
+        >
+          <X size={20} />
+        </button>
+
+        <span className="inline-block rounded-full bg-brand px-3 py-1 text-[11px] font-bold text-white">
+          데이터 업로드
+        </span>
+
+        <h2 className="mt-3 text-[20px] font-extrabold leading-snug text-ink">
+          업로드가 완료됐어요!
+        </h2>
+        <p className="mt-1.5 text-[13px] leading-relaxed text-muted">{message}</p>
+
+        <div className="mt-1 flex justify-center">
+          <Image src="/dandi_17.png" alt="" width={267} height={267} className="h-52 w-auto" />
+        </div>
+
+        <button
+          type="button"
+          onClick={onClose}
+          className="btn-cta w-full rounded-2xl bg-brand py-3.5 text-[14.5px] font-bold text-white"
+        >
+          확인
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function OwnerUploadsPage() {
   const [companyId, setCompanyId] = useState<number | null>(null);
   const [grid, setGrid] = useState<DocumentGridResponse | null>(null);
@@ -46,8 +86,9 @@ export default function OwnerUploadsPage() {
 
   const [autoUploading, setAutoUploading] = useState(false);
   const [autoUploadError, setAutoUploadError] = useState<string | null>(null);
-  const [autoUploadResult, setAutoUploadResult] = useState<string | null>(null);
   const autoFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const [uploadCompleteMessage, setUploadCompleteMessage] = useState<string | null>(null);
 
   async function loadGrid() {
     setError(null);
@@ -119,6 +160,7 @@ export default function OwnerUploadsPage() {
       await apiUpload(`/owner/${companyId}/documents/upload`, form);
       await loadCell(expanded.docType, expanded.month);
       await loadGrid();
+      setUploadCompleteMessage(`${DOC_LABEL[expanded.docType]} ${expanded.month}월 자료가 등록됐어요.`);
     } catch (err) {
       console.error("업로드 실패:", err);
       setUploadError(err instanceof Error ? err.message : "업로드에 실패했습니다.");
@@ -132,7 +174,6 @@ export default function OwnerUploadsPage() {
     if (companyId === null) return;
     setAutoUploading(true);
     setAutoUploadError(null);
-    setAutoUploadResult(null);
     try {
       const form = new FormData();
       form.append("file", file);
@@ -142,8 +183,8 @@ export default function OwnerUploadsPage() {
         `/owner/${companyId}/documents/upload`,
         form
       );
-      setAutoUploadResult(`${DOC_LABEL[res.document_type]} · ${res.month}월로 인식해 등록했어요.`);
       await loadGrid();
+      setUploadCompleteMessage(`${DOC_LABEL[res.document_type]} ${res.month}월로 인식해 등록했어요.`);
     } catch (err) {
       console.error("자동 업로드 실패:", err);
       setAutoUploadError(err instanceof Error ? err.message : "업로드에 실패했습니다.");
@@ -186,9 +227,6 @@ export default function OwnerUploadsPage() {
             }}
           />
         </label>
-        {autoUploadResult && (
-          <p className="mt-2 text-[11.5px] text-brand-ink">{autoUploadResult}</p>
-        )}
         {autoUploadError && (
           <p className="mt-2 text-[11.5px] text-red-600">{autoUploadError}</p>
         )}
@@ -319,6 +357,13 @@ export default function OwnerUploadsPage() {
           })
         )}
       </div>
+
+      {uploadCompleteMessage && (
+        <UploadCompleteModal
+          message={uploadCompleteMessage}
+          onClose={() => setUploadCompleteMessage(null)}
+        />
+      )}
     </div>
   );
 }
