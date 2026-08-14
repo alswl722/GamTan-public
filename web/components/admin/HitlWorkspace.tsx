@@ -303,7 +303,7 @@ function DetailPane({ item, onDone }: DetailPaneProps) {
             <div className="space-y-2">
               <div className="rounded-md border border-hitl/60 bg-hitl/10 p-4">
                 <div className="mb-1.5 flex items-center gap-2">
-                  <span className="text-[11px] font-semibold text-faint">AI 판단 근거</span>
+                  <span className="text-[11px] font-semibold text-muted">AI 판단 근거</span>
                   <ConfidenceBadge value={item.confidence} />
                 </div>
                 <p className="text-sm leading-relaxed text-ink">
@@ -312,10 +312,10 @@ function DetailPane({ item, onDone }: DetailPaneProps) {
               </div>
               {item.calc_failure_reason && (
                 <div className="rounded-md border border-line bg-bg p-4">
-                  <span className="mb-1.5 block text-[11px] font-semibold text-faint">
+                  <span className="mb-1.5 block text-[11px] font-semibold text-muted">
                     계산 실패 사유
                   </span>
-                  <p className="text-sm leading-relaxed text-muted">
+                  <p className="text-sm leading-relaxed text-ink">
                     {item.calc_failure_reason}
                   </p>
                 </div>
@@ -412,7 +412,7 @@ function DetailPane({ item, onDone }: DetailPaneProps) {
               <button
                 onClick={handleReject}
                 disabled={busy}
-                className="w-32 rounded-md border border-line bg-surface px-4 py-2.5 text-sm font-semibold text-muted transition-colors hover:bg-bg disabled:opacity-60"
+                className="w-32 rounded-md border border-line bg-surface px-4 py-2.5 text-sm font-semibold text-ink transition-colors hover:bg-bg disabled:opacity-60"
               >
                 반려
               </button>
@@ -502,7 +502,7 @@ function CompanyList({
   }
 
   return (
-    <div className="w-72 flex-shrink-0 overflow-y-auto border-r border-line bg-bg xl:w-80">
+    <div className="w-48 flex-shrink-0 overflow-y-auto border-r border-line bg-bg">
       <div className="flex items-center justify-between border-b border-line px-4 py-3">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-faint">
           기업
@@ -542,7 +542,7 @@ function CompanyList({
               </div>
             )}
           </div>
-          <span className="flex-shrink-0 rounded-full bg-line px-2 py-0.5 text-[11px] font-semibold text-muted">
+          <span className="flex-shrink-0 rounded-full bg-line px-2 py-0.5 text-[11px] font-semibold text-ink">
             {c.count}
           </span>
         </button>
@@ -773,7 +773,7 @@ export function HitlWorkspace({
   }
 
   const selectCls =
-    "rounded-md border border-line bg-surface px-2.5 py-1.5 text-xs text-muted transition-colors focus:outline-none focus:ring-1 focus:ring-brand";
+    "rounded-md border border-line bg-surface px-2.5 py-1.5 text-xs text-ink transition-colors focus:outline-none focus:ring-1 focus:ring-brand";
 
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-md border border-line bg-surface shadow-card">
@@ -865,7 +865,7 @@ export function HitlWorkspace({
               type="button"
               onClick={handleBulkReject}
               disabled={bulkBusy}
-              className="rounded-md border border-line bg-surface px-3 py-1.5 text-xs font-semibold text-muted transition-colors hover:bg-bg disabled:opacity-60"
+              className="rounded-md border border-line bg-surface px-3 py-1.5 text-xs font-semibold text-ink transition-colors hover:bg-bg disabled:opacity-60"
             >
               일괄 반려
             </button>
@@ -930,7 +930,7 @@ export function HitlWorkspace({
             ) : (
               <>
                 <div className="flex items-center justify-between gap-2 border-b border-line bg-surface px-4 py-2">
-                  <label className="flex items-center gap-2 text-xs text-faint">
+                  <label className="flex items-center gap-2 text-xs text-muted">
                     <input
                       type="checkbox"
                       className="h-3.5 w-3.5 accent-brand"
