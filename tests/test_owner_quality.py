@@ -252,3 +252,70 @@ def test_emission_detail_empty_for_scope_without_data(api_client):
     res = client.get(f"/owner/{cid}/emission-detail?scope_group=scope_2&year={YEAR}")
     assert res.status_code == 200
     assert res.json()["items"] == []
+
+
+# ── GET /owner/{id}/reporting-years (연도 선택기) ──────────────────────────────
+def test_reporting_years_lists_all_years_with_vouchers_newest_first(api_client):
+    client, session, cid = api_client
+    _add_institution_borrower(session, cid)
+    for m in range(1, 13):
+        _add_voucher(session, cid, m, "도시가스")
+    for m in range(1, 13):
+        v = Voucher(
+            company_id=cid, source="hometax", year=YEAR - 1, month=m,
+            supplier_name="테스트", item_description="도시가스",
+            supply_amount_krw=100000, raw_json={"quantity": 100},
+        )
+        session.add(v)
+    session.commit()
+
+    res = client.get(f"/owner/{cid}/reporting-years")
+    assert res.status_code == 200
+    assert res.json()["years"] == [YEAR, YEAR - 1]
+
+
+def test_reporting_years_empty_when_no_vouchers(api_client):
+    client, session, cid = api_client
+    res = client.get(f"/owner/{cid}/reporting-years")
+    assert res.status_code == 200
+    assert res.json()["years"] == []
+
+
+def test_reporting_years_404_for_unknown_company(api_client):
+    client, _, _ = api_client
+    res = client.get("/owner/999999/reporting-years")
+    assert res.status_code == 404
+
+
+# ── format=pdf (탄소배출량 산정 결과서, db/owner_report_pdf.py) ──────────────────
+def test_quality_report_pdf_returns_valid_pdf_bytes(api_client):
+    """format=pdf는 새 계산 없이 같은 산정값을 PDF로 내려준다 — 회사명·연료별
+    내역·PCAF 등급이 실제로 렌더링됐는지 pdfplumber로 텍스트까지 확인한다
+    (admin.py의 audit-package PDF 테스트와 같은 검증 깊이)."""
+    import io
+
+    import pdfplumber
+
+    client, session, cid = api_client
+    _add_institution_borrower(session, cid)
+    # 도시가스만 선택 — 안 쓰는 연료(경유/유류)까지 결손 후보로 잡히면 약한 고리
+    # 원칙(db/pcaf_quality.py)에 따라 4등급으로 떨어져 이 테스트의 "실측 → 2등급"
+    # 전제가 깨진다(db/rate_products.py 테스트 픽스처와 같은 이유로 명시).
+    session.get(Company, cid).fuel_types_json = {"city_gas": True, "electricity": True}
+    session.commit()
+    for m in range(1, 13):
+        _add_voucher(session, cid, m, "도시가스")
+
+    res = client.get(f"/owner/{cid}/quality-report?year={YEAR}&format=pdf")
+    assert res.status_code == 200, res.text
+    assert res.headers["content-type"] == "application/pdf"
+    assert f"gamtan_report_{YEAR}.pdf" in res.headers["content-disposition"]
+    assert res.content[:4] == b"%PDF"
+
+    with pdfplumber.open(io.BytesIO(res.content)) as pdf:
+        text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+    assert "○○정밀" in text
+    assert "탄소배출량 산정 결과서" in text
+    assert "도시가스" in text
+    assert "2등급" in text  # 12개월 전부 실측 → energy_consumption(2등급)
+    assert "Scope 3" in text  # 산정 범위에서 제외된다는 안내 문구

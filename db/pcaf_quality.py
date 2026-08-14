@@ -80,6 +80,10 @@ from db.models import (
 _FUEL_BUCKET_SCOPE = {"전기": "scope_2", "가스": "scope_1", "경유/유류": "scope_1"}
 _UPGRADE_SCOPES = ("scope_1", "scope_2")
 
+# 결손월 안내를 web/app/owner/uploads 그리드(문서종류 × 월)의 실제 칸으로 딥링크
+# 시키기 위한 매핑 — db/document_requirements.py의 DocumentType과 동일 어휘.
+_FUEL_TO_DOCUMENT_TYPE = {"전기": "electric_bill", "가스": "gas_bill", "경유/유류": "tax_invoice"}
+
 
 def _selected_fuels(fuel_types: dict | None) -> set[str] | None:
     """companies.fuel_types_json → 이 기업이 실제로 체크한 연료 대분류 집합.
@@ -117,6 +121,22 @@ def default_reporting_year(session: Session, company_id: int) -> int:
         select(func.max(Voucher.year)).where(Voucher.company_id == company_id)
     ).scalar()
     return latest_year or datetime.now(timezone.utc).year
+
+
+def available_reporting_years(session: Session, company_id: int) -> list[int]:
+    """이 기업이 전표를 가진 연도 전부 — 리포트·업로드 그리드의 연도 선택기가 쓴다.
+
+    default_reporting_year와 같은 테이블(Voucher.year)을 보되, 최신값 하나가 아니라
+    전체 목록을 최신순으로 반환한다. 2년 이상 전표가 쌓인 기업만 실제로 선택기가
+    뜨고(프론트에서 length<=1이면 숨김), 전표가 없으면 빈 리스트를 반환한다(추정으로
+    채우지 않음)."""
+    years = session.execute(
+        select(Voucher.year)
+        .where(Voucher.company_id == company_id)
+        .distinct()
+        .order_by(Voucher.year.desc())
+    ).scalars().all()
+    return list(years)
 
 
 def classify_activity_data_method(voucher: Voucher, classification: Classification) -> str:
@@ -550,11 +570,19 @@ def quality_upgrade_candidate(
         parts.append(f"실측 수량 없는 전표 {revenue_count}건의 수량 데이터를 보완해주세요.")
     missing_text = "\n".join(parts) if parts else f"{fuels} 전표의 실측 수량 데이터를 보완해주세요."
 
+    # 결손월만 딥링크 대상 — revenue_count(실측 수량 보완)는 이미 올라온 전표의 값을
+    # 고치는 문제라 "새로 업로드할 문서 칸"이 없어 구조화하지 않는다.
+    missing_items = [
+        {"document_type": _FUEL_TO_DOCUMENT_TYPE[fuel], "fuel_label": fuel, "months": sorted(months)}
+        for fuel, months in completeness.missing_months.items()
+    ]
+
     return {
         "scope_group": scope_group,
         "current_grade": 4,
         "target_grade": 2,
         "missing": missing_text,
+        "missing_items": missing_items,
         "benefit": f"{scope_label} 4등급 → 2등급 시 우대금리 대상 안내 가능",
     }
 

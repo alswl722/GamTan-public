@@ -180,6 +180,11 @@ export interface RateProduct {
   eligibility_description: string;
   source_reference: string;
 }
+export interface RateMissingItem {
+  document_type: DocumentType;
+  fuel_label: string;
+  months: number[];
+}
 export interface RateCandidate {
   scope_group: "scope_1" | "scope_2";
   status: "eligible" | "upgrade_needed";
@@ -188,6 +193,7 @@ export interface RateCandidate {
   current_grade?: number;
   target_grade?: number;
   missing?: string;
+  missing_items?: RateMissingItem[];
   benefit?: string;
   target_products?: RateProduct[];
 }
@@ -200,6 +206,15 @@ export interface RateCandidateResponse {
  * 안내(요청 제출 플로우는 관리자측 승인요청 큐가 이번 스코프에서 빠지며 함께 보류). */
 export function getRateCandidate(companyId: number): Promise<RateCandidateResponse> {
   return apiGet<RateCandidateResponse>(`/owner/${companyId}/rate-candidate`);
+}
+
+// GET /owner/{company_id}/reporting-years — db/pcaf_quality.py::available_reporting_years.
+// 리포트 화면·데이터 업로드 탭의 연도 선택기가 공유하는 목록(전표가 있는 연도만, 최신순).
+export interface ReportingYearsResponse {
+  years: number[];
+}
+export function getReportingYears(companyId: number): Promise<ReportingYearsResponse> {
+  return apiGet<ReportingYearsResponse>(`/owner/${companyId}/reporting-years`);
 }
 
 // GET /owner/{company_id}/k-taxonomy-leads — db/k_taxonomy.py::k_taxonomy_leads_for_company.
@@ -242,6 +257,15 @@ export interface DocumentGridResponse {
 export function getDocumentGrid(companyId: number, year?: number): Promise<DocumentGridResponse> {
   const q = year ? `?year=${year}` : "";
   return apiGet<DocumentGridResponse>(`/owner/${companyId}/documents/grid${q}`);
+}
+
+// GET /owner/{company_id}/upload-streak — db/document_coverage.py::upload_streak.
+// 도장판 위 동기부여 배지: 필수 문서를 전부 채운 달이 이번 달 직전부터 몇 개월 연속인지.
+export interface UploadStreakResponse {
+  streak_months: number;
+}
+export function getUploadStreak(companyId: number): Promise<UploadStreakResponse> {
+  return apiGet<UploadStreakResponse>(`/owner/${companyId}/upload-streak`);
 }
 
 // GET /owner/{company_id}/documents?document_type=&year=&month= — 그리드 한 칸의 파일 목록.

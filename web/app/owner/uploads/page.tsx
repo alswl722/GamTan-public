@@ -2,14 +2,18 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { Trash2, UploadCloud, X } from "lucide-react";
 import {
+  apiPost,
   apiUpload,
   deleteDocument,
   getCompanyId,
   getDocumentGrid,
   getDocumentsForCell,
+  getReportingYears,
+  getUploadStreak,
   type DocumentGridResponse,
   type DocumentType,
   type UploadedDocument,
@@ -47,11 +51,9 @@ function UploadCompleteModal({ message, onClose }: { message: string; onClose: (
           <X size={20} />
         </button>
 
-        <span className="inline-block rounded-full bg-brand px-3 py-1 text-[11px] font-bold text-white">
-          데이터 업로드
-        </span>
-
-        <h2 className="mt-3 text-[20px] font-extrabold leading-snug text-ink">
+        <h2 className="mt-1 text-[20px] font-extrabold leading-snug text-ink">
+          도장 꾹!
+          <br />
           업로드가 완료됐어요!
         </h2>
         <p className="mt-1.5 text-[13px] leading-relaxed text-muted">{message}</p>
@@ -72,9 +74,22 @@ function UploadCompleteModal({ message, onClose }: { message: string; onClose: (
   );
 }
 
+/** useSearchParams()를 쓰는 화면이라 next build(정적 프리렌더)가 Suspense 경계를
+ * 요구한다 — 기본 export는 그 경계만 씌우는 얇은 래퍼로 두고 실제 화면은
+ * OwnerUploadsPageContent에 그대로 둔다(로직 변경 없음). */
 export default function OwnerUploadsPage() {
+  return (
+    <Suspense fallback={null}>
+      <OwnerUploadsPageContent />
+    </Suspense>
+  );
+}
+
+function OwnerUploadsPageContent() {
   const [companyId, setCompanyId] = useState<number | null>(null);
   const [grid, setGrid] = useState<DocumentGridResponse | null>(null);
+  const [years, setYears] = useState<number[] | null>(null);
+  const [streakMonths, setStreakMonths] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<{ docType: DocumentType; month: number } | null>(null);
   const [cellDocs, setCellDocs] = useState<Record<CellKey, UploadedDocument[]>>({});
@@ -90,13 +105,39 @@ export default function OwnerUploadsPage() {
 
   const [uploadCompleteMessage, setUploadCompleteMessage] = useState<string | null>(null);
 
-  async function loadGrid() {
+  /** 위저드 밖(이 탭)에서 올린 전표는 "AI 분류" 단계를 거칠 기회가 없어 미분류로
+   * 남는다 — 그대로 두면 홈 진행바·리포트가 "미완료"로 보인다(api/queries.py::
+   * get_owner_progress). 이미 분류된 전표는 건너뛰므로 매 업로드마다 불러도 안전. */
+  async function classifyNewVouchers(cid: number) {
+    try {
+      await apiPost(`/classify/${cid}`);
+    } catch (err) {
+      console.error("업로드 후 자동 분류 실패:", err);
+    }
+  }
+
+  /** year 생략 시 백엔드가 그 기업의 최신 전표 연도를 기본값으로 쓴다 — 리포트
+   * 화면(ScenePcaf.tsx)과 같은 기준(db/pcaf_quality.py::default_reporting_year).
+   * 연도 선택기에서 다른 연도를 고르면 이 함수를 다시 불러 그 해로 갈아끼운다. */
+  async function loadGrid(year?: number) {
     setError(null);
     try {
       const cid = await getCompanyId();
       setCompanyId(cid);
-      const res = await getDocumentGrid(cid);
+      const res = await getDocumentGrid(cid, year);
       setGrid(res);
+      setExpanded(null);
+      setCellDocs({});
+      if (years === null) {
+        getReportingYears(cid)
+          .then((r) => setYears(r.years))
+          .catch((err) => console.error("연도 목록 조회 실패(부가 정보라 화면은 계속 진행):", err));
+        // 스트릭은 "이번 달 직전까지"만 세므로 방금 올린 업로드로는 안 바뀐다 —
+        // 연도 선택기와 마찬가지로 최초 1회만 조회하면 충분하다.
+        getUploadStreak(cid)
+          .then((r) => setStreakMonths(r.streak_months))
+          .catch((err) => console.error("업로드 스트릭 조회 실패(부가 정보라 화면은 계속 진행):", err));
+      }
     } catch (err) {
       console.error("업로드 현황 조회 실패:", err);
       setError("불러오지 못했습니다. 서버 연결 상태를 확인한 뒤 다시 시도해 주세요.");
@@ -131,6 +172,29 @@ export default function OwnerUploadsPage() {
     void loadCell(docType, month);
   }
 
+  const searchParams = useSearchParams();
+  const deepLinkAppliedRef = useRef(false);
+
+  /** /owner/benefits의 결손월 안내 칩(?type=gas_bill&month=4)에서 넘어왔을 때, 그
+   * 칸을 자동으로 펼치고 해당 문서종류 구간으로 스크롤한다 — 안내가 텍스트로 끝나지
+   * 않고 실제 업로드 화면까지 데려다준다. 그리드가 로드되기 전엔 어느 문서종류가
+   * 유효한지 알 수 없어 grid를 기다린다. 한 번 적용한 뒤엔 사용자가 셀을 직접
+   * 여닫아도 다시 강제로 펼치지 않도록 1회만 실행한다. */
+  useEffect(() => {
+    if (!grid || deepLinkAppliedRef.current) return;
+    const type = searchParams.get("type");
+    const monthParam = searchParams.get("month");
+    if (!type || !monthParam || !(type in DOC_LABEL)) return;
+    const month = Number(monthParam);
+    if (!Number.isInteger(month) || month < 1 || month > 12) return;
+
+    deepLinkAppliedRef.current = true;
+    const docType = type as DocumentType;
+    setExpanded({ docType, month });
+    void loadCell(docType, month);
+    document.getElementById(`doc-row-${docType}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [grid, searchParams]);
+
   async function handleDelete(documentId: number) {
     if (!confirm("이 파일을 삭제할까요? 여기서 만들어진 전표·분류도 함께 지워지고 되돌릴 수 없어요.")) {
       return;
@@ -158,6 +222,7 @@ export default function OwnerUploadsPage() {
       form.append("document_type", expanded.docType);
       form.append("mode", "ocr");
       await apiUpload(`/owner/${companyId}/documents/upload`, form);
+      await classifyNewVouchers(companyId);
       await loadCell(expanded.docType, expanded.month);
       await loadGrid();
       setUploadCompleteMessage(`${DOC_LABEL[expanded.docType]} ${expanded.month}월 자료가 등록됐어요.`);
@@ -183,6 +248,7 @@ export default function OwnerUploadsPage() {
         `/owner/${companyId}/documents/upload`,
         form
       );
+      await classifyNewVouchers(companyId);
       await loadGrid();
       setUploadCompleteMessage(`${DOC_LABEL[res.document_type]} ${res.month}월로 인식해 등록했어요.`);
     } catch (err) {
@@ -205,7 +271,33 @@ export default function OwnerUploadsPage() {
         </Link>
       </div>
 
-      <h1 className="mt-4 text-[17px] font-bold leading-snug text-ink">데이터 업로드</h1>
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <h1 className="text-[17px] font-bold leading-snug text-ink">데이터 업로드</h1>
+        {streakMonths !== null && streakMonths > 0 && (
+          <span className="rounded-full bg-brand-soft px-2.5 py-1 text-[11px] font-semibold text-brand-ink">
+            {streakMonths}개월 연속 업로드 중
+          </span>
+        )}
+      </div>
+
+      {years !== null && years.length > 1 && grid && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {years.map((y) => (
+            <button
+              key={y}
+              type="button"
+              onClick={() => y !== grid.reporting_year && void loadGrid(y)}
+              className={`rounded-full px-2.5 py-1 text-[11.5px] font-semibold transition-colors ${
+                y === grid.reporting_year
+                  ? "bg-brand text-white"
+                  : "bg-line text-muted hover:bg-brand-soft hover:text-brand-ink"
+              }`}
+            >
+              {y}년
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="mt-4 rounded-3xl bg-surface p-5 shadow-card">
         <div className="text-[13.5px] font-bold text-ink">어떤 문서인지 모르겠다면</div>
@@ -254,6 +346,7 @@ export default function OwnerUploadsPage() {
             return (
               <div
                 key={row.document_type}
+                id={`doc-row-${row.document_type}`}
                 className={`rounded-3xl bg-surface p-5 shadow-card ${notApplicable ? "opacity-50" : ""}`}
               >
                 <div className="flex items-center gap-1.5">

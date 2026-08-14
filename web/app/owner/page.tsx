@@ -12,16 +12,62 @@ import {
   type CompanyListItem,
   type OwnerProgress,
 } from "@/lib/api";
-import { RateProductCard } from "@/components/RateProductCard";
-import { KTaxonomyCard } from "@/components/KTaxonomyCard";
 
 /** 사장님 앱 메인 화면 — 계정(로그인) 개념이 없어 기업을 직접 골라야 한다.
  * 고른 기업은 setCompanyId()로 저장되고, 이후 /owner/measure의 모든 단계가
- * getCompanyId()로 그 값을 그대로 읽는다(web/lib/api.ts). */
+ * getCompanyId()로 그 값을 그대로 읽는다(web/lib/api.ts).
+ *
+ * 레이아웃은 상단 배너(측정 진행도) + 2×2 기능 카드 그리드로 구성한다 — 하단바
+ * (홈/데이터 업로드/탄소 리포트/혜택)의 목적지를 홈에서도 카드로
+ * 미리 보여주는 런처 형태(사용자 제공 레퍼런스 참고, 색상·카드 스타일은 이 앱의
+ * 기존 규칙(bg-surface + shadow-card)을 그대로 따른다 — 새 디자인 시스템 도입 아님). */
 
 // /owner/measure의 STEPS와 라벨을 맞춘다(web/app/owner/measure/page.tsx) — 카드의
 // 단계 미리보기가 실제 위저드 순서와 어긋나지 않게.
 const MEASURE_STAGES = ["연동 동의", "데이터 수집", "결손 감지", "AI 분류", "리포트"] as const;
+
+const FEATURE_CARDS = [
+  {
+    href: "/owner/uploads",
+    caption: "데이터 업로드",
+    title: "전표 업로드하기",
+    image: "/folder_dynamic_color.png",
+    width: 1000,
+    height: 1000,
+    imgClassName: "h-20 w-auto",
+    imageVariant: "background",
+  },
+  {
+    href: "/owner/report",
+    caption: "탄소 리포트",
+    title: "탄소 리포트 확인하기",
+    image: "/icon3_1.png",
+    width: 648,
+    height: 584,
+    imgClassName: "h-20 w-auto",
+    imageVariant: "corner",
+  },
+  {
+    href: "/owner/benefits",
+    caption: "우대금리",
+    title: "우대금리 확인하기",
+    image: "/rate_check.png",
+    width: 624,
+    height: 335,
+    imgClassName: "h-20 w-auto",
+    imageVariant: "center",
+  },
+  {
+    href: "/owner/report",
+    caption: "이상 신호",
+    title: "이상 신호 확인하기",
+    image: "/alert_icon.png",
+    width: 313,
+    height: 334,
+    imgClassName: "h-20 w-auto",
+    imageVariant: "corner",
+  },
+] as const;
 
 export default function OwnerHomePage() {
   const [companies, setCompanies] = useState<CompanyListItem[] | null>(null);
@@ -82,7 +128,7 @@ export default function OwnerHomePage() {
         </button>
 
         {pickerOpen && companies && (
-          <div className="absolute inset-x-0 top-[calc(100%+8px)] z-10 max-h-72 overflow-y-auto rounded-2xl bg-surface p-1.5 shadow-card">
+          <div className="absolute inset-x-0 top-[calc(100%+8px)] z-20 max-h-72 overflow-y-auto rounded-2xl bg-surface p-1.5 shadow-card">
             {companies.map((c) => (
               <button
                 key={c.id}
@@ -148,8 +194,51 @@ export default function OwnerHomePage() {
         </span>
       </Link>
 
-      <RateProductCard companyId={selectedId} />
-      <KTaxonomyCard companyId={selectedId} />
+      {/* 기능 카드 그리드 — 하단바 목적지를 홈에서도 바로 눌러 들어갈 수 있게 */}
+      <div className="mt-3 grid grid-cols-2 gap-3">
+        {FEATURE_CARDS.map((card) => (
+          <Link
+            key={card.title}
+            href={card.href}
+            className="btn-cta relative z-0 flex min-h-[168px] flex-col justify-between overflow-hidden rounded-3xl bg-surface p-4 shadow-card transition-transform"
+          >
+            <div className="relative z-10">
+              <div className="text-[12px] font-bold text-brand-ink">{card.caption}</div>
+              <div className="mt-1 whitespace-pre-line text-[14.5px] font-extrabold leading-snug text-ink">
+                {card.title}
+              </div>
+            </div>
+            {card.imageVariant === "background" ? (
+              <Image
+                src={card.image}
+                alt=""
+                width={card.width}
+                height={card.height}
+                className={`pointer-events-none absolute bottom-4 right-4 ${card.imgClassName}`}
+              />
+            ) : card.imageVariant === "center" ? (
+              <Image
+                src={card.image}
+                alt=""
+                width={card.width}
+                height={card.height}
+                className={`pointer-events-none absolute bottom-2 left-1/2 -translate-x-1/2 ${card.imgClassName}`}
+              />
+            ) : (
+              <div className="flex justify-end">
+                <Image
+                  src={card.image}
+                  alt=""
+                  width={card.width}
+                  height={card.height}
+                  className={`${card.imgClassName} shrink-0`}
+                />
+              </div>
+            )}
+          </Link>
+        ))}
+      </div>
+
     </div>
   );
 }
