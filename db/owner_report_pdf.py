@@ -99,15 +99,25 @@ def _fmt_missing(missing_months: dict[str, list[int]]) -> str:
 
 
 def _company_info_box(data: dict, styles: dict) -> Table:
-    """기업명·업종·지역·산정연도·발급기관·발급일을 라벨-값 표 하나로 묶는다 —
-    이전엔 문장 하나에 가운데점(·)·파이프(|)로 이어 붙였는데, 그 기호들이 내장
-    CID 폰트에서 깨져 보였을 뿐 아니라 정보 덩어리가 뭉쳐 있어 읽기도 나빴다."""
+    """기업명·업종·지역·상시종업원수·매출액·산정연도·발급기관·발급일을 라벨-값 표
+    하나로 묶는다 — 이전엔 문장 하나에 가운데점(·)·파이프(|)로 이어 붙였는데, 그
+    기호들이 내장 CID 폰트에서 깨져 보였을 뿐 아니라 정보 덩어리가 뭉쳐 있어 읽기도
+    나빴다.
+
+    필드 구성은 환경부 「온실가스 배출량 등 명세서」(녹색전환법 시행규칙 별지
+    제11호 서식)의 "법인 총괄정보" 항목 중 감탄이 실제로 가진 값만 참고했다
+    (2026-08-15) — 법인등록번호·대표자·담당자 연락처 등 이 프로젝트가 아예
+    수집하지 않는 항목은 지어내지 않고 넣지 않는다."""
     company = data["company"]
     rows = [["기업명", company["name"]]]
     if company.get("industry_name"):
         rows.append(["업종", company["industry_name"]])
     if company.get("region"):
         rows.append(["지역", company["region"]])
+    if company.get("employee_count"):
+        rows.append(["상시종업원수", f"{company['employee_count']}명"])
+    if company.get("revenue_krw"):
+        rows.append(["매출액", f"{company['revenue_krw'] / 1_000_000:,.0f}백만원"])
     rows.extend([
         ["산정연도", f"{data['reporting_year']}년"],
         ["발급기관", "iM뱅크 감탄(GamTan)"],
