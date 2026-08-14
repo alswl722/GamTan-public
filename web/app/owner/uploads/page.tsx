@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { Trash2, UploadCloud, X } from "lucide-react";
 import {
   apiPost,
@@ -74,7 +74,18 @@ function UploadCompleteModal({ message, onClose }: { message: string; onClose: (
   );
 }
 
+/** useSearchParams()를 쓰는 화면이라 next build(정적 프리렌더)가 Suspense 경계를
+ * 요구한다 — 기본 export는 그 경계만 씌우는 얇은 래퍼로 두고 실제 화면은
+ * OwnerUploadsPageContent에 그대로 둔다(로직 변경 없음). */
 export default function OwnerUploadsPage() {
+  return (
+    <Suspense fallback={null}>
+      <OwnerUploadsPageContent />
+    </Suspense>
+  );
+}
+
+function OwnerUploadsPageContent() {
   const [companyId, setCompanyId] = useState<number | null>(null);
   const [grid, setGrid] = useState<DocumentGridResponse | null>(null);
   const [years, setYears] = useState<number[] | null>(null);
