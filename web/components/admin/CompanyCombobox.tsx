@@ -4,6 +4,7 @@
 // 검색 가능한 콤보박스로 대체한다 — "기업" 탭의 기업 선택 전용.
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Search } from "lucide-react";
 import type { Company } from "@/lib/admin-types";
 import { cn } from "@/lib/utils";
 
@@ -40,6 +41,7 @@ export function CompanyCombobox({
 
   return (
     <div ref={rootRef} className="relative w-64">
+      <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-faint" />
       <input
         type="text"
         value={open ? query : (selected?.company_name ?? "")}
@@ -51,8 +53,12 @@ export function CompanyCombobox({
           setQuery("");
           setOpen(true);
         }}
+        onClick={() => {
+          setQuery("");
+          setOpen(true);
+        }}
         placeholder="기업명 검색"
-        className="w-full rounded-md border border-line bg-surface px-2.5 py-1.5 text-xs text-ink placeholder:text-faint transition-colors focus:outline-none focus:ring-1 focus:ring-brand"
+        className="w-full rounded-full border border-line bg-surface py-1.5 pl-8 pr-2.5 text-xs text-ink placeholder:text-faint transition-colors focus:outline-none focus:ring-1 focus:ring-brand"
       />
 
       {open && (

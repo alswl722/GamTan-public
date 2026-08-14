@@ -105,10 +105,10 @@ function ConfidenceBadge({ value }: { value: number }) {
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold",
-        isLow && "bg-hitl/30 text-hitl-ink",
-        isMid && "bg-hitl/15 text-hitl-ink",
-        !isLow && !isMid && "bg-brand-soft text-brand-ink",
+        "inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold",
+        isLow && "border-hitl-ink/30 bg-hitl/30 text-hitl-ink",
+        isMid && "border-hitl-ink/20 bg-hitl/15 text-hitl-ink",
+        !isLow && !isMid && "border-brand-ink/25 bg-brand-soft text-brand-ink",
       )}
     >
       신뢰도 {value.toFixed(2)}
@@ -441,7 +441,7 @@ function CompanyList({
   }
 
   return (
-    <div className="w-56 flex-shrink-0 overflow-y-auto border-r border-line bg-bg">
+    <div className="w-72 flex-shrink-0 overflow-y-auto border-r border-line bg-bg xl:w-80">
       <div className="flex items-center justify-between border-b border-line px-4 py-3">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-faint">
           기업
