@@ -56,6 +56,22 @@ export async function apiPatch<T>(
   return res.json() as Promise<T>;
 }
 
+export async function apiDelete<T>(
+  path: string,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+): Promise<T> {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method: "DELETE",
+    cache: "no-store",
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => null);
+    throw new Error(detail?.detail ?? `API ${path} 실패: ${res.status}`);
+  }
+  return res.json() as Promise<T>;
+}
+
 /** multipart 업로드 전용 — Content-Type을 fetch가 boundary 포함해 자동 설정하게 둔다. */
 export async function apiUpload<T>(
   path: string,
@@ -207,6 +223,53 @@ export interface KTaxonomyLeadsResponse {
  * 플로우는 관리자측 승인요청 큐가 이번 스코프에서 빠지며 함께 보류, 우대금리 카드와 동일). */
 export function getKTaxonomyLeads(companyId: number): Promise<KTaxonomyLeadsResponse> {
   return apiGet<KTaxonomyLeadsResponse>(`/owner/${companyId}/k-taxonomy-leads`);
+}
+
+// GET /owner/{company_id}/documents/grid — db/document_coverage.py::document_upload_grid.
+// "데이터 업로드" 탭의 문서종류 × 월 그리드. status는 db/document_requirements.py
+// ::required_documents가 사장님이 체크한 연료 기준으로 정한 필수/선택/해당없음이다.
+export type DocumentType = "tax_invoice" | "electric_bill" | "gas_bill";
+export type DocumentStatus = "required" | "optional" | "not_applicable";
+export interface DocumentGridRow {
+  document_type: DocumentType;
+  status: DocumentStatus;
+  months: Record<string, number>; // "1".."12" → 그 달 업로드 건수
+}
+export interface DocumentGridResponse {
+  reporting_year: number;
+  document_types: DocumentGridRow[];
+}
+export function getDocumentGrid(companyId: number, year?: number): Promise<DocumentGridResponse> {
+  const q = year ? `?year=${year}` : "";
+  return apiGet<DocumentGridResponse>(`/owner/${companyId}/documents/grid${q}`);
+}
+
+// GET /owner/{company_id}/documents?document_type=&year=&month= — 그리드 한 칸의 파일 목록.
+export interface UploadedDocument {
+  id: number;
+  original_filename: string | null;
+  created_at: string | null;
+  verification_status: string;
+}
+export function getDocumentsForCell(
+  companyId: number,
+  documentType: DocumentType,
+  year: number,
+  month: number
+): Promise<{ documents: UploadedDocument[] }> {
+  return apiGet<{ documents: UploadedDocument[] }>(
+    `/owner/${companyId}/documents?document_type=${documentType}&year=${year}&month=${month}`
+  );
+}
+
+/** 업로드 파일 삭제 — 거기서 만들어진 전표·분류까지 연쇄 삭제된다(되돌릴 수 없음). */
+export function deleteDocument(
+  companyId: number,
+  documentId: number
+): Promise<{ deleted: boolean; document_id: number }> {
+  return apiDelete<{ deleted: boolean; document_id: number }>(
+    `/owner/${companyId}/documents/${documentId}`
+  );
 }
 
 export { BASE_URL };

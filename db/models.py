@@ -55,12 +55,17 @@ class Voucher(Base):
     # v1: 어느 금융기관의 동의·수집 경로에서 생성된 전표인지 구분 (nullable — 0006에서 백필)
     financial_institution_id = Column(Integer, ForeignKey("financial_institutions.id"))
     institution_borrower_id = Column(Integer, ForeignKey("institution_borrowers.id"))
+    # 어느 업로드 원본 문서에서 만들어졌는지 (nullable — 0017에서 raw_json 텍스트값을
+    # 백필. 마이데이터 mock 경로로 생긴 전표는 원본 문서가 없어 계속 null).
+    source_document_id = Column(Integer, ForeignKey("source_documents.id"))
 
     company = relationship("Company", back_populates="vouchers")
     classification = relationship("Classification", back_populates="voucher", uselist=False)
+    source_document = relationship("SourceDocument")
 
     __table_args__ = (
         Index("ix_vouchers_company_year_month", "company_id", "year", "month"),
+        Index("ix_vouchers_source_document", "source_document_id"),
     )
 
 
@@ -346,10 +351,15 @@ class SourceDocument(Base):
     extracted_json = Column(JSON)
     verification_status = Column(String(20), default="unverified")
     created_at = Column(DateTime(timezone=True), default=now)
+    # "데이터 업로드" 그리드(문서종류 × 월)용 — OCR 업로드(row 1건)는 항상 채워짐.
+    # 엑셀 대량 업로드처럼 한 문서가 여러 달에 걸치면 null로 남는다(0017 참고).
+    year = Column(SmallInteger)
+    month = Column(SmallInteger)
 
     __table_args__ = (
         Index("ix_source_documents_company", "company_id"),
         Index("ix_source_documents_file_hash", "file_hash"),
+        Index("ix_source_documents_type_year_month", "company_id", "document_type", "year", "month"),
         # 코드 레벨 SELECT-then-INSERT 중복 체크만으로는 동시 업로드(더블클릭·재시도)
         # 레이스를 못 막는다 — DB 제약으로 최종 방어선을 둔다.
         UniqueConstraint("company_id", "file_hash", name="uq_source_documents_company_file_hash"),

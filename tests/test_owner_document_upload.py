@@ -1,5 +1,10 @@
-"""POST /owner/{company_id}/documents/upload — 라우터 레벨(TestClient) 검증."""
+"""POST /owner/{company_id}/documents/upload — 라우터 레벨(TestClient) 검증.
+
+GET .../documents/grid, GET .../documents, DELETE .../documents/{id} — "데이터
+업로드" 탭(문서종류 × 월 그리드, 파일 목록·삭제)이 쓰는 엔드포인트도 이 파일에서
+검증한다(같은 db/client 픽스처 재사용)."""
 import io
+import os
 
 import openpyxl
 import pytest
@@ -11,8 +16,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from api.db import get_session
+from api.document_ingestion import REPO_ROOT
 from api.main import app
-from db.models import Base, Company, FinancialInstitution, InstitutionBorrower
+from db.models import Base, Classification, Company, FinancialInstitution, InstitutionBorrower, SourceDocument, Voucher
 
 pdfmetrics.registerFont(UnicodeCIDFont("HYGothic-Medium"))
 
@@ -216,3 +222,114 @@ def test_ocr_image_upload_succeeds_via_vision_fallback(db, client, monkeypatch):
     body = res.json()
     assert body["vouchers_created"] == 1
     assert body["year"] == 2025 and body["month"] == 6
+
+
+# ── GET .../documents/grid, GET .../documents — 데이터 업로드 탭 그리드 ─────────
+def test_documents_grid_reflects_uploaded_month(db, client):
+    _, company_id = db
+    client.post(
+        f"/owner/{company_id}/documents/upload",
+        files={"file": ("고지서.pdf", _electric_bill_pdf(month="03"), "application/pdf")},
+        data={"document_type": "electric_bill", "mode": "ocr"},
+    )
+
+    res = client.get(f"/owner/{company_id}/documents/grid?year=2025")
+    assert res.status_code == 200, res.text
+    rows = {r["document_type"]: r for r in res.json()["document_types"]}
+    assert rows["electric_bill"]["months"]["3"] == 1
+    assert rows["electric_bill"]["months"]["4"] == 0
+
+
+def test_documents_grid_marks_gas_bill_not_applicable_when_fuel_not_selected(db, client):
+    """fuel_types_json 미설정(연료 체크 전) 기업은 도시가스가 not_applicable —
+    db/document_requirements.py::required_documents 그대로 재사용됨을 확인."""
+    _, company_id = db
+    res = client.get(f"/owner/{company_id}/documents/grid?year=2025")
+    rows = {r["document_type"]: r["status"] for r in res.json()["document_types"]}
+    assert rows["gas_bill"] == "not_applicable"
+    assert rows["electric_bill"] == "required"
+
+
+def test_documents_for_cell_lists_uploaded_file(db, client):
+    _, company_id = db
+    client.post(
+        f"/owner/{company_id}/documents/upload",
+        files={"file": ("고지서.pdf", _gas_bill_pdf(month="04"), "application/pdf")},
+        data={"document_type": "gas_bill", "mode": "ocr"},
+    )
+
+    res = client.get(
+        f"/owner/{company_id}/documents?document_type=gas_bill&year=2025&month=4"
+    )
+    assert res.status_code == 200, res.text
+    docs = res.json()["documents"]
+    assert len(docs) == 1
+    assert docs[0]["original_filename"] == "고지서.pdf"
+
+
+def test_documents_for_cell_empty_when_no_upload(db, client):
+    _, company_id = db
+    res = client.get(
+        f"/owner/{company_id}/documents?document_type=gas_bill&year=2025&month=5"
+    )
+    assert res.json()["documents"] == []
+
+
+# ── DELETE .../documents/{id} — 연쇄 삭제 ────────────────────────────────────
+def test_delete_document_removes_voucher_and_physical_file(db, client):
+    session, company_id = db
+    upload_res = client.post(
+        f"/owner/{company_id}/documents/upload",
+        files={"file": ("고지서.pdf", _gas_bill_pdf(month="06"), "application/pdf")},
+        data={"document_type": "gas_bill", "mode": "ocr"},
+    )
+    doc_id = upload_res.json()["source_document_id"]
+
+    doc = session.get(SourceDocument, doc_id)
+    abs_path = os.path.join(REPO_ROOT, doc.file_path)
+    assert os.path.exists(abs_path)
+
+    voucher = session.query(Voucher).filter_by(source_document_id=doc_id).one()
+    voucher_id = voucher.id
+    # 분류까지 끝난 상태를 흉내내 연쇄 삭제가 Classification까지 지우는지 같이 확인.
+    session.add(Classification(
+        voucher_id=voucher_id, scope=1, category="고정연소", fuel_type="도시가스",
+        amount_krw=555_555, emission_co2e=100.0, confidence=0.9,
+        evidence="테스트", method="rule", status="auto",
+    ))
+    session.commit()
+
+    res = client.delete(f"/owner/{company_id}/documents/{doc_id}")
+    assert res.status_code == 200, res.text
+    assert res.json()["deleted"] is True
+
+    # 삭제된 ORM 인스턴스(voucher)를 다시 건드리지 않고 미리 뽑아둔 id로만 재조회 —
+    # bulk delete() 이후 세션이 그 인스턴스를 만료시켜 속성 접근 시 ObjectDeletedError가 난다.
+    assert session.get(SourceDocument, doc_id) is None
+    assert session.query(Voucher).filter_by(id=voucher_id).one_or_none() is None
+    assert session.query(Classification).filter_by(voucher_id=voucher_id).one_or_none() is None
+    assert not os.path.exists(abs_path)
+
+
+def test_delete_document_returns_404_for_other_company(db, client):
+    session, company_id = db
+    upload_res = client.post(
+        f"/owner/{company_id}/documents/upload",
+        files={"file": ("고지서.pdf", _gas_bill_pdf(month="07"), "application/pdf")},
+        data={"document_type": "gas_bill", "mode": "ocr"},
+    )
+    doc_id = upload_res.json()["source_document_id"]
+
+    other = Company(name="타사", industry_code="C251")
+    session.add(other)
+    session.commit()
+
+    res = client.delete(f"/owner/{other.id}/documents/{doc_id}")
+    assert res.status_code == 404
+    assert session.get(SourceDocument, doc_id) is not None  # 안 지워졌어야 함
+
+
+def test_delete_document_returns_404_when_not_found(db, client):
+    _, company_id = db
+    res = client.delete(f"/owner/{company_id}/documents/99999")
+    assert res.status_code == 404

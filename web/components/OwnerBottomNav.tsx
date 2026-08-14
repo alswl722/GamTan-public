@@ -5,11 +5,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { FileBarChart, Home } from "lucide-react";
+import { FileBarChart, Home, UploadCloud } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const ITEMS = [
   { href: "/owner", label: "홈", icon: Home, exact: true },
+  { href: "/owner/uploads", label: "데이터 업로드", icon: UploadCloud, exact: false },
   { href: "/owner/report", label: "탄소 리포트", icon: FileBarChart, exact: false },
 ] as const;
 

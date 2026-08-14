@@ -124,6 +124,11 @@ def ingest_uploaded_document(
         file_path=file_path,
         extracted_json=extracted,
         verification_status="unverified",
+        # "데이터 업로드" 그리드용 — OCR(단일 row)만 단일 월로 특정 가능하다. 엑셀
+        # 대량 업로드는 여러 달에 걸칠 수 있어 null로 남긴다(그리드 특정 칸에는 안
+        # 뜨지만 데이터 자체는 그대로 적재된다).
+        year=rows[0]["year"] if mode == "ocr" else None,
+        month=rows[0]["month"] if mode == "ocr" else None,
     )
     voucher_source = DOCUMENT_TYPE_TO_VOUCHER_SOURCE[document_type]
     created: list[Voucher] = []
@@ -146,6 +151,7 @@ def ingest_uploaded_document(
                 item_description=row.get("item_description"),
                 supply_amount_krw=row.get("supply_amount_krw"),
                 raw_json=raw,
+                source_document_id=doc.id,
                 financial_institution_id=financial_institution_id,
                 institution_borrower_id=institution_borrower_id,
             )
