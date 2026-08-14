@@ -1,8 +1,9 @@
-"""품질 이슈 로그 + 감사 대응 근거 패키지 테스트 (v1 Tier 2, owner-admin-flow-spec.md §7·§8).
+"""업로드 실패 기록 + 감사 대응 근거 패키지 테스트 (v1 Tier 2, owner-admin-flow-spec.md §7·§8).
 
 핵심 검증축:
-  - 업로드 실패는 DocumentIngestionFailure로 기록되고, 성공한 업로드는 기록되지 않는다.
-  - 품질 이슈 로그는 열람 전용(GET만) — 반려 사유별로 그대로 노출한다.
+  - 업로드 실패는 DocumentIngestionFailure로 기록된다(record_ingestion_failure).
+    이 기록을 관리자 화면에서 조회하는 경로(GET /admin/quality-issues,
+    list_ingestion_failures)는 실무적으로 불필요해 제거했다 — 아래 주석 참고.
   - 감사 대응 근거 패키지는 trace_logs + classifications.evidence + vouchers를
     기업·기간 기준으로 시계열 조합한다(신규 계산 로직 없음, 조회·조합만).
   - CSV·PDF 내보내기는 JSON과 같은 데이터를 그대로 직렬화한다 — 재계산하지 않는다.
@@ -12,9 +13,6 @@ import io
 import pdfplumber
 import pytest
 from fastapi.testclient import TestClient
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.cidfonts import UnicodeCIDFont
-from reportlab.pdfgen import canvas
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
@@ -32,30 +30,9 @@ from db.models import (
     TraceLog,
     Voucher,
 )
-from db.quality_issues import list_ingestion_failures, record_ingestion_failure
+from db.quality_issues import record_ingestion_failure
 
 YEAR = 2025
-
-pdfmetrics.registerFont(UnicodeCIDFont("HYGothic-Medium"))
-
-
-def _gas_bill_pdf(*, month="03", amount=800_000, quantity=800) -> bytes:
-    """합성 mock이 사라졌으므로 업로드 성공 케이스는 실제로 파싱되는 최소
-    텍스트 PDF가 있어야 한다(tests/test_document_extraction.py와 동일 패턴)."""
-    buf = io.BytesIO()
-    c = canvas.Canvas(buf)
-    c.setFont("HYGothic-Medium", 11)
-    y = 700
-    for line in [
-        "도시가스 요금고지서",
-        f"사용월: 2025-{month}",
-        f"사용량(m³) {quantity}",
-        f"청구금액(원) {amount}",
-    ]:
-        c.drawString(50, y, line)
-        y -= 20
-    c.save()
-    return buf.getvalue()
 
 
 @pytest.fixture()
@@ -118,75 +95,11 @@ def test_record_ingestion_failure_persists(db):
     assert failures[0].failure_reason == "duplicate"
 
 
-def test_list_ingestion_failures_includes_company_name_and_label(db):
-    session, cid = db
-    record_ingestion_failure(
-        session, cid, document_type="tax_invoice", original_filename="x.xlsx",
-        failure_reason="excel_format", detail="헤더 열이 다릅니다",
-    )
-    result = list_ingestion_failures(session)
-    assert result["total"] == 1
-    issues = result["issues"]
-    assert len(issues) == 1
-    assert issues[0]["company_name"] == "○○정밀"
-    assert issues[0]["failure_reason_label"] == "엑셀 형식 오류"
-
-
-def test_list_ingestion_failures_ordered_most_recent_first(db):
-    session, cid = db
-    record_ingestion_failure(
-        session, cid, document_type="gas_bill", original_filename="a.jpg",
-        failure_reason="duplicate", detail="첫 실패",
-    )
-    record_ingestion_failure(
-        session, cid, document_type="gas_bill", original_filename="b.jpg",
-        failure_reason="parse_error", detail="두번째 실패",
-    )
-    issues = list_ingestion_failures(session)["issues"]
-    assert issues[0]["detail"] == "두번째 실패"
-    assert issues[1]["detail"] == "첫 실패"
-
-
-def test_list_ingestion_failures_paginates_and_filters_by_company(db):
-    session, cid = db
-    for i in range(3):
-        record_ingestion_failure(
-            session, cid, document_type="gas_bill", original_filename=f"{i}.jpg",
-            failure_reason="duplicate", detail=f"실패 {i}",
-        )
-    page1 = list_ingestion_failures(session, page=1, page_size=2)
-    assert page1["total"] == 3
-    assert len(page1["issues"]) == 2
-    page2 = list_ingestion_failures(session, page=2, page_size=2)
-    assert len(page2["issues"]) == 1
-
-    other = list_ingestion_failures(session, company_name="존재하지않는기업")
-    assert other["total"] == 0
-    assert other["issues"] == []
-
-
-# ── API 라우터 — GET /admin/quality-issues ────────────────────────────────────
-def test_quality_issues_endpoint_excludes_successful_uploads(db, client):
-    """성공한 업로드는 품질 이슈 로그에 안 남는다 — 실패만 모은 열람 전용 로그다."""
-    session, cid = db
-    ok_res = client.post(
-        f"/owner/{cid}/documents/upload",
-        files={"file": ("ok.pdf", _gas_bill_pdf(month="03"), "application/pdf")},
-        data={"document_type": "gas_bill", "mode": "ocr"},
-    )
-    assert ok_res.status_code == 200, ok_res.text
-    files = {"file": ("dup.pdf", _gas_bill_pdf(month="04"), "application/pdf")}
-    data = {"document_type": "gas_bill", "mode": "ocr"}
-    first = client.post(f"/owner/{cid}/documents/upload", files=files, data=data)
-    assert first.status_code == 200, first.text
-    second = client.post(f"/owner/{cid}/documents/upload", files=files, data=data)
-    assert second.status_code == 409
-
-    res = client.get("/admin/quality-issues")
-    assert res.status_code == 200
-    issues = res.json()["issues"]
-    assert len(issues) == 1
-    assert issues[0]["failure_reason"] == "duplicate"
+# GET /admin/quality-issues(관리자측 품질 이슈 로그 탭)와 db/quality_issues.py::
+# list_ingestion_failures는 실무적으로 불필요하다고 판단해 제거했다 — 업로드 실패
+# 원인은 은행 담당자가 아니라 개발/운영 쪽에서 다룰 정보였다. 실패 기록 자체
+# (record_ingestion_failure, DocumentIngestionFailure 테이블)는 그대로 유지하며
+# 위 test_record_ingestion_failure_persists가 그 기록 경로를 계속 검증한다.
 
 
 # ── db/audit_package.py 순수 로직 ─────────────────────────────────────────────

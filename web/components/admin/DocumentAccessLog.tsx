@@ -1,6 +1,6 @@
 "use client";
 
-// 실API: GET /admin/documents/access-log (page/page_size/company_name 서버사이드 페이지네이션)
+// 실API: GET /admin/documents/access-log (page/page_size/company_name|company_id 서버사이드 페이지네이션)
 //
 // 기존 AuditLog(review-log)는 "분류를 확정/반려했다"는 조치 기록이지 "원본문서를
 // 열어봤다"는 열람 기록이 아니다(v1 §6 2주차) — 별도 화면으로 분리한다.
@@ -19,9 +19,16 @@ const DOCUMENT_TYPE_LABEL: Record<string, string> = {
 
 const PAGE_SIZE = 50;
 
-export function DocumentAccessLog() {
+/** companyId를 넘기면 검색창 없이 그 기업(정확일치)으로 고정 필터한다 — 기업 상세 탭이 사용. */
+export function DocumentAccessLog({
+  companyId: fixedCompanyId,
+}: { companyId?: number } = {}) {
   const { data, loading, error, page, setPage, searchInput, setSearchInput, retry } =
-    usePaginatedLog<{ entries: DocumentAccessLogEntry[] }>(getDocumentAccessLog, PAGE_SIZE);
+    usePaginatedLog<{ entries: DocumentAccessLogEntry[] }>(
+      getDocumentAccessLog,
+      PAGE_SIZE,
+      fixedCompanyId,
+    );
 
   const entries = data?.entries ?? [];
 
@@ -32,13 +39,15 @@ export function DocumentAccessLog() {
           <h2 className="text-base font-semibold text-ink">원본문서 접근 로그</h2>
           <p className="mt-0.5 text-xs text-faint">담당자가 원본 증빙을 열람한 이력 — 최근 순</p>
         </div>
-        <input
-          type="text"
-          value={searchInput}
-          onChange={(e) => setSearchInput(e.target.value)}
-          placeholder="기업명 검색"
-          className="w-40 rounded-md border border-line bg-surface px-2.5 py-1.5 text-xs text-ink placeholder:text-faint transition-colors focus:outline-none focus:ring-1 focus:ring-brand"
-        />
+        {fixedCompanyId === undefined && (
+          <input
+            type="text"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="기업명 검색"
+            className="w-40 rounded-md border border-line bg-surface px-2.5 py-1.5 text-xs text-ink placeholder:text-faint transition-colors focus:outline-none focus:ring-1 focus:ring-brand"
+          />
+        )}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">

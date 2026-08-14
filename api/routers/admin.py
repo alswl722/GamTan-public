@@ -1,6 +1,7 @@
 """관리자 API — 은행 ESG·여신 담당자용 대시보드 데이터 소스.
 
 - GET   /admin/portfolio                      포트폴리오 금융배출량 집계 + PCAF 등급 분포
+- GET   /admin/companies/{id}/overview        기업 상세 탭 — 등급·결손·HITL대기·최근알림 요약
 - GET   /admin/hitl                           전 기업 담당자 검토 큐 (저신뢰 분류 건)
 - PATCH /admin/classifications/{id}/confirm   그대로 확정
 - PATCH /admin/classifications/{id}           분류 수정 후 확정 (담당자 교정)
@@ -13,8 +14,6 @@
 - GET   /admin/documents/{id}                 원본문서 열람 (조회 시 접근 로그 자동 기록)
 - GET   /admin/documents/{id}/file            원본문서 파일 바이너리 (PDF, 조회 시 접근 로그 자동 기록)
 - GET   /admin/documents/access-log           원본문서 접근 감사 로그 목록 (page/page_size/company_name)
-- GET   /admin/quality-issues                 품질 이슈 로그 — 업로드 반려·실패 이력 (열람 전용,
-                                               page/page_size/company_name)
 - GET   /admin/audit-package                  감사 대응 근거 패키지 — 기업·기간 지정 시계열 원자료(JSON/CSV/PDF)
 
 여신 결정·스코어링은 하지 않는다(CLAUDE.md §9). AI가 1차 스크리닝한 저신뢰 건을
@@ -35,7 +34,7 @@ from sqlalchemy.orm import Session
 
 from api.db import get_session
 from api.document_ingestion import REPO_ROOT
-from api.queries import get_emission_factors, get_hitl_queue, get_unit_prices
+from api.queries import get_coverage, get_emission_factors, get_hitl_queue, get_unit_prices
 from db.alerts import detect_alerts
 from db.calc_engine import CalcDataGap, ClassifiedItemInput, compute_emission, \
     index_emission_factors, index_unit_prices
@@ -43,8 +42,7 @@ from db.audit_package import build_audit_package
 from db.audit_report_pdf import build_audit_report_pdf
 from db.document_access_log import access_history, record_access, recent_access_log
 from db.models import Classification, Company, SourceDocument, TraceLog, Voucher
-from db.pcaf import portfolio_summary
-from db.quality_issues import list_ingestion_failures
+from db.pcaf import company_pcaf_summary, portfolio_summary
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -83,6 +81,43 @@ def alerts(session: Session = Depends(get_session)):
     담당자가 조짐을 먼저 인지하도록 안내하는 조기 경보일 뿐이다.
     """
     return {"alerts": detect_alerts(session)}
+
+
+@router.get("/companies/{company_id}/overview")
+def company_overview(company_id: int, session: Session = Depends(get_session)):
+    """기업 상세 탭 — 등급·측정 여부·결손·HITL 대기·최근 알림을 한 응답으로 묶는다.
+
+    실행 이력(traces)·변경 이력(review-log)·문서 열람(access-log)·품질 이슈는
+    각자 페이지네이션이 있는 기존 엔드포인트를 프론트가 company_id로 필터해
+    재사용한다 — 여기서는 그 자체로 계산이 필요한 항목만 담아 중복 로직을
+    만들지 않는다.
+    """
+    company = session.get(Company, company_id)
+    if company is None:
+        raise HTTPException(status_code=404, detail=f"company_id={company_id} 없음")
+
+    summary = company_pcaf_summary(session, company_id)
+    after = summary["after"]
+    used = after or summary["before"]
+
+    hitl_count = session.execute(
+        select(func.count(Classification.id))
+        .join(Voucher, Classification.voucher_id == Voucher.id)
+        .where(Voucher.company_id == company_id, Classification.status == "review_required")
+    ).scalar_one()
+
+    return {
+        "company_id": company.id,
+        "company_name": company.name,
+        "industry_name": company.industry_name,
+        "grade": used["grade"],
+        "measured": after is not None,
+        "scope1": round(used.get("scope1", 0.0) or 0.0, 2),
+        "scope2": round(used.get("scope2", 0.0) or 0.0, 2),
+        "hitl_count": hitl_count,
+        "coverage": get_coverage(session, company_id),
+        "alerts": detect_alerts(session, company_id=company_id),
+    }
 
 
 def _load_reviewable(session: Session, voucher_id: int) -> Classification:
@@ -258,6 +293,7 @@ def review_log(
     page: int = 1,
     page_size: int = 50,
     company_name: str | None = None,
+    company_id: int | None = None,
     session: Session = Depends(get_session),
 ):
     """담당자 조치 이력(감사 로그) — 확정/반려된 건을 최근 조치순으로.
@@ -266,8 +302,11 @@ def review_log(
     "무엇을 했는지"를 원본 판단 근거 뒤에 누적해서 남긴다(설계 원칙: 모든 판단에
     evidence 저장). 이 엔드포인트는 그 기록을 조회용으로 노출만 한다.
 
-    company_name을 넘기면 기업명 부분일치(대소문자 무시)로 필터한다. total은
-    필터 적용 후 전체 건수 — 프론트가 "N건 중 M~K" 페이지 표시에 쓴다.
+    company_name을 넘기면 기업명 부분일치(대소문자 무시)로 필터한다("변경 이력"
+    탭의 검색창용). company_id를 넘기면 정확히 그 기업만 필터한다("기업" 탭이
+    기업을 이미 선택한 상태에서 씀 — 이름이 비슷한 다른 기업과 섞이지 않도록
+    id로 정확히 좁힌다). 둘 다 넘어오면 company_id가 우선한다. total은 필터
+    적용 후 전체 건수 — 프론트가 "N건 중 M~K" 페이지 표시에 쓴다.
     """
     base = (
         select(Classification, Voucher, Company)
@@ -275,7 +314,9 @@ def review_log(
         .join(Company, Voucher.company_id == Company.id)
         .where(Classification.reviewed_at.isnot(None))
     )
-    if company_name:
+    if company_id is not None:
+        base = base.where(Company.id == company_id)
+    elif company_name:
         base = base.where(Company.name.ilike(f"%{company_name}%"))
 
     total = session.execute(
@@ -382,10 +423,13 @@ def document_access_log(
     page: int = 1,
     page_size: int = 50,
     company_name: str | None = None,
+    company_id: int | None = None,
     session: Session = Depends(get_session),
 ):
     """전체 원본문서 열람 이력 — 최근 순."""
-    return recent_access_log(session, page=page, page_size=page_size, company_name=company_name)
+    return recent_access_log(
+        session, page=page, page_size=page_size, company_name=company_name, company_id=company_id
+    )
 
 
 @router.get("/documents/{document_id}")
@@ -450,20 +494,6 @@ def download_document_file(
         media_type="application/pdf",
         headers={"Content-Disposition": f"inline; filename*=UTF-8''{display_name}"},
     )
-
-
-# ── 품질 이슈 로그 (v1 Tier 2, owner-admin-flow-spec.md §7) ────────────────────
-
-@router.get("/quality-issues")
-def quality_issues(
-    page: int = 1,
-    page_size: int = 50,
-    company_name: str | None = None,
-    session: Session = Depends(get_session),
-):
-    """업로드 반려·실패 이력 — 열람 전용. 성공한 업로드는 여기 안 남는다
-    (SourceDocument로 이미 남으므로). 실패만 원인별로 모아 보여준다."""
-    return list_ingestion_failures(session, page=page, page_size=page_size, company_name=company_name)
 
 
 # ── 감사 대응 근거 패키지 (v1 Tier 2, owner-admin-flow-spec.md §8) ──────────────

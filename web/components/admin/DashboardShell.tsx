@@ -1,26 +1,20 @@
 "use client";
 
 import { useState } from "react";
-import type { AlertItem, HitlItem, PortfolioResponse, TraceRunItem } from "@/lib/admin-types";
+import type { HitlItem, PortfolioResponse, TraceRunItem } from "@/lib/admin-types";
 import { cn } from "@/lib/utils";
-import { AlertsPanel } from "@/components/admin/AlertsPanel";
 import { AuditLog } from "@/components/admin/AuditLog";
 import { AuditPackage } from "@/components/admin/AuditPackage";
-import { CompanyGradeList } from "@/components/admin/CompanyGradeList";
+import { CompanyDetail } from "@/components/admin/CompanyDetail";
 import { DocumentAccessLog } from "@/components/admin/DocumentAccessLog";
-import { GradeDonut } from "@/components/admin/GradeDonut";
 import { HitlWorkspace } from "@/components/admin/HitlWorkspace";
-import { QualityIssueLog } from "@/components/admin/QualityIssueLog";
 import { TraceHistory } from "@/components/admin/TraceHistory";
-import { VerificationBadge } from "@/components/admin/VerificationBadge";
 
 const TABS = [
   { id: "hitl", label: "담당자 검토" },
-  { id: "grades", label: "등급 분포" },
-  { id: "risk", label: "여신 리스크" },
+  { id: "company", label: "기업" },
   { id: "trace", label: "실행 이력" },
   { id: "audit", label: "변경 이력" },
-  { id: "quality-issues", label: "품질 이슈" },
   { id: "audit-package", label: "감사 대응" },
 ] as const;
 
@@ -30,10 +24,9 @@ export interface DashboardShellProps {
   portfolio: PortfolioResponse;
   hitlQueue: HitlItem[];
   traceRuns: TraceRunItem[];
-  alerts: AlertItem[];
 }
 
-export function DashboardShell({ portfolio, hitlQueue, traceRuns, alerts }: DashboardShellProps) {
+export function DashboardShell({ portfolio, hitlQueue, traceRuns }: DashboardShellProps) {
   const [activeTab, setActiveTab] = useState<TabId>("hitl");
   // AuditLog는 자체 서버사이드 페이지네이션으로 데이터를 관리해 부모가 직접 갱신할 수
   // 없다 — HITL 확정/반려 직후 최신 변경 이력을 보여주려면 key를 바꿔 리마운트한다.
@@ -74,26 +67,8 @@ export function DashboardShell({ portfolio, hitlQueue, traceRuns, alerts }: Dash
           </div>
         )}
 
-        {activeTab === "grades" && (
-          <div className="h-full space-y-5 overflow-y-auto p-5">
-            <div className="grid grid-cols-1 items-stretch gap-5 lg:grid-cols-3">
-              <div className="lg:col-span-2">
-                <GradeDonut data={portfolio} />
-              </div>
-              <div className="lg:col-span-1">
-                <VerificationBadge />
-              </div>
-            </div>
-            <div className="h-[28rem]">
-              <CompanyGradeList companies={portfolio.companies} />
-            </div>
-          </div>
-        )}
-
-        {activeTab === "risk" && (
-          <div className="h-full p-5">
-            <AlertsPanel alerts={alerts} />
-          </div>
+        {activeTab === "company" && (
+          <CompanyDetail companies={portfolio.companies} traceRuns={traceRuns} />
         )}
 
         {activeTab === "trace" && (
@@ -110,12 +85,6 @@ export function DashboardShell({ portfolio, hitlQueue, traceRuns, alerts }: Dash
             <div className="min-h-0">
               <DocumentAccessLog />
             </div>
-          </div>
-        )}
-
-        {activeTab === "quality-issues" && (
-          <div className="h-full p-4">
-            <QualityIssueLog />
           </div>
         )}
 

@@ -3,29 +3,32 @@
  */
 import { apiGet, apiPatch, BASE_URL } from "@/lib/api";
 import type {
-  AlertItem,
   BulkActionResult,
   ClassificationEdit,
+  CompanyOverview,
   DocumentAccessLogEntry,
   HitlItem,
   PageMeta,
   PortfolioResponse,
-  QualityIssueEntry,
   ReviewLogEntry,
   TraceRunItem,
   TraceStep,
 } from "@/lib/admin-types";
 
-/** 서버사이드 페이지네이션 요청 공통 파라미터 — review-log/access-log/quality-issues 공유. */
+/** 서버사이드 페이지네이션 요청 공통 파라미터 — review-log/access-log 공유.
+ * companyId(정확일치)와 companyName(부분일치 검색)은 동시에 넘기지 않는다 —
+ * "기업" 탭은 companyId로 정확히 좁히고, "변경 이력" 탭 검색창은 companyName을 쓴다. */
 export interface PageParams {
   page?: number;
   pageSize?: number;
   companyName?: string;
+  companyId?: number;
 }
 
-function pageQuery({ page = 1, pageSize = 50, companyName }: PageParams): string {
+function pageQuery({ page = 1, pageSize = 50, companyName, companyId }: PageParams): string {
   const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
-  if (companyName?.trim()) params.set("company_name", companyName.trim());
+  if (companyId != null) params.set("company_id", String(companyId));
+  else if (companyName?.trim()) params.set("company_name", companyName.trim());
   return params.toString();
 }
 
@@ -80,8 +83,9 @@ export function getTraceSteps(sessionId: string): Promise<TraceStep[]> {
   return apiGet<{ steps: TraceStep[] }>(`/trace/${sessionId}`).then((r) => r.steps);
 }
 
-export function getAlerts(): Promise<AlertItem[]> {
-  return apiGet<{ alerts: AlertItem[] }>("/admin/alerts").then((r) => r.alerts);
+/** 기업 상세 탭 — 등급·결손·HITL대기·최근알림 요약. */
+export function getCompanyOverview(companyId: number): Promise<CompanyOverview> {
+  return apiGet(`/admin/companies/${companyId}/overview`);
 }
 
 /** 원본문서 접근 감사 로그 — 열람 이벤트 자체의 기록(review-log와 다른 축). */
@@ -89,13 +93,6 @@ export function getDocumentAccessLog(
   params: PageParams = {},
 ): Promise<{ entries: DocumentAccessLogEntry[] } & PageMeta> {
   return apiGet(`/admin/documents/access-log?${pageQuery(params)}`);
-}
-
-/** 품질 이슈 로그(열람 전용) — 업로드 반려·실패 이력만 모은다(v1 Tier 2). */
-export function getQualityIssues(
-  params: PageParams = {},
-): Promise<{ issues: QualityIssueEntry[] } & PageMeta> {
-  return apiGet(`/admin/quality-issues?${pageQuery(params)}`);
 }
 
 /** 감사 대응 근거 패키지 CSV 내보내기 URL — 다운로드 링크로 그대로 사용(fetch 불필요). */

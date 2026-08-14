@@ -1,8 +1,8 @@
 "use client";
 
-// review-log/documents-access-log/quality-issues 3개 관리자 로그 탭이 공유하는
-// 서버사이드 페이지네이션 상태 관리 — 검색어 입력 시 300ms debounce 후 1페이지로
-// 리셋해 재조회한다.
+// review-log/documents-access-log 등 관리자 로그 탭이 공유하는 서버사이드
+// 페이지네이션 상태 관리 — 검색어 입력 시 300ms debounce 후 1페이지로 리셋해
+// 재조회한다.
 import { useEffect, useRef, useState } from "react";
 import type { PageMeta } from "@/lib/admin-types";
 import type { PageParams } from "@/lib/admin-data";
@@ -12,6 +12,10 @@ const SEARCH_DEBOUNCE_MS = 300;
 export function usePaginatedLog<T>(
   fetcher: (params: PageParams) => Promise<T & PageMeta>,
   pageSize = 50,
+  /** 넘기면 검색창 대신 이 기업으로 정확히 고정 필터한다(company_id 일치) —
+   * 기업 상세 탭이 사용. 이름 부분일치가 아니라 id 기준이라 비슷한 이름의
+   * 다른 기업 로그가 섞이지 않는다. */
+  fixedCompanyId?: number,
 ) {
   const [page, setPage] = useState(1);
   const [searchInput, setSearchInput] = useState("");
@@ -24,20 +28,28 @@ export function usePaginatedLog<T>(
   fetcherRef.current = fetcher;
 
   // 검색어 입력을 debounce해 companyName(실제 조회 트리거)에 반영 — 1페이지로 리셋.
+  // 고정 필터 모드(fixedCompanyId)에서는 검색창 자체가 없으니 이 effect가 불필요.
   useEffect(() => {
+    if (fixedCompanyId !== undefined) return;
     const timer = setTimeout(() => {
       setPage(1);
       setCompanyName(searchInput);
     }, SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [searchInput]);
+  }, [searchInput, fixedCompanyId]);
 
-  const load = (targetPage: number, name: string) => {
+  // 고정 필터 대상 기업이 바뀌면(다른 기업 선택) 1페이지로 리셋해 재조회.
+  useEffect(() => {
+    if (fixedCompanyId === undefined) return;
+    setPage(1);
+  }, [fixedCompanyId]);
+
+  const load = (targetPage: number, name: string, companyId: number | undefined) => {
     const id = ++requestId.current;
     setLoading(true);
     setError(null);
     fetcherRef
-      .current({ page: targetPage, pageSize, companyName: name })
+      .current({ page: targetPage, pageSize, companyName: name, companyId })
       .then((res) => {
         if (id !== requestId.current) return; // 늦게 도착한 응답 무시(경쟁 상태 방지)
         setData(res);
@@ -54,10 +66,10 @@ export function usePaginatedLog<T>(
   };
 
   useEffect(() => {
-    load(page, companyName);
-    // page/companyName 변경 시에만 재조회.
+    load(page, companyName, fixedCompanyId);
+    // page/companyName/fixedCompanyId 변경 시에만 재조회.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, companyName, pageSize]);
+  }, [page, companyName, fixedCompanyId, pageSize]);
 
   return {
     data,
@@ -67,6 +79,6 @@ export function usePaginatedLog<T>(
     setPage,
     searchInput,
     setSearchInput,
-    retry: () => load(page, companyName),
+    retry: () => load(page, companyName, fixedCompanyId),
   };
 }

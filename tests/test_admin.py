@@ -379,6 +379,36 @@ def test_review_log_lists_reviewed_entries_most_recent_first(db, client):
     assert by_id[v1]["reviewed_at"] is not None
 
 
+def test_review_log_company_id_filters_exactly_unlike_name_substring_match(db, client):
+    """company_id는 정확일치 — 이름이 서로를 포함하는 두 기업(예: "○○정밀" /
+    "○○정밀유통")이어도 company_name 부분일치와 달리 서로 섞이지 않아야 한다.
+    "기업" 탭이 company_id로 넘기는 것과 같은 경로."""
+    session, cid = db
+    other = Company(
+        name="○○정밀유통", industry_code="G462", industry_name="기계장비 도매업",
+    )
+    session.add(other)
+    session.commit()
+
+    v1 = _add(session, cid, 1, "도시가스", scope=1, emission=0.0,
+              status="review_required", conf=0.5)
+    v2 = _add(session, other.id, 2, "경유", scope=1, emission=0.0,
+              status="review_required", conf=0.5)
+    assert client.patch(f"/admin/classifications/{v1}/confirm").status_code == 200
+    assert client.patch(f"/admin/classifications/{v2}/confirm").status_code == 200
+
+    res = client.get(f"/admin/review-log?company_id={cid}")
+    assert res.status_code == 200, res.text
+    entries = res.json()["entries"]
+    assert [e["voucher_id"] for e in entries] == [v1]
+
+    # 이름 부분일치였다면 "○○정밀"이 "○○정밀유통"에도 매치돼 두 건 다 나왔을 것 —
+    # company_id 필터는 그 문제가 없어야 한다.
+    res_name = client.get("/admin/review-log?company_name=○○정밀")
+    names = {e["company_name"] for e in res_name.json()["entries"]}
+    assert names == {"○○정밀", "○○정밀유통"}, "부분일치 검색은 여전히 둘 다 찾아야 한다(검색창 용도)"
+
+
 # ── 이상 신호 알림 (db/alerts.py, 결정론적 배수 계산) ─────────────────────────
 def _add_month_total(session, cid, month, emission, *, scope=1, status="auto"):
     """월별 배출량 합계 하나를 만들기 위한 최소 전표+분류 1건."""
@@ -541,6 +571,40 @@ def test_traces_groups_runs_with_badges(db, client):
     assert runs["s-2"]["result_badges"] == ["정상"]
     assert runs["s-1"]["company_name"] == "○○정밀"
     assert runs["s-1"]["status"] == "완료"
+
+
+# ── 기업 상세 탭 (GET /admin/companies/{id}/overview) ─────────────────────────
+def test_company_overview_returns_grade_coverage_hitl_and_alerts(db, client):
+    """기업 상세 탭 — 등급·결손·HITL대기·알림을 한 응답에 담는다."""
+    session, cid = db
+    company = session.get(Company, cid)
+    company.fuel_types_json = {
+        "electricity": False, "diesel": False, "gasoline": False,
+        "city_gas": True, "lpg": "no",
+    }
+    session.commit()
+
+    _add(session, cid, 1, "도시가스 요금", scope=1, emission=1000.0, status="auto",
+         fuel_type="도시가스")
+    _add(session, cid, 2, "유류대금", scope=1, emission=0.0, status="review_required")
+
+    res = client.get(f"/admin/companies/{cid}/overview")
+    assert res.status_code == 200, res.text
+    body = res.json()
+
+    assert body["company_id"] == cid
+    assert body["company_name"] == "○○정밀"
+    assert body["measured"] is True
+    assert body["hitl_count"] == 1
+    # 도시가스만 체크했으니 결손 대상도 가스 하나뿐 — 1월만 채워졌으니 나머지 11개월 결손
+    gap_fuels = {g["fuel"] for g in body["coverage"]["gaps"]}
+    assert gap_fuels == {"가스"}
+    assert isinstance(body["alerts"], list)
+
+
+def test_company_overview_404_for_unknown_company(db, client):
+    res = client.get("/admin/companies/99999/overview")
+    assert res.status_code == 404
 
 
 # /admin/k-taxonomy-leads(관리자측 K택소노미 리드 탭)는 팀원 커밋 ae1df7e

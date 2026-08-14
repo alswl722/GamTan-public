@@ -11,6 +11,7 @@ import { useState } from "react";
 import { auditPackageCsvUrl, auditPackagePdfUrl } from "@/lib/admin-data";
 import { apiGet } from "@/lib/api";
 import type { Company } from "@/lib/admin-types";
+import { CompanyCombobox } from "@/components/admin/CompanyCombobox";
 
 interface AuditEntry {
   entry_type: "voucher" | "trace";
@@ -104,18 +105,7 @@ export function AuditPackage({ companies }: { companies: Company[] }) {
           기업·연도를 지정하면 판단 근거(trace·분류 evidence·전표)를 시계열로 모아줍니다
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          <select
-            value={companyId}
-            onChange={(e) => setCompanyId(e.target.value ? Number(e.target.value) : "")}
-            className="rounded-md border border-line bg-surface px-2.5 py-1.5 text-xs text-muted focus:outline-none focus:ring-1 focus:ring-brand"
-          >
-            <option value="">기업 선택</option>
-            {companies.map((c) => (
-              <option key={c.company_id} value={c.company_id}>
-                {c.company_name}
-              </option>
-            ))}
-          </select>
+          <CompanyCombobox companies={companies} value={companyId} onChange={setCompanyId} />
           <input
             type="number"
             value={year}

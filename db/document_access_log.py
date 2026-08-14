@@ -34,11 +34,15 @@ def recent_access_log(
     page: int = 1,
     page_size: int = 50,
     company_name: str | None = None,
+    company_id: int | None = None,
 ) -> dict:
     """관리자 대시보드 전체 열람 이력 — 최근 순, 문서·기업 정보 조인.
 
-    company_name을 넘기면 기업명 부분일치(대소문자 무시)로 필터한다. total은
-    필터 적용 후 전체 건수 — 프론트가 "N건 중 M~K" 페이지 표시에 쓴다.
+    company_name을 넘기면 기업명 부분일치(대소문자 무시)로 필터한다("변경 이력"
+    탭의 검색창용). company_id를 넘기면 정확히 그 기업만 필터한다("기업" 탭이
+    기업을 이미 선택한 상태에서 씀 — 이름이 비슷한 다른 기업과 섞이지 않도록
+    id로 정확히 좁힌다). 둘 다 넘어오면 company_id가 우선한다. total은 필터
+    적용 후 전체 건수 — 프론트가 "N건 중 M~K" 페이지 표시에 쓴다.
     """
     from db.models import Company
 
@@ -47,7 +51,9 @@ def recent_access_log(
         .join(SourceDocument, SourceDocumentAccessLog.source_document_id == SourceDocument.id)
         .join(Company, SourceDocument.company_id == Company.id)
     )
-    if company_name:
+    if company_id is not None:
+        base = base.where(Company.id == company_id)
+    elif company_name:
         base = base.where(Company.name.ilike(f"%{company_name}%"))
 
     total = session.execute(
