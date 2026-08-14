@@ -51,11 +51,9 @@ function UploadCompleteModal({ message, onClose }: { message: string; onClose: (
           <X size={20} />
         </button>
 
-        <span className="inline-block rounded-full bg-brand px-3 py-1 text-[11px] font-bold text-white">
-          데이터 업로드
-        </span>
-
-        <h2 className="mt-3 text-[20px] font-extrabold leading-snug text-ink">
+        <h2 className="mt-1 text-[20px] font-extrabold leading-snug text-ink">
+          도장 꾹!
+          <br />
           업로드가 완료됐어요!
         </h2>
         <p className="mt-1.5 text-[13px] leading-relaxed text-muted">{message}</p>
