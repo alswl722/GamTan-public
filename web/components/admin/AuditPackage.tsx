@@ -12,6 +12,9 @@ import { auditPackageCsvUrl, auditPackagePdfUrl } from "@/lib/admin-data";
 import { apiGet } from "@/lib/api";
 import type { Company } from "@/lib/admin-types";
 import { CompanyCombobox } from "@/components/admin/CompanyCombobox";
+import { CompanyTable } from "@/components/admin/CompanyTable";
+import { YearDropdown } from "@/components/admin/YearDropdown";
+import { splitEvidence } from "@/lib/evidence";
 
 interface AuditEntry {
   entry_type: "voucher" | "trace";
@@ -67,7 +70,31 @@ function EntryRow({ entry }: { entry: AuditEntry }) {
         {entry.scope != null && ` · Scope${entry.scope}`}
         {entry.fuel_type && ` · ${entry.fuel_type}`}
       </p>
-      {entry.evidence && <p className="mt-1 text-[11px] text-faint">{entry.evidence}</p>}
+      <EvidenceBlock evidence={entry.evidence} />
+    </div>
+  );
+}
+
+/** 원본 AI 판단 근거와 담당자 조치를 구역을 나눠 보여준다 — 담당자 조치가 더
+ * 눈에 띄도록 강조하고, 원본은 옆에 옅게 둔다(AuditLog.tsx와 동일한 시각 언어). */
+function EvidenceBlock({ evidence }: { evidence: string | null | undefined }) {
+  const { original, action } = splitEvidence(evidence);
+  if (!original && !action) return null;
+
+  return (
+    <div className="mt-1.5 space-y-1">
+      {original && (
+        <div className="rounded border border-line bg-bg px-2 py-1.5">
+          <span className="mr-1.5 text-[10px] font-semibold text-faint">AI 판단 근거</span>
+          <span className="text-[11px] text-muted">{original}</span>
+        </div>
+      )}
+      {action && (
+        <div className="rounded border border-brand/30 bg-brand-soft px-2 py-1.5">
+          <span className="mr-1.5 text-[10px] font-semibold text-brand-ink">담당자 조치</span>
+          <span className="text-[11px] font-medium text-ink">{action}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -79,13 +106,13 @@ export function AuditPackage({ companies }: { companies: Company[] }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const search = async () => {
-    if (companyId === "") return;
+  const search = async (targetCompanyId: number | "" = companyId) => {
+    if (targetCompanyId === "") return;
     setBusy(true);
     setError(null);
     try {
       const res = await apiGet<AuditPackageResponse>(
-        `/admin/audit-package?company_id=${companyId}&year=${year}`,
+        `/admin/audit-package?company_id=${targetCompanyId}&year=${year}`,
       );
       setResult(res);
     } catch (err) {
@@ -97,21 +124,30 @@ export function AuditPackage({ companies }: { companies: Company[] }) {
     }
   };
 
+  const selectAndSearch = (id: number) => {
+    setCompanyId(id);
+    void search(id);
+  };
+
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-md border border-line bg-surface shadow-card">
       <div className="border-b border-line px-6 py-4">
         <h2 className="text-base font-semibold text-ink">감사 대응 근거 패키지</h2>
-        <p className="mt-0.5 text-xs text-faint">
-          기업·연도를 지정하면 판단 근거(trace·분류 evidence·전표)를 시계열로 모아줍니다
-        </p>
         <div className="mt-3 flex flex-wrap items-center gap-2">
+          {companyId !== "" && (
+            <button
+              type="button"
+              onClick={() => {
+                setCompanyId("");
+                setResult(null);
+              }}
+              className="rounded-md border border-line bg-surface px-2.5 py-1.5 text-xs font-medium text-muted transition-colors hover:text-ink"
+            >
+              ← 목록으로
+            </button>
+          )}
           <CompanyCombobox companies={companies} value={companyId} onChange={setCompanyId} />
-          <input
-            type="number"
-            value={year}
-            onChange={(e) => setYear(Number(e.target.value))}
-            className="w-24 rounded-md border border-line bg-surface px-2.5 py-1.5 text-xs text-ink focus:outline-none focus:ring-1 focus:ring-brand"
-          />
+          <YearDropdown value={year} onChange={setYear} />
           <button
             type="button"
             onClick={() => void search()}
@@ -141,9 +177,13 @@ export function AuditPackage({ companies }: { companies: Company[] }) {
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {result === null ? (
+        {companyId === "" ? (
+          <div className="p-5">
+            <CompanyTable companies={companies} onSelect={selectAndSearch} />
+          </div>
+        ) : result === null ? (
           <div className="flex h-40 flex-col items-center justify-center text-sm text-faint">
-            기업·연도를 선택해 조회하세요
+            {busy ? "조회 중…" : "조회 버튼을 눌러 근거를 불러오세요"}
           </div>
         ) : result.entry_count === 0 ? (
           <div className="flex h-40 flex-col items-center justify-center text-sm text-faint">

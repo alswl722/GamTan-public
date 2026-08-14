@@ -52,6 +52,8 @@ export interface CompanyOverview {
   scope1: number;
   scope2: number;
   hitl_count: number;
+  /** 확정은 했지만 아직 "전송" 전인 건수 — 0보다 크면 전송 버튼을 강조 표시. */
+  pending_send_count: number;
   coverage: CoverageInfo;
   alerts: AlertItem[];
 }
@@ -72,6 +74,8 @@ export interface HitlItem {
   source_document_id: number | null;
   /** 기업이 직접 체크한 연료 목록(FUEL_OPTIONS 라벨) — null이면 아직 체크 전이라 필터링하지 않는다. */
   company_fuel_types: string[] | null;
+  /** review_required(검토 대기) | confirmed(검토 완료, 전송 대기) — 확정해도 전송 전까진 큐에 남는다. */
+  status: "review_required" | "confirmed";
 }
 
 /** 담당자 교정 입력 — 분류 필드만. */

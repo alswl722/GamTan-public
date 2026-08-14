@@ -1,7 +1,11 @@
 "use client";
 
-// 실API: GET /admin/hitl → queue
+// 실API: GET /admin/hitl → queue (검토 대기 + 확정·미전송 건)
 // 실API: PATCH /admin/classifications/{id}/confirm | /{id} (수정) | /{id}/reject
+// 실API: POST /admin/companies/{id}/send-classifications
+//
+// 담당자가 확정해도 이 작업대에서 즉시 사라지지 않는다 — "검토 완료" 표시만
+// 남기고, 기업별로 모아 "전송" 버튼을 눌러야 사장님 화면에 실제로 노출된다.
 
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -11,6 +15,7 @@ import {
   documentFileUrl,
   editVoucher,
   rejectVoucher,
+  sendClassificationsToOwner,
 } from "@/lib/admin-data";
 import type { HitlItem } from "@/lib/admin-types";
 import { cn } from "@/lib/utils";
@@ -105,10 +110,10 @@ function ConfidenceBadge({ value }: { value: number }) {
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold",
-        isLow && "bg-hitl/30 text-hitl-ink",
-        isMid && "bg-hitl/15 text-hitl-ink",
-        !isLow && !isMid && "bg-brand-soft text-brand-ink",
+        "inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold",
+        isLow && "border-hitl-ink/30 bg-hitl/30 text-hitl-ink",
+        isMid && "border-hitl-ink/20 bg-hitl/15 text-hitl-ink",
+        !isLow && !isMid && "border-brand-ink/25 bg-brand-soft text-brand-ink",
       )}
     >
       신뢰도 {value.toFixed(2)}
@@ -141,10 +146,12 @@ function MethodBadge({ method }: { method: "rule" | "llm" }) {
 
 interface DetailPaneProps {
   item: HitlItem;
-  onDone: (voucherId: number) => void;
+  /** 확정은 큐에 "검토 완료"로 남기고(mode: "confirm"), 반려는 큐에서 뺀다(mode: "reject"). */
+  onDone: (voucherId: number, mode: "confirm" | "reject") => void;
 }
 
 function DetailPane({ item, onDone }: DetailPaneProps) {
+  const isConfirmed = item.status === "confirmed";
   const [scope, setScope] = useState<string>(
     item.scope !== null ? String(item.scope) : "",
   );
@@ -168,12 +175,12 @@ function DetailPane({ item, onDone }: DetailPaneProps) {
     ? FUEL_OPTIONS.filter((f) => allowedFuels.has(f))
     : FUEL_OPTIONS;
 
-  async function run(action: () => Promise<unknown>) {
+  async function run(action: () => Promise<unknown>, mode: "confirm" | "reject") {
     setBusy(true);
     setError(null);
     try {
       await action();
-      onDone(item.voucher_id);
+      onDone(item.voucher_id, mode);
     } catch (err) {
       // 실패를 무음 처리하지 않는다 — 인라인 에러 + 재시도 가능 상태 유지
       console.error("담당자 조치 실패:", err);
@@ -183,17 +190,19 @@ function DetailPane({ item, onDone }: DetailPaneProps) {
   }
 
   const handleConfirm = () =>
-    run(() =>
-      hasEdits
-        ? editVoucher(item.voucher_id, {
-            scope: scope ? Number(scope) : null,
-            category,
-            fuel_type: fuel,
-          })
-        : confirmVoucher(item.voucher_id),
+    run(
+      () =>
+        hasEdits
+          ? editVoucher(item.voucher_id, {
+              scope: scope ? Number(scope) : null,
+              category,
+              fuel_type: fuel,
+            })
+          : confirmVoucher(item.voucher_id),
+      "confirm",
     );
 
-  const handleReject = () => run(() => rejectVoucher(item.voucher_id));
+  const handleReject = () => run(() => rejectVoucher(item.voucher_id), "reject");
 
   const selectCls =
     "w-full rounded-md border border-line bg-surface px-3 py-2 text-sm text-ink transition-colors focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand";
@@ -244,12 +253,19 @@ function DetailPane({ item, onDone }: DetailPaneProps) {
             </div>
           </section>
 
-          {/* 2. 검토가 필요한 이유 */}
+          {/* 2. 검토가 필요한 이유 / 검토 완료 안내 */}
           <section>
             <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-faint">
-              검토가 필요한 이유
+              {isConfirmed ? "검토 완료 — 전송 대기" : "검토가 필요한 이유"}
             </h4>
-            <div className="space-y-2 rounded-md border border-hitl/60 bg-hitl/10 p-4">
+            <div
+              className={cn(
+                "space-y-2 rounded-md border p-4",
+                isConfirmed
+                  ? "border-brand/40 bg-brand-soft"
+                  : "border-hitl/60 bg-hitl/10",
+              )}
+            >
               <div className="flex items-center gap-2">
                 <ConfidenceBadge value={item.confidence} />
                 <MethodBadge method={item.method} />
@@ -262,15 +278,22 @@ function DetailPane({ item, onDone }: DetailPaneProps) {
               <p className="text-sm leading-relaxed text-ink">
                 {item.evidence ?? "판단 근거 없음"}
               </p>
-              <div className="mt-1 text-xs font-medium text-hitl-ink">
-                {item.confidence < 0.5
-                  ? "→ 담당자 확인 필요: 연료종류 또는 활동 유형 불확실"
-                  : "→ 검토 권장: 경계값 근처의 분류"}
+              <div
+                className={cn(
+                  "mt-1 text-xs font-medium",
+                  isConfirmed ? "text-brand-ink" : "text-hitl-ink",
+                )}
+              >
+                {isConfirmed
+                  ? "→ 담당자가 확정했습니다. 아직 전송 전이라 필요하면 값을 고치거나 반려로 되돌릴 수 있어요. 좌측 상단 \"전송\" 버튼을 눌러야 사장님 화면에 반영됩니다."
+                  : item.confidence < 0.5
+                    ? "→ 담당자 확인 필요: 연료종류 또는 활동 유형 불확실"
+                    : "→ 검토 권장: 경계값 근처의 분류"}
               </div>
             </div>
           </section>
 
-          {/* 3. 분류 (수정 가능) */}
+          {/* 3. 분류 (전송 전까지는 확정 건도 수정 가능) */}
           <section>
             <h4 className="mb-3 text-xs font-semibold uppercase tracking-wider text-faint">
               분류
@@ -335,7 +358,7 @@ function DetailPane({ item, onDone }: DetailPaneProps) {
             </div>
           </section>
 
-          {/* 4. Actions */}
+          {/* 4. Actions — 전송 전까지는 확정 건도 재확정·반려 가능 */}
           <section className="mt-auto border-t border-line pt-4">
             {error && (
               <div className="mb-2 rounded-md bg-hitl/20 px-3 py-2 text-[12px] text-hitl-ink">
@@ -348,7 +371,13 @@ function DetailPane({ item, onDone }: DetailPaneProps) {
                 disabled={busy}
                 className="w-32 rounded-md bg-brand px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-brand-ink disabled:opacity-60"
               >
-                {busy ? "처리 중…" : hasEdits ? "수정 확정" : "확정"}
+                {busy
+                  ? "처리 중…"
+                  : hasEdits
+                    ? "수정 확정"
+                    : isConfirmed
+                      ? "확정됨"
+                      : "확정"}
               </button>
               <button
                 onClick={handleReject}
@@ -387,6 +416,8 @@ interface CompanySummary {
   name: string;
   count: number;
   minConfidence: number;
+  /** 확정됐지만 아직 전송 안 한 건수 — 0보다 크면 "전송" 버튼을 강조. */
+  confirmedCount: number;
 }
 
 function CompanyList({
@@ -441,7 +472,7 @@ function CompanyList({
   }
 
   return (
-    <div className="w-56 flex-shrink-0 overflow-y-auto border-r border-line bg-bg">
+    <div className="w-72 flex-shrink-0 overflow-y-auto border-r border-line bg-bg xl:w-80">
       <div className="flex items-center justify-between border-b border-line px-4 py-3">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-faint">
           기업
@@ -473,6 +504,11 @@ function CompanyList({
             {c.minConfidence < 0.5 && (
               <div className="mt-0.5 text-[10px] font-medium text-hitl-ink">
                 긴급 건 포함
+              </div>
+            )}
+            {c.confirmedCount > 0 && (
+              <div className="mt-0.5 text-[10px] font-medium text-brand-ink">
+                전송 대기 {c.confirmedCount}건
               </div>
             )}
           </div>
@@ -510,6 +546,8 @@ export function HitlWorkspace({
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
+  const [sendBusy, setSendBusy] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
 
   const companies = useMemo<CompanySummary[]>(() => {
     const byCompany = new Map<string, HitlItem[]>();
@@ -523,9 +561,14 @@ export function HitlWorkspace({
         name,
         count: items.length,
         minConfidence: Math.min(...items.map((i) => i.confidence)),
+        confirmedCount: items.filter((i) => i.status === "confirmed").length,
       }))
       .sort((a, b) => a.minConfidence - b.minConfidence);
   }, [queue]);
+
+  const selectedCompanyId = queue.find((i) => i.company_name === selectedCompany)?.company_id ?? null;
+  const selectedCompanyConfirmedCount =
+    companies.find((c) => c.name === selectedCompany)?.confirmedCount ?? 0;
 
   const fuels = useMemo(
     () => [
@@ -608,6 +651,7 @@ export function HitlWorkspace({
 
   async function runBulk(
     action: (ids: number[]) => ReturnType<typeof bulkConfirm>,
+    mode: "confirm" | "reject",
   ) {
     const ids = Array.from(selectedIds);
     if (ids.length === 0) return;
@@ -617,7 +661,9 @@ export function HitlWorkspace({
       const { results } = await action(ids);
       const succeeded = results.filter((r) => r.ok).map((r) => r.voucher_id);
       const failed = results.filter((r) => !r.ok);
-      succeeded.forEach((id) => removeItem(id));
+      // 확정은 큐에 "검토 완료"로 남기고, 반려는 집계 제외 대상이라 큐에서 뺀다.
+      if (mode === "confirm") succeeded.forEach((id) => markConfirmed(id));
+      else succeeded.forEach((id) => removeItem(id));
       setSelectedIds(new Set(failed.map((r) => r.voucher_id)));
       if (failed.length > 0) {
         // 부분 실패를 숨기지 않는다 — 실패 건은 선택 상태로 남겨 재시도할 수 있게 한다
@@ -635,9 +681,20 @@ export function HitlWorkspace({
     }
   }
 
-  const handleBulkConfirm = () => runBulk(bulkConfirm);
-  const handleBulkReject = () => runBulk(bulkReject);
+  const handleBulkConfirm = () => runBulk(bulkConfirm, "confirm");
+  const handleBulkReject = () => runBulk(bulkReject, "reject");
 
+  /** 확정 성공 — 큐에서 빼지 않고 status만 "confirmed"로 바꿔 "검토 완료" 표시만 남긴다. */
+  function markConfirmed(voucherId: number) {
+    onChanged?.();
+    setQueue((prev) =>
+      prev.map((i) =>
+        i.voucher_id === voucherId ? { ...i, status: "confirmed" as const } : i,
+      ),
+    );
+  }
+
+  /** 반려 성공 — 집계 제외 대상이라 큐에서 완전히 뺀다. */
   function removeItem(voucherId: number) {
     onChanged?.();
     setQueue((prev) => {
@@ -655,6 +712,34 @@ export function HitlWorkspace({
       });
       return next;
     });
+  }
+
+  async function handleSendToOwner() {
+    if (selectedCompanyId === null) return;
+    setSendBusy(true);
+    setSendError(null);
+    try {
+      await sendClassificationsToOwner(selectedCompanyId);
+      onChanged?.();
+      // 전송된 건은 이제 검토 작업대에서 완전히 빠진다.
+      setQueue((prev) => {
+        const next = prev.filter(
+          (i) => !(i.company_name === selectedCompany && i.status === "confirmed"),
+        );
+        setSelectedId((cur) => {
+          const stillThere = next.find((i) => i.voucher_id === cur);
+          if (stillThere) return cur;
+          const nextInCompany = next.find((i) => i.company_name === selectedCompany);
+          return nextInCompany?.voucher_id ?? next[0]?.voucher_id ?? null;
+        });
+        return next;
+      });
+    } catch (err) {
+      console.error("전송 실패:", err);
+      setSendError("전송에 실패했습니다. 잠시 후 다시 시도해 주세요.");
+    } finally {
+      setSendBusy(false);
+    }
   }
 
   const selectCls =
@@ -708,6 +793,23 @@ export function HitlWorkspace({
             <option value="month">발행월 순</option>
           </select>
         </div>
+        {selectedCompanyId !== null && selectedCompanyConfirmedCount > 0 && (
+          <div className="flex flex-shrink-0 items-center gap-2">
+            {sendError && (
+              <span className="text-xs text-hitl-ink">{sendError}</span>
+            )}
+            <button
+              type="button"
+              onClick={handleSendToOwner}
+              disabled={sendBusy}
+              className="rounded-md bg-brand px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-brand-ink disabled:opacity-60"
+            >
+              {sendBusy
+                ? "전송 중…"
+                : `${selectedCompany} 전송 (${selectedCompanyConfirmedCount}건)`}
+            </button>
+          </div>
+        )}
       </div>
 
       {selectedIds.size > 0 && (
@@ -819,7 +921,9 @@ export function HitlWorkspace({
                     «
                   </button>
                 </div>
-                {filtered.map((item) => (
+                {filtered.map((item) => {
+                  const isConfirmed = item.status === "confirmed";
+                  return (
                   <div
                     key={item.voucher_id}
                     className={cn(
@@ -831,9 +935,10 @@ export function HitlWorkspace({
                   >
                     <input
                       type="checkbox"
-                      className="mt-1 h-3.5 w-3.5 flex-shrink-0 accent-brand"
+                      className="mt-1 h-3.5 w-3.5 flex-shrink-0 accent-brand disabled:opacity-30"
                       checked={selectedIds.has(item.voucher_id)}
                       onChange={() => toggleSelect(item.voucher_id)}
+                      disabled={isConfirmed}
                       aria-label={`${item.raw} 선택`}
                     />
                     <button
@@ -844,10 +949,17 @@ export function HitlWorkspace({
                       <span className="truncate text-sm font-semibold text-ink">
                         {item.raw}
                       </span>
-                      <ConfidenceBadge value={item.confidence} />
+                      {isConfirmed ? (
+                        <span className="flex-shrink-0 rounded-full border border-brand-ink/25 bg-brand-soft px-2 py-0.5 text-[11px] font-semibold text-brand-ink">
+                          검토 완료
+                        </span>
+                      ) : (
+                        <ConfidenceBadge value={item.confidence} />
+                      )}
                     </button>
                   </div>
-                ))}
+                  );
+                })}
               </>
             )}
           </div>
@@ -859,7 +971,9 @@ export function HitlWorkspace({
               <DetailPane
                 key={selected.voucher_id}
                 item={selected}
-                onDone={removeItem}
+                onDone={(voucherId, mode) =>
+                  mode === "confirm" ? markConfirmed(voucherId) : removeItem(voucherId)
+                }
               />
             </div>
           ) : (

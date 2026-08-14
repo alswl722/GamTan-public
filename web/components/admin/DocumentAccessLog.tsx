@@ -35,10 +35,7 @@ export function DocumentAccessLog({
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-md border border-line bg-surface shadow-card">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-6 py-4">
-        <div>
-          <h2 className="text-base font-semibold text-ink">원본문서 접근 로그</h2>
-          <p className="mt-0.5 text-xs text-faint">담당자가 원본 증빙을 열람한 이력 — 최근 순</p>
-        </div>
+        <h2 className="text-base font-semibold text-ink">원본문서 접근 로그</h2>
         {fixedCompanyId === undefined && (
           <input
             type="text"

@@ -3,6 +3,8 @@
 네트워크 없이 sqlite 로 시드 → 분류 몇 건 직접 심고 집계·큐·담당자 조치를 검증한다.
 담당자 조치(수정/확정/반려)는 라우터를 실제로 통과시켜야 의미가 있으므로 TestClient 사용.
 """
+from datetime import datetime, timezone
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -197,7 +199,7 @@ def test_by_fuel_includes_gap_estimated_bucket_even_without_measured_data(db):
 
 
 def test_hitl_queue_lists_only_review_required(db):
-    """HITL 큐는 review_required 건만, auto/confirmed는 제외."""
+    """HITL 큐는 review_required 건만, auto는 제외(confirmed는 별도 테스트에서 확인)."""
     session, cid = db
     _add(session, cid, 3, "유류대금", scope=1, emission=0.0, status="review_required", conf=0.5)
     _add(session, cid, 4, "도시가스", scope=1, emission=500.0, status="auto")
@@ -209,8 +211,9 @@ def test_hitl_queue_lists_only_review_required(db):
     assert queue[0]["confidence"] == pytest.approx(0.5)
 
 
-def test_confirm_transitions_and_leaves_queue(db):
-    """확정 시 status review_required→confirmed, 큐에서 빠진다."""
+def test_confirm_transitions_but_stays_in_queue_until_sent(db):
+    """확정 시 status review_required→confirmed, 아직 사장님께 전송 전이면 큐에
+    "검토 완료" 상태로 남는다 — 담당자가 기업별 전송 버튼을 눌러야 큐에서 빠진다."""
     session, cid = db
     vid = _add(session, cid, 5, "유류대금", scope=1, emission=0.0,
                status="review_required", conf=0.5)
@@ -220,6 +223,12 @@ def test_confirm_transitions_and_leaves_queue(db):
     obj.status = "confirmed"
     session.commit()
 
+    queue = get_hitl_queue(session)
+    assert len(queue) == 1
+    assert queue[0]["status"] == "confirmed"
+
+    obj.sent_to_owner_at = datetime.now(timezone.utc)
+    session.commit()
     assert get_hitl_queue(session) == []
 
 
@@ -254,15 +263,61 @@ def test_edit_applies_changes_and_audit_log(db, client):
     assert "담당자 수정" in obj.evidence
     assert "경유" not in obj.evidence or "연료" in obj.evidence
     assert "테스트" in obj.evidence          # 원본 근거를 지우지 않는다(감사 추적)
-    assert get_hitl_queue(session) == []     # 큐에서 빠짐
+    # 확정만으론 큐에서 안 빠진다 — "검토 완료" 상태로 남아 전송을 기다린다
+    queue = get_hitl_queue(session)
+    assert len(queue) == 1 and queue[0]["status"] == "confirmed"
 
 
 def test_edit_rejects_already_confirmed(db, client):
-    """검토필요가 아닌 건은 409 — 이중 처리 방지."""
+    """검토필요도 아니고 전송 전 확정 건도 아니면(auto) 409 — 이중 처리 방지."""
     session, cid = db
     vid = _add(session, cid, 7, "도시가스", scope=1, emission=500.0, status="auto")
     res = client.patch(f"/admin/classifications/{vid}", json={"scope": 2})
     assert res.status_code == 409
+
+
+def test_confirmed_but_unsent_item_can_be_re_edited(db, client):
+    """확정은 마감이 아니다 — 전송 전까지는 담당자가 값을 다시 고칠 수 있다."""
+    session, cid = db
+    vid = _add(session, cid, 8, "유류대금", scope=1, emission=0.0,
+               status="review_required", conf=0.5)
+
+    confirm_res = client.patch(f"/admin/classifications/{vid}/confirm")
+    assert confirm_res.status_code == 200
+
+    edit_res = client.patch(f"/admin/classifications/{vid}", json={"scope": 2, "fuel_type": "전기"})
+    assert edit_res.status_code == 200, edit_res.text
+    obj = session.query(Classification).filter_by(voucher_id=vid).one()
+    assert obj.scope == 2 and obj.fuel_type == "전기"
+    assert obj.status == "confirmed"
+
+
+def test_confirmed_but_unsent_item_can_be_rejected(db, client):
+    """확정 후에도 전송 전이면 반려로 되돌릴 수 있다."""
+    session, cid = db
+    vid = _add(session, cid, 9, "유류대금", scope=1, emission=0.0,
+               status="review_required", conf=0.5)
+    client.patch(f"/admin/classifications/{vid}/confirm")
+
+    reject_res = client.patch(f"/admin/classifications/{vid}/reject")
+    assert reject_res.status_code == 200, reject_res.text
+    obj = session.query(Classification).filter_by(voucher_id=vid).one()
+    assert obj.status == "rejected"
+
+
+def test_sent_item_cannot_be_re_edited_or_rejected(db, client):
+    """전송 후에는 담당자가 값을 못 바꾼다 — 사장님이 이미 봤을 수 있는 값이라 잠근다."""
+    session, cid = db
+    vid = _add(session, cid, 10, "유류대금", scope=1, emission=0.0,
+               status="review_required", conf=0.5)
+    client.patch(f"/admin/classifications/{vid}/confirm")
+    client.post(f"/admin/companies/{cid}/send-classifications")
+
+    edit_res = client.patch(f"/admin/classifications/{vid}", json={"scope": 2})
+    assert edit_res.status_code == 409
+
+    reject_res = client.patch(f"/admin/classifications/{vid}/reject")
+    assert reject_res.status_code == 409
 
 
 def test_reject_excludes_from_aggregation(db, client):
@@ -285,8 +340,8 @@ def test_reject_excludes_from_aggregation(db, client):
 
 
 # ── 일괄 처리·감사 로그 (bulk-confirm/bulk-reject/review-log) ───────────────────
-def test_bulk_confirm_transitions_all_and_leaves_queue(db, client):
-    """일괄 확정 — 대상 전 건이 confirmed로 바뀌고 큐에서 빠진다."""
+def test_bulk_confirm_transitions_all_and_stays_in_queue_until_sent(db, client):
+    """일괄 확정 — 대상 전 건이 confirmed로 바뀌지만, 전송 전이라 큐에는 남는다."""
     session, cid = db
     v1 = _add(session, cid, 1, "유류대금", scope=1, emission=0.0,
               status="review_required", conf=0.5)
@@ -302,7 +357,9 @@ def test_bulk_confirm_transitions_all_and_leaves_queue(db, client):
         obj = session.query(Classification).filter_by(voucher_id=vid).one()
         assert obj.status == "confirmed"
         assert "담당자 일괄 확정" in obj.evidence
-    assert get_hitl_queue(session) == []
+    queue = get_hitl_queue(session)
+    assert len(queue) == 2
+    assert all(item["status"] == "confirmed" for item in queue)
 
 
 def test_bulk_reject_excludes_from_aggregation(db, client):

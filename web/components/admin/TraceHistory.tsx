@@ -209,10 +209,7 @@ export function TraceHistory({ runs }: { runs: TraceRunItem[] }) {
     <>
       <div className="flex h-full flex-col overflow-hidden rounded-md border border-line bg-surface shadow-card">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-6 py-4">
-          <div>
-            <h2 className="text-base font-semibold text-ink">트레이스 실행 이력</h2>
-            <p className="mt-0.5 text-xs text-faint">에이전트 실행 기록 — 행 클릭 시 단계 드릴다운</p>
-          </div>
+          <h2 className="text-base font-semibold text-ink">트레이스 실행 이력</h2>
           <div className="flex flex-wrap items-center gap-2">
             <div className="flex items-center gap-0.5 rounded-md border border-line bg-bg p-0.5">
               {PRESETS.map((p) => (

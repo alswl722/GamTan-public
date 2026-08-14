@@ -15,10 +15,7 @@ export function AlertsPanel({ alerts }: { alerts: AlertItem[] }) {
   return (
     <div className="flex h-full flex-col rounded-md border border-line bg-surface shadow-card">
       <div className="flex items-center justify-between border-b border-line px-5 py-4">
-        <div>
-          <h2 className="text-sm font-semibold text-ink">이상 신호 알림</h2>
-          <p className="mt-0.5 text-xs text-faint">여신 리스크 조기 경보</p>
-        </div>
+        <h2 className="text-sm font-semibold text-ink">이상 신호 알림</h2>
         <span className="rounded-full border border-line bg-bg px-2 py-1 text-[11px] font-semibold text-muted">
           {alerts.length}건
         </span>

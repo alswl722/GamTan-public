@@ -14,14 +14,19 @@ import { gradeColor } from "@/lib/grade-colors";
 import { AlertsPanel } from "@/components/admin/AlertsPanel";
 import { AuditLog } from "@/components/admin/AuditLog";
 import { CompanyCombobox } from "@/components/admin/CompanyCombobox";
+import { CompanyTable } from "@/components/admin/CompanyTable";
 import { DocumentAccessLog } from "@/components/admin/DocumentAccessLog";
 import { TraceHistory } from "@/components/admin/TraceHistory";
 
+// 확정→사장님 전송은 담당자가 실제 검토 작업을 하는 "검토" 탭(HitlWorkspace)에서만
+// 가능하다 — 이 탭은 현황을 훑어보는 곳이라 읽기 전용으로 "확정·전송 대기 N건"만
+// 보여주고, 전송 버튼은 두지 않는다.
 function OverviewCard({ overview }: { overview: CompanyOverview }) {
   const gapCount = overview.coverage.gaps.length;
+  const pendingSend = overview.pending_send_count;
 
   return (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-5">
       <div className="rounded-md border border-line bg-surface p-4">
         <p className="text-[11px] text-faint">PCAF 등급</p>
         <div className="mt-1.5 flex items-center gap-2">
@@ -39,7 +44,8 @@ function OverviewCard({ overview }: { overview: CompanyOverview }) {
       <div className="rounded-md border border-line bg-surface p-4">
         <p className="text-[11px] text-faint">Scope1 / Scope2</p>
         <p className="mt-1.5 text-sm font-semibold text-ink">
-          {overview.scope1.toLocaleString()} / {overview.scope2.toLocaleString()} tCO2e
+          {overview.scope1.toLocaleString()} /{" "}
+          {overview.scope2.toLocaleString()} tCO2e
         </p>
       </div>
       <div className="rounded-md border border-line bg-surface p-4">
@@ -55,7 +61,21 @@ function OverviewCard({ overview }: { overview: CompanyOverview }) {
       <div className="rounded-md border border-line bg-surface p-4">
         <p className="text-[11px] text-faint">데이터 결손</p>
         <p className="mt-1.5 text-sm font-semibold text-ink">
-          {gapCount > 0 ? <span className="text-hitl-ink">{gapCount}개 연료</span> : "없음"}
+          {gapCount > 0 ? (
+            <span className="text-hitl-ink">{gapCount}개 연료</span>
+          ) : (
+            "없음"
+          )}
+        </p>
+      </div>
+      <div className="rounded-md border border-line bg-surface p-4">
+        <p className="text-[11px] text-faint">확정·전송 대기</p>
+        <p className="mt-1.5 text-sm font-semibold text-ink">
+          {pendingSend > 0 ? (
+            <span className="text-brand-ink">{pendingSend}건</span>
+          ) : (
+            "없음"
+          )}
         </p>
       </div>
     </div>
@@ -66,9 +86,13 @@ function CoverageGaps({ overview }: { overview: CompanyOverview }) {
   const { gaps } = overview.coverage;
   return (
     <div className="rounded-md border border-line bg-surface p-4">
-      <h3 className="text-xs font-semibold text-ink">데이터 결손 — 연료별 미연동 월</h3>
+      <h3 className="text-xs font-semibold text-ink">
+        데이터 결손 — 연료별 미연동 월
+      </h3>
       {gaps.length === 0 ? (
-        <p className="mt-2 text-xs text-faint">결손 없음 — 전 연료 12개월 데이터 확보</p>
+        <p className="mt-2 text-xs text-faint">
+          결손 없음 — 전 연료 12개월 데이터 확보
+        </p>
       ) : (
         <div className="mt-2 space-y-1.5">
           {gaps.map((g) => (
@@ -122,19 +146,26 @@ export function CompanyDetail({
     <div className="flex h-full flex-col overflow-hidden">
       <div className="flex-shrink-0 border-b border-line bg-surface px-6 py-4">
         <div className="flex items-center gap-2">
-          <h2 className="text-base font-semibold text-ink">기업 상세</h2>
-          <CompanyCombobox companies={companies} value={companyId} onChange={setCompanyId} />
+          {companyId !== "" && (
+            <button
+              type="button"
+              onClick={() => setCompanyId("")}
+              className="rounded-md border border-line bg-surface px-2.5 py-1.5 text-xs font-medium text-muted transition-colors hover:text-ink"
+            >
+              ← 목록으로
+            </button>
+          )}
+          <CompanyCombobox
+            companies={companies}
+            value={companyId}
+            onChange={setCompanyId}
+          />
         </div>
-        <p className="mt-1 text-xs text-faint">
-          기업을 선택하면 등급·결손·검토 대기·알림·실행 이력·변경 이력을 한 화면에서 볼 수 있습니다
-        </p>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-5">
         {companyId === "" ? (
-          <div className="flex h-40 flex-col items-center justify-center text-sm text-faint">
-            기업을 선택하세요
-          </div>
+          <CompanyTable companies={companies} onSelect={setCompanyId} />
         ) : error ? (
           <div className="flex h-40 flex-col items-center justify-center gap-2 text-sm text-faint">
             <span className="text-hitl-ink">{error}</span>
