@@ -184,6 +184,8 @@ def owner_quality_report(
                 "name": company.name,
                 "industry_name": company.industry_name,
                 "region": company.region,
+                "employee_count": company.employee_count,
+                "revenue_krw": float(company.revenue_krw) if company.revenue_krw is not None else None,
             },
             "reporting_year": reporting_year,
             "generated_at": date.today().isoformat(),

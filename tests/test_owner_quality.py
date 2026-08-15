@@ -40,7 +40,7 @@ def db(tmp_path):
         seed_industry_distributions(session)
         company = Company(
             name="○○정밀", industry_code="C251", industry_name="구조용 금속제품 제조",
-            employee_count=12,
+            employee_count=12, revenue_krw=2_500_000_000,
         )
         session.add(company)
         session.commit()
@@ -319,3 +319,5 @@ def test_quality_report_pdf_returns_valid_pdf_bytes(api_client):
     assert "도시가스" in text
     assert "2등급" in text  # 12개월 전부 실측 → energy_consumption(2등급)
     assert "Scope 3" in text  # 산정 범위에서 제외된다는 안내 문구
+    assert "12명" in text  # employee_count — 환경부 별지 제11호 서식의 상시종업원수 항목 참고
+    assert "2,500백만원" in text  # revenue_krw — 같은 서식의 매출액(백만원) 항목 참고
