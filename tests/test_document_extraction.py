@@ -155,6 +155,32 @@ def test_no_text_layer_falls_back_to_vision(monkeypatch):
     assert result["year"] == 2025
 
 
+def test_field_parse_failure_on_recognized_title_falls_back_to_vision(monkeypatch):
+    """제목은 알아봤지만(예: "전자세금계산서") 필드 레이아웃이 이 프로젝트 정규식
+    전제와 달라 못 찾으면(작성일자 없음) 비전으로 재시도한다 — 실제 홈택스/한전
+    PDF는 제목은 같아도 필드 서식이 다를 수 있어, 텍스트 파싱 실패가 곧 "이 문서는
+    못 읽는다"는 뜻이 아니다(2026-08-15, 슬롯 불일치와 구분해 폴백 대상으로 바꿈)."""
+    import db.document_extraction as document_extraction
+
+    monkeypatch.setattr(
+        document_extraction, "extract_via_vision",
+        lambda file_bytes, document_type: {
+            "supplier_name": "구미석유", "item_description": "경유",
+            "supply_amount_krw": 420_000, "year": 2025, "month": 7,
+        },
+    )
+    # "작성일자:" 라벨이 없어 _parse_tax_invoice의 정규식이 못 찾는다(필드 파싱 실패,
+    # 슬롯 불일치 아님).
+    pdf = _minimal_pdf([
+        "전자세금계산서",
+        "발행일: 2025-07-10",
+        "공급자: 구미석유",
+        "경유 L 300L 1,400 420,000",
+    ])
+    result = extract_document(pdf, "tax_invoice")
+    assert result["supplier_name"] == "구미석유"
+
+
 def test_vision_fallback_failure_propagates():
     """비전 폴백까지 실패하면(monkeypatch 없이 실제 _detect_mime_type이 못 알아보는
     바이트) 값을 지어내지 않고 DocumentParseError 그대로 던진다."""

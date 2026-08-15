@@ -2,9 +2,12 @@
 
 `scripts/generate_upload_docs.py`가 만드는 문서는 스캔 이미지가 아니라 reportlab로
 그린 텍스트 레이어 PDF다 — 그래서 OCR·비전 모델 없이 `pdfplumber`로 전체 내용이
-그대로 읽힌다. (실 서비스에서 사장님이 사진으로 찍어 올리는 경우는 별개 — 그건
-진짜 스캔 이미지라 여기 범위 밖이고, 그때 가서 이 모듈의 `extract_pdf_text()`
-내부만 실 OCR/비전 호출로 교체하면 된다.)
+그대로 읽힌다. 실 서비스에서 사장님이 올리는 진짜 문서는 이 전제를 안 따른다
+(사진·스캔본은 텍스트 레이어 자체가 없고, 진짜 홈택스/한전 PDF는 텍스트 레이어가
+있어도 이 모듈이 기대하는 정확한 필드 레이아웃과 다를 수 있다) — 그래서 이 모듈이
+파싱에 실패해도 db/document_extraction.py가 Gemini 비전으로 재시도한다(단,
+DocumentTypeMismatchError는 예외 — 문서 자체는 제대로 판별됐으니 비전으로 재시도해도
+결론이 안 바뀐다).
 
 파싱 실패(PDF가 아님·형식이 다름·"판독 불가" 표시)는 값을 지어내지 않고
 `DocumentParseError`로 명확히 실패한다(실패 가시성 원칙, CLAUDE.md §6).
@@ -33,6 +36,16 @@ class DocumentParseError(ValueError):
     """PDF에서 필요한 정보를 읽어내지 못했을 때 — 값을 지어내지 않고 여기서 멈춘다."""
 
 
+class DocumentTypeMismatchError(DocumentParseError):
+    """호출자가 지정한 슬롯과 실제 문서종류가 다를 때만 쓰는 서브클래스 — 문서
+    자체는 정상적으로 판별됐으니 비전으로 재시도해도 결론이 안 바뀐다(db/
+    document_extraction.py가 이 서브클래스만 폴백 없이 즉시 실패시킨다). 그 외
+    필드 파싱 실패(날짜·금액 못 찾음 등)는 그냥 DocumentParseError로 던져 비전
+    폴백 대상이 되게 한다 — "정규식이 기대하는 레이아웃과 실제 문서가 다름"은
+    이 프로젝트 합성 데이터 전제(reportlab 텍스트 PDF)에서만 유효한 가정이라,
+    실제 사용자가 올리는 진짜 문서에서는 비전이 성공할 수 있다(2026-08-15)."""
+
+
 def extract_pdf_text(file_bytes: bytes) -> str | None:
     """PDF가 아니거나 텍스트 레이어가 없으면 None(실 사진·스캔본 등 — OCR 미도입 영역).
     호출부가 이 None을 어떻게 다룰지(합성 폴백 vs 실패) 결정한다."""
@@ -50,8 +63,10 @@ def detect_document_type(text: str) -> DocumentType | None:
     """첫 줄 제목으로 문서종류 판별 — 못 알아보면 None.
 
     db/document_extraction.py가 이 함수로 먼저 "아예 모르는 서식인지"를 갈라
-    비전 폴백 여부를 정한다(모르는 서식만 비전 재시도, 아는 서식인데 슬롯이
-    틀린 경우는 비전으로 재시도해도 답이 안 바뀌므로 그대로 실패시킴).
+    첫 시도 경로(정규식 파싱 vs 즉시 비전)를 정한다. 슬롯이 지정됐는데 실제
+    종류가 다르면(DocumentTypeMismatchError) 비전으로 재시도해도 결론이 안
+    바뀌므로 그대로 실패시키지만, 그 외 필드 파싱 실패는 비전으로 재시도한다
+    (실제 문서가 이 모듈의 정규식 전제와 다를 수 있어서 — 파일 상단 주석 참고).
     """
     stripped = text.strip()
     if not stripped:
@@ -95,7 +110,7 @@ def parse_document_text(text: str, expected_document_type: DocumentType | None =
     if detected is None:
         raise DocumentParseError("인식할 수 없는 문서 형식이에요")
     if expected_document_type is not None and detected != expected_document_type:
-        raise DocumentParseError(
+        raise DocumentTypeMismatchError(
             f"업로드하신 파일은 {DOCUMENT_TYPE_LABEL[detected]}로 보여요 — "
             f"{DOCUMENT_TYPE_LABEL[expected_document_type]} 칸에 다시 올려 주세요"
         )
