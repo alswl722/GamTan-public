@@ -183,9 +183,9 @@ def test_excel_mode_rejected_for_non_tax_invoice(db, client):
 
 
 def test_ocr_non_pdf_returns_422(db, client):
-    """PDF도 아니고 알려진 이미지 포맷(JPEG/PNG)도 아닌 바이트는 비전 폴백의
-    마임타입 판별 단계에서 곧장 실패한다(네트워크 호출 자체가 안 감) — 합성값으로
-    가리지 않고 422로 명확히 실패한다(실패 가시성 원칙, 합성 mock 폴백 없음)."""
+    """PDF도 아니고 알려진 이미지 포맷(JPEG/PNG/WEBP/HEIC)도 아닌 바이트는 OCR
+    래스터화 단계에서 곧장 실패한다(모델 호출 자체가 안 감) — 합성값으로 가리지
+    않고 422로 명확히 실패한다(실패 가시성 원칙, 합성 mock 폴백 없음)."""
     _, company_id = db
     res = client.post(
         f"/owner/{company_id}/documents/upload",
@@ -195,17 +195,17 @@ def test_ocr_non_pdf_returns_422(db, client):
     assert res.status_code == 422
 
 
-def test_ocr_pdf_with_unrecognized_format_and_failed_vision_returns_422(db, client, monkeypatch):
-    """PDF는 맞지만 알려진 서식이 아니면(제목 줄 불일치 등) 비전 폴백을 타는데,
+def test_ocr_pdf_with_unrecognized_format_and_failed_ocr_returns_422(db, client, monkeypatch):
+    """PDF는 맞지만 알려진 서식이 아니면(제목 줄 불일치 등) OCR 폴백을 타는데,
     그마저 실패하면 값을 지어내지 않고 422로 실패한다 — 예전엔 year/month가
-    있으면 합성값으로 통과했었다. 비전 호출은 monkeypatch로 대체해 실 네트워크를 안 쓴다."""
+    있으면 합성값으로 통과했었다. OCR 호출은 monkeypatch로 대체해 실 모델 로딩을 안 쓴다."""
     import db.document_extraction as document_extraction
     from db.document_text_extractor import DocumentParseError
 
-    def _vision_fails(file_bytes, document_type):
+    def _ocr_fails(file_bytes):
         raise DocumentParseError("문서를 정확히 읽지 못했어요 — 더 선명한 사진으로 다시 올려 주세요")
 
-    monkeypatch.setattr(document_extraction, "extract_via_vision", _vision_fails)
+    monkeypatch.setattr(document_extraction, "ocr_extract", _ocr_fails)
 
     _, company_id = db
     res = client.post(
@@ -216,20 +216,24 @@ def test_ocr_pdf_with_unrecognized_format_and_failed_vision_returns_422(db, clie
     assert res.status_code == 422
 
 
-def test_ocr_image_upload_succeeds_via_vision_fallback(db, client, monkeypatch):
-    """이미지(JPG/PNG) 업로드는 텍스트 레이어가 없어 곧장 비전 폴백을 탄다 —
-    프론트가 이미 `accept="image/*,.pdf"`로 사진 업로드를 받고 있던 것과 백엔드가
-    이제 맞아떨어진다. 실 네트워크 없이 비전 호출만 monkeypatch로 성공 응답 고정."""
+def test_ocr_image_upload_succeeds_via_ocr_fallback(db, client, monkeypatch):
+    """이미지(JPG/PNG) 업로드는 텍스트 레이어가 없어 곧장 OCR(PaddleOCR, 100% 로컬)
+    폴백을 탄다 — 프론트가 이미 `accept="image/*,.pdf"`로 사진 업로드를 받고 있던
+    것과 백엔드가 이제 맞아떨어진다. 실 모델 로딩 없이 OCR 재구성 텍스트만
+    monkeypatch로 고정하고, 구조화(정규식 파싱)는 실제 경로를 그대로 탄다."""
     import db.document_extraction as document_extraction
+    from db.document_ocr_extractor import OcrResult
 
     monkeypatch.setattr(
-        document_extraction, "extract_via_vision",
-        lambda file_bytes, document_type: {
-            "supplier_name": "한국전력공사", "item_description": "전기요금 (산업용 을)",
-            "supply_amount_krw": 987_654, "year": 2025, "month": 6,
-            "quantity": 1234, "quantity_unit": "kWh",
-            "document_type": "electric_bill",
-        },
+        document_extraction, "ocr_extract",
+        lambda file_bytes: OcrResult(
+            text=(
+                "전기요금 고지서\n청구월: 2025-06\n"
+                "사용량(kWh) 1,234\n청구금액(원) 987,654"
+            ),
+            rows=[],
+            confidence=0.93,
+        ),
     )
 
     _, company_id = db

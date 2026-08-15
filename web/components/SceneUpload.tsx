@@ -345,7 +345,7 @@ export function SceneUpload({
               사진·PDF 여러 장 한 번에 올리기
               <input
                 type="file"
-                accept="image/*,.pdf"
+                accept="image/*,.pdf,.html,.htm,.mhtml"
                 multiple
                 className="hidden"
                 onChange={(e) => {

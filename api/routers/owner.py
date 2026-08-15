@@ -170,7 +170,7 @@ async def upload_document(
     except DocumentParseError as e:
         # 문서에서 날짜·금액을 못 읽었거나(화질 불량 등) 엉뚱한 칸에 업로드된 경우 —
         # 같은 실패 가시성 원칙, 값을 지어내지 않고 사유를 그대로 보여준다.
-        # VisionExtractionError(Gemini 호출 자체 실패)도 이 서브클래스라 여기서
+        # OcrEngineError(PaddleOCR 엔진 자체 실패)도 이 서브클래스라 여기서
         # 같이 잡힌다 — 원인 구분은 detail 텍스트로 충분해 failure_reason은 공유한다.
         record_ingestion_failure(
             session, company_id, document_type=document_type, original_filename=filename,

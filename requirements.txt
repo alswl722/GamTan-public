@@ -11,3 +11,8 @@ pytest
 alembic
 pdfplumber
 reportlab
+paddlepaddle
+paddleocr
+pymupdf
+pillow-heif
+beautifulsoup4

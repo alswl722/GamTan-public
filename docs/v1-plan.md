@@ -282,6 +282,61 @@ alembic upgrade head                  # 빈 DB에서 마이그레이션 성공 �
   인식, 저품질 스캔·중복 업로드 실패 메시지 정상 노출).
 - PR: https://github.com/noeyish/GamTan/pull/34 (`feat/upload-real-pdf-extraction` → `dev`, **병합 완료**)
 
+### 5-4. OCR 엔진을 Gemini 비전에서 PaddleOCR 100% 로컬 처리로 전환 (2026-08-15)
+
+§5-3의 Gemini 멀티모달 비전 폴백(`db/document_vision_extractor.py`)을 실사용 대비
+"제대로 된 OCR"로 확장하는 과정에서, 외부 클라우드 API 의존을 없애고 완전히
+로컬에서 처리하는 쪽으로 방향을 바꿨다(공모전 방어 논리 — "환각이 개입할 경로
+자체가 없다"를 OCR 단계까지 확장). 사진·스캔본·HTML 이메일 등 실제 사용자가 올릴
+수 있는 입력 형태를 폭넓게 검증하는 것이 이번 작업의 본 목적이었고, 엔진 교체는
+그 안에서 내려진 결정이다.
+
+- `db/document_ocr_extractor.py` 신규: PaddleOCR(`lang="korean"`) 기반. 역할은
+  "픽셀→글자"까지만 — 구조화는 여전히 `db/document_text_extractor.py`의 정규식이
+  담당(CLAUDE.md 원칙1과 같은 결). JPEG/PNG/WEBP/HEIC 사진과 스캔 PDF(`PyMuPDF`
+  래스터화)를 지원. **실측 스파이크로 확인한 두 가지**: ① 같은 한국어 텍스트도
+  라벨과 값이 별도 OCR 박스로 갈리거나 붙어버릴 수 있어 정규식에 공백 관용도가
+  필요했다(예: "청구월:" → "청구월 :"도 허용). ② 세금계산서 품목 표는 한 줄
+  문자열로 합치면 컬럼이 어긋나 실패하기 쉬워, y좌표 행 클러스터링 + 헤더 행
+  x좌표 기준 컬럼 매칭(`parse_tax_invoice_table_rows`)을 별도로 만들었다 —
+  여전히 좌표 기반 규칙일 뿐 LLM 아님.
+- `db/document_html_extractor.py` 신규: 세금계산서 발행 이메일(HTML) 텍스트 추출 —
+  beautifulsoup4로 태그 제거 후 같은 정규식 파서 재사용.
+- `db/document_text_extractor.py`: 다중 페이지 PDF 읽기, 제목 탐지를 첫 줄 정확히
+  일치에서 앞 5줄 이내 포함으로 완화, 날짜 구분자·콜론 공백 관용도 확장. 관리비
+  고지서(전기료가 안분돼 포함된 문서, 자체로는 부가세 공제 증빙이 안 됨 — 실사용
+  자료 근거) 규칙 기반 인식 추가: electric_bill로 추출하되
+  `verification_status="mgmt_fee_estimate"`로 낮은 신뢰도 표기 + 재발행 요청 안내
+  (결손 월 업종평균 임시보정, §5-2와 같은 결 — 은행 담당자 HITL 큐엔 안 넣음,
+  담당자가 대신 할 조치가 없어서).
+- `db/document_extraction.py`: 텍스트 레이어/HTML → OCR → (세금계산서만) 표 매칭
+  재시도 3단계로 재작성. `db/document_vision_extractor.py`와 관련 테스트 삭제.
+- `db/models.py` + `alembic/versions/0021_source_document_extraction_method.py`:
+  `source_documents.extraction_method`(text_layer|html_text|ocr)·
+  `extraction_confidence` 추가 — 어느 경로로 읽혔는지 감사 가능하게(CLAUDE.md
+  원칙5). 공유 Supabase DB에 적용 완료.
+- `requirements.txt`/`docker/api.Dockerfile`: `paddlepaddle`·`paddleocr`·`pymupdf`·
+  `pillow-heif`·`beautifulsoup4` 추가, OpenCV 계열 시스템 라이브러리 설치, 모델
+  가중치는 빌드 시점에 다운로드해 이미지에 굽는다(런타임 네트워크 의존 제거).
+  ⚠️ 로컬 개발 `.venv`가 Python 3.14인데 paddlepaddle은 아직 3.14 wheel이 없음 —
+  Docker(3.12-slim)에서는 정상 설치·동작 확인, 로컬에서 OCR을 직접 돌려보려면
+  3.12 가상환경이 별도로 필요하다.
+- `web/components/SceneUpload.tsx`, `web/app/owner/uploads/page.tsx`: 업로드
+  input `accept`에 `.html,.htm,.mhtml` 추가(엑셀 전용 input은 그대로).
+- 테스트: `test_document_ocr_extractor.py`·`test_document_html_extractor.py` 신규,
+  `test_document_text_extractor.py`·`test_document_extraction.py`·
+  `test_document_ingestion.py`·`test_owner_document_upload.py` 갱신
+  (`test_document_vision_extractor.py`는 삭제). PaddleOCR 실제 모델 호출은 전부
+  스텁 처리(무거운 모델 로딩을 CI에 강제하지 않음) — 전체 `pytest` 324 passed.
+- **Docker e2e 실측으로 발견한 버그**: 실제 컨테이너에 합성 이미지 3종(전기고지서·
+  세금계산서 표·관리비고지서)을 업로드해봤더니 관리비고지서 사진만 재현 가능하게
+  실패했다 — PaddleOCR의 줄 단위 180도 회전 판별(`use_textline_orientation`)이
+  똑바로 찍힌 멀쩡한 문서를 뒤집힌 걸로 오판해 글자를 깨뜨림. 단위테스트(스텁 기반)
+  로는 못 잡는 종류의 버그로, 실 모델 호출까지 가는 e2e 검증이 아니었으면 발견하지
+  못했을 것 — `_get_ocr_engine()`에서 `use_textline_orientation=False`로 고정,
+  회귀 테스트(`test_get_ocr_engine_disables_textline_orientation`) 추가.
+- 브랜치: `fix/ocr-fallback-real-documents` (PR 아직 없음, 작업 중)
+
 ---
 
 ## 6. 2주차 — K택소노미·설비투자 + 관리자 플로우
@@ -648,6 +703,7 @@ ELSE: 귀속계수 = 대출잔액 / 분모, 금융배출량 = 귀속계수 × �
 | Tier 1 | `borrower_emission_inventories` 연간 Scope 배출량 집계 | B | #32 | §6-3. 1주차 완료조건에서 이월됐던 항목 |
 | Tier 1 | 사장님 앱 홈 화면 + 기업 선택기 + 마이데이터 CSV 실연동 | A | #33 | — |
 | Tier 1 | 실제 PDF 텍스트 추출로 OCR mock 교체 | A | #34 | §5-3. pdfplumber 도입, 사장님 업로드 시 월 자동 인식 |
+| Tier 1 | OCR 엔진을 Gemini 비전에서 PaddleOCR 100% 로컬로 전환 + HTML/HEIC/관리비고지서 지원 | — | 진행중 | §5-4. `fix/ocr-fallback-real-documents`, PR 아직 없음 |
 | 부수 | pre-existing 테스트 실패 3건 정리 (룰 매칭 카운트, I050 중복 케이스, 마이그레이션 백필 누락) | B | #30 | §6-2 |
 | 부수 | owner "우대금리 안내 요청" 버튼 실데이터 연동 | B | #31 | §6-4. 2주차 B 잔여 UI |
 | 부수 | Docker 이미지 경량화 (api 412MB→395MB, 캐시 재빌드 대폭 단축) | B | #28에 포함 | §6-1 병행 처리 |

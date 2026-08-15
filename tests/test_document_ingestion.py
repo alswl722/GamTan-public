@@ -210,3 +210,65 @@ def test_institution_attribution_is_filled_when_backfilled(db_with_institution):
 
     doc = session.execute(select(SourceDocument)).scalars().first()
     assert doc.financial_institution_id == inst_id
+
+
+# ── extraction_method/extraction_confidence 영속화 (0021) ────────────────────
+
+def test_text_layer_upload_records_extraction_method(db_with_institution):
+    session, company_id, _inst_id, _ib_id = db_with_institution
+    ingest_uploaded_document(
+        session, company_id, _electric_bill_pdf(), "고지서.pdf", "electric_bill", mode="ocr",
+    )
+    doc = session.execute(select(SourceDocument)).scalars().first()
+    assert doc.extraction_method == "text_layer"
+    assert doc.extraction_confidence is None
+
+
+def test_ocr_fallback_upload_records_method_and_confidence(db_with_institution, monkeypatch):
+    import db.document_extraction as document_extraction
+    from db.document_ocr_extractor import OcrResult
+
+    monkeypatch.setattr(
+        document_extraction, "ocr_extract",
+        lambda file_bytes: OcrResult(
+            text="전기요금 고지서\n청구월: 2025-06\n사용량(kWh) 1,234\n청구금액(원) 987,654",
+            rows=[],
+            confidence=0.87,
+        ),
+    )
+    session, company_id, _inst_id, _ib_id = db_with_institution
+    ingest_uploaded_document(
+        session, company_id, b"fake jpeg bytes not a real pdf", "사진.jpg",
+        "electric_bill", mode="ocr",
+    )
+    doc = session.execute(select(SourceDocument)).scalars().first()
+    assert doc.extraction_method == "ocr"
+    assert doc.extraction_confidence == pytest.approx(0.87)
+
+
+def test_management_fee_bill_upload_flags_low_quality_and_returns_guidance(
+    db_with_institution, monkeypatch
+):
+    """관리비 고지서에서 뽑은 전기료는 1차 계량 데이터가 아니라 verification_status를
+    낮게 잡고, 사장님에게 재발행 요청을 안내하는 메시지를 응답에 실어 보낸다
+    (db/document_text_extractor.py::parse_management_fee_bill)."""
+    import db.document_extraction as document_extraction
+    from db.document_ocr_extractor import OcrResult
+
+    monkeypatch.setattr(
+        document_extraction, "ocr_extract",
+        lambda file_bytes: OcrResult(
+            text="○○빌딩 관리비 고지서\n부과월: 2025-06\n전기료 187,000원",
+            rows=[],
+            confidence=0.85,
+        ),
+    )
+    session, company_id, _inst_id, _ib_id = db_with_institution
+    result = ingest_uploaded_document(
+        session, company_id, b"fake jpeg bytes", "관리비.jpg", "electric_bill", mode="ocr",
+    )
+    assert "guidance_message" in result and "재발행" in result["guidance_message"]
+
+    doc = session.execute(select(SourceDocument)).scalars().first()
+    assert doc.verification_status == "mgmt_fee_estimate"
+    assert doc.document_type == "electric_bill"

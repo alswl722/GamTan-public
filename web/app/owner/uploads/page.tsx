@@ -310,7 +310,7 @@ function OwnerUploadsPageContent() {
           <input
             ref={autoFileInputRef}
             type="file"
-            accept="image/*,.pdf"
+            accept="image/*,.pdf,.html,.htm,.mhtml"
             className="hidden"
             disabled={autoUploading}
             onChange={(e) => {
@@ -452,7 +452,7 @@ function OwnerUploadsPageContent() {
                       <input
                         ref={fileInputRef}
                         type="file"
-                        accept="image/*,.pdf"
+                        accept="image/*,.pdf,.html,.htm,.mhtml"
                         className="hidden"
                         disabled={uploading}
                         onChange={(e) => {

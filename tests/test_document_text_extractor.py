@@ -9,8 +9,10 @@ from reportlab.pdfgen import canvas
 
 from db.document_text_extractor import (
     DocumentParseError,
+    DocumentTypeMismatchError,
     extract_pdf_text,
     parse_document_text,
+    parse_tax_invoice_table_rows,
 )
 
 pdfmetrics.registerFont(UnicodeCIDFont("HYGothic-Medium"))
@@ -149,3 +151,176 @@ def test_unrecognized_document_raises():
     text = extract_pdf_text(_pdf(["아무 문서", "관련 없는 내용"]))
     with pytest.raises(DocumentParseError):
         parse_document_text(text, "electric_bill")
+
+
+# ── 실측 스파이크로 확인된 OCR 편차 강건화 ─────────────────────────────────────
+
+def test_extract_pdf_text_reads_all_pages():
+    """1페이지만 읽던 것을 전체 페이지로 확장 — 필드가 2페이지에 있어도 놓치지 않는다."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf)
+    c.setFont("HYGothic-Medium", 11)
+    c.drawString(50, 700, "전기요금 고지서")
+    c.drawString(50, 680, "청구월: 2025-06 계약종별: 산업용(을) 고압A")
+    c.showPage()
+    c.setFont("HYGothic-Medium", 11)
+    c.drawString(50, 700, "사용량(kWh) 1,234")
+    c.drawString(50, 680, "청구금액(원) 987,654")
+    c.save()
+
+    text = extract_pdf_text(buf.getvalue())
+    result = parse_document_text(text, "electric_bill")
+    assert result["year"] == 2025 and result["month"] == 6
+    assert result["supply_amount_krw"] == 987_654
+
+
+def test_detect_document_type_tolerates_title_not_on_first_line():
+    """실제 문서는 로고·페이지번호 등이 제목보다 앞에 올 수 있다 — 첫 줄 정확히
+    일치가 아니라 앞 5줄 안에서 찾는다."""
+    text = extract_pdf_text(_pdf([
+        "(주)테스트유틸리티",
+        "전기요금 고지서",
+        "청구월: 2025-06 계약종별: 산업용(을) 고압A",
+        "사용량(kWh) 1,234",
+        "청구금액(원) 987,654",
+    ]))
+    result = parse_document_text(text, "electric_bill")
+    assert result["year"] == 2025 and result["month"] == 6
+
+
+def test_electric_bill_tolerates_space_before_colon():
+    """실측 스파이크: OCR이 "청구월 : 2025-06"처럼 라벨과 콜론 사이에 공백을 넣는
+    경우가 확인됐다 — 기존 정규식(청구월:\\s*)은 이 경우 매칭 실패였다."""
+    text = extract_pdf_text(_pdf([
+        "전기요금 고지서",
+        "청구월 : 2025-06 계약종별 : 산업용(을) 고압A",
+        "사용량(kWh) 1,234",
+        "청구금액(원) 987,654",
+    ]))
+    result = parse_document_text(text, "electric_bill")
+    assert result["year"] == 2025 and result["month"] == 6
+
+
+def test_electric_bill_tolerates_label_glued_to_value():
+    """실측 스파이크: OCR이 "사용량(kWh)1,234"처럼 라벨과 값 사이 공백 없이 인식하는
+    경우가 확인됐다 — 기존 \\s+ 는 매칭 실패, \\s*로 완화."""
+    text = extract_pdf_text(_pdf([
+        "전기요금 고지서",
+        "청구월: 2025-06",
+        "사용량(kWh)1,234",
+        "청구금액(원) 987,654",
+    ]))
+    result = parse_document_text(text, "electric_bill")
+    assert result["quantity"] == 1234
+
+
+def test_electric_bill_tolerates_dot_date_separator():
+    text = extract_pdf_text(_pdf([
+        "전기요금 고지서",
+        "청구월: 2025.06",
+        "사용량(kWh) 1,234",
+        "청구금액(원) 987,654",
+    ]))
+    result = parse_document_text(text, "electric_bill")
+    assert result["year"] == 2025 and result["month"] == 6
+
+
+def test_slotted_upload_does_not_require_exact_title_phrase():
+    """슬롯이 이미 정해졌으면(예: electric_bill 칸에 업로드) 제목이 이 프로젝트가 아는
+    정확한 3개 문구("전기요금 고지서" 등)와 달라도(실제 문서는 "전기요금청구서" 같은
+    다른 표현일 수 있다) 필드(청구월·사용량·청구금액)만 있으면 파싱된다 — 제목
+    일치는 슬롯 미지정("그냥 업로드") 경로에서만 필요하다."""
+    text = extract_pdf_text(_pdf([
+        "한국전력공사 전기요금청구서",  # 이 프로젝트가 아는 정확한 문구가 아님
+        "청구월: 2025-06 계약종별: 산업용(을) 고압A",
+        "사용량(kWh) 1,234",
+        "청구금액(원) 987,654",
+    ]))
+    result = parse_document_text(text, "electric_bill")
+    assert result["year"] == 2025 and result["month"] == 6
+    assert result["document_type"] == "electric_bill"
+
+
+def test_slotted_upload_without_title_or_fields_still_fails_clearly():
+    """슬롯을 알아도 필드 자체가 없으면(정말 다른 문서) 값을 지어내지 않고 명확히
+    실패한다 — 제목 게이트를 뺀 게 아무 문서나 통과시킨다는 뜻은 아니다."""
+    text = extract_pdf_text(_pdf(["아무 문서", "관련 없는 내용"]))
+    with pytest.raises(DocumentParseError):
+        parse_document_text(text, "electric_bill")
+
+
+def test_tax_invoice_accepts_issue_date_label_synonym():
+    text = extract_pdf_text(_pdf([
+        "전자세금계산서",
+        "공급자: 구미에너지주유소",
+        "발급일자: 2025-02-11",
+        "품목명 규격 수량 단가(원) 공급가액(원)",
+        "경유 L 301L 1,400 420,833",
+    ]))
+    result = parse_document_text(text, "tax_invoice")
+    assert result["year"] == 2025 and result["month"] == 2
+
+
+# ── 관리비 고지서 ────────────────────────────────────────────────────────────
+
+def test_management_fee_bill_extracts_electric_item_with_quality_flag():
+    text = extract_pdf_text(_pdf([
+        "○○빌딩 관리비 고지서",
+        "부과월: 2025-06",
+        "일반관리비 320,000",
+        "전기료 187,000원",
+        "청소비 90,000",
+    ]))
+    result = parse_document_text(text)  # "그냥 업로드" — 슬롯 지정 없음
+    assert result["document_type"] == "electric_bill"
+    assert result["supply_amount_krw"] == 187_000
+    assert result["year"] == 2025 and result["month"] == 6
+    assert result["quality_flag"] == "mgmt_fee_estimate"
+    assert "재발행" in result["guidance_message"]
+
+
+def test_management_fee_bill_in_wrong_slot_is_rejected():
+    """관리비 고지서를 세금계산서 칸에 올리면 전기고지서 칸으로 안내하며 명확히 실패."""
+    text = extract_pdf_text(_pdf([
+        "○○빌딩 관리비 고지서",
+        "부과월: 2025-06",
+        "전기료 187,000원",
+    ]))
+    with pytest.raises(DocumentTypeMismatchError, match="전기요금고지서"):
+        parse_document_text(text, "tax_invoice")
+
+
+def test_management_fee_bill_without_electric_line_item_raises():
+    text = extract_pdf_text(_pdf([
+        "○○빌딩 관리비 고지서",
+        "부과월: 2025-06",
+        "일반관리비 320,000",
+    ]))
+    with pytest.raises(DocumentParseError, match="관리비 고지서"):
+        parse_document_text(text)
+
+
+# ── OCR 좌표 기반 표 재구성 (parse_tax_invoice_table_rows) ──────────────────────
+
+def test_parse_tax_invoice_table_rows_matches_columns_by_x_position():
+    """실측 스파이크에서 확인된 실제 좌표(품목명·규격·수량·단가(원)·공급가액(원)
+    헤더 아래 경유/L/301L/1,400/420,833 데이터 행)를 그대로 재현."""
+    rows = [
+        [(0.0, 82.0, "품목명"), (129.0, 195.0, "규격"), (267.0, 336.0, "수량"),
+         (404.0, 516.0, "단가(원)"), (581.0, 748.0, "공급가액(원)")],
+        [(0.0, 55.0, "경유"), (125.0, 154.0, "L"), (266.0, 344.0, "301L"),
+         (401.0, 490.0, "1,400"), (580.0, 704.0, "420,833")],
+    ]
+    result = parse_tax_invoice_table_rows(rows)
+    assert result == {
+        "item_description": "경유",
+        "supply_amount_krw": 420_833,
+        "quantity": 301,
+        "quantity_unit": "L",
+    }
+
+
+def test_parse_tax_invoice_table_rows_without_header_returns_none():
+    """헤더 행을 못 찾으면 예외 대신 None — 호출부가 다른 경로를 계속 시도할 수 있게."""
+    rows = [[(0.0, 55.0, "경유"), (580.0, 704.0, "420,833")]]
+    assert parse_tax_invoice_table_rows(rows) is None
