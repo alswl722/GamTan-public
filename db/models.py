@@ -361,6 +361,11 @@ class SourceDocument(Base):
     file_path = Column(String(500))  # data/uploads/ 하위 상대경로, nullable(구 레코드엔 없음)
     extracted_json = Column(JSON)
     verification_status = Column(String(20), default="unverified")
+    # db/document_extraction.py 반환값을 그대로 영속화 — "text_layer" | "html_text" | "ocr".
+    # OCR 경로일 때만 extraction_confidence가 채워진다(텍스트 레이어/HTML은 결정론적
+    # 정규식 파싱이라 신뢰도 개념이 없음). 0021에서 추가, 그 이전 레코드는 둘 다 null.
+    extraction_method = Column(String(20))
+    extraction_confidence = Column(Float)
     created_at = Column(DateTime(timezone=True), default=now)
     # "데이터 업로드" 그리드(문서종류 × 월)용 — OCR 업로드(row 1건)는 항상 채워짐.
     # 엑셀 대량 업로드처럼 한 문서가 여러 달에 걸치면 null로 남는다(0017 참고).

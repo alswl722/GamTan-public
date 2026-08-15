@@ -109,6 +109,9 @@ def ingest_uploaded_document(
     financial_institution_id, institution_borrower_id = ib
 
     skipped_rows = 0
+    extraction_method = None
+    extraction_confidence = None
+    guidance_message = None
     if document_type == "tax_invoice" and mode == "excel":
         rows, skipped_rows = parse_hometax_excel(file_bytes)
         extracted: dict = {"rows": rows, "skipped_rows": skipped_rows}
@@ -122,6 +125,18 @@ def ingest_uploaded_document(
         # document_type 파라미터는 검증 힌트일 뿐 — 실제 저장은 항상 추출이
         # 판별한 값을 신뢰한다("그냥 업로드"에선 애초에 힌트 자체가 없다).
         resolved_document_type = row["document_type"]
+        # db/document_extraction.py가 어느 경로(text_layer|html_text|ocr)로 읽었는지,
+        # OCR이면 신뢰도가 얼마였는지 실어 보낸다 — source_documents에 그대로
+        # 영속화해 감사할 수 있게 한다(CLAUDE.md 원칙5, 0021 마이그레이션).
+        extraction_method = row.get("extraction_method")
+        extraction_confidence = row.get("extraction_confidence")
+        guidance_message = row.get("guidance_message")
+
+    # 관리비 고지서에서 뽑은 전기료처럼 1차 계량 데이터가 아닌 간접 추정치는
+    # quality_flag로 표시돼 온다 — verification_status를 낮게 잡아 감사 흔적을
+    # 남긴다(db/document_text_extractor.py::parse_management_fee_bill, CLAUDE.md §6
+    # 결손 월 업종평균 임시보정과 같은 결).
+    verification_status = extracted.get("quality_flag", "unverified") if mode != "excel" else "unverified"
 
     doc = SourceDocument(
         financial_institution_id=financial_institution_id,
@@ -132,7 +147,9 @@ def ingest_uploaded_document(
         file_hash=file_hash,
         file_path=file_path,
         extracted_json=extracted,
-        verification_status="unverified",
+        verification_status=verification_status,
+        extraction_method=extraction_method,
+        extraction_confidence=extraction_confidence,
         # "데이터 업로드" 그리드용 — OCR(단일 row)만 단일 월로 특정 가능하다. 엑셀
         # 대량 업로드는 여러 달에 걸칠 수 있어 null로 남긴다(그리드 특정 칸에는 안
         # 뜨지만 데이터 자체는 그대로 적재된다).
@@ -185,4 +202,8 @@ def ingest_uploaded_document(
         # year/month를 응답에 실어 보내 업로드 완료 후 "1월 접수됨" 같은 표시를 만든다.
         result["year"] = rows[0]["year"]
         result["month"] = rows[0]["month"]
+        if guidance_message:
+            # 관리비 고지서처럼 업로드는 성공했지만 사장님에게 직접 전할 안내가
+            # 있는 경우(재발행 요청 권장 등) — 실패가 아니므로 200 응답에 실어 보낸다.
+            result["guidance_message"] = guidance_message
     return result

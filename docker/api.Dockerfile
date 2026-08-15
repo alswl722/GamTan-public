@@ -8,10 +8,21 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# PaddleOCR(opencv 경유)이 요구하는 시스템 라이브러리 — 이게 없으면 opencv import
+# 시점에 "libGL.so.1: cannot open shared object file" 류로 실패한다(실측 확인).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 libgomp1 libglib2.0-0 libsm6 libxext6 libxrender1 \
+    && rm -rf /var/lib/apt/lists/*
+
 # 의존성 먼저 (레이어 캐시) — requirements.txt 가 안 바뀌면 이 레이어 그대로 재사용
 COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-cache-dir -r requirements.txt
+
+# PaddleOCR 한국어 모델 가중치를 빌드 시점에 한 번 받아 이미지에 굽는다 — 런타임에
+# 매번 모델 호스트 접속이 필요 없게(결선장 네트워크 장애 리스크 차단, CLAUDE.md §10과
+# 같은 결). 첫 배포 이후엔 이 레이어가 캐시돼 재빌드 시 다시 받지 않는다.
+RUN python -c "from paddleocr import PaddleOCR; PaddleOCR(lang='korean')"
 
 # 앱 코드만 (db 패키지는 api 가 import)
 # data/ 는 docker-compose.yml 이 이미 볼륨(./data:/app/data)으로 마운트하므로 여기서
