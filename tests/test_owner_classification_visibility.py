@@ -1,9 +1,10 @@
 """사장님 화면(장면③ AI 분류+근거)에 뭐가 보이는지 골든 케이스.
 
 핵심 검증축:
-  - get_classifications()는 담당자가 확정(confirmed) + 전송(sent_to_owner_at)까지
-    마친 건만 반환한다 — 검토 대기(review_required) 건과 확정만 되고 아직 전송
-    안 한 건은 원문·Scope·근거를 사장님에게 보여주지 않는다.
+  - get_classifications()는 status: auto(HITL을 거칠 필요가 없다고 판정된 확정
+    케이스) 건은 바로 반환하고, review_required로 갔던 건은 담당자가 확정
+    (confirmed) + 전송(sent_to_owner_at)까지 마쳐야 반환한다 — 검토 대기 건과
+    확정만 되고 아직 전송 안 한 건은 원문·Scope·근거를 사장님에게 보여주지 않는다.
   - get_hitl_pending_count()는 "검토 대기 + 확정됐지만 미전송" 건수를 합쳐 반환한다
     (둘 다 사장님 입장에선 아직 "검토중"으로 보여야 하므로).
   - get_pending_send_count()는 확정됐지만 미전송인 건수만 반환한다(관리자 전송 버튼용).
@@ -70,6 +71,21 @@ def _add_voucher_with_classification(session, cid, month, item, *, status, evide
 
 
 # ── db/queries.py 순수 로직 ───────────────────────────────────────────────────
+def test_get_classifications_includes_auto_immediately(db):
+    """status: auto(룰/고신뢰 LLM으로 HITL 없이 확정)는 전송 절차 없이 바로 보인다.
+
+    회귀 방지 — HITL 대상 건이 하나도 없는(전부 auto인) 정상적인 상황에서
+    get_classifications()가 빈 리스트를 반환하면 사장님 화면(SceneClassify)이
+    확정 건도 "리포트 확인하러 가기" 버튼도 못 그려 위저드가 막힌다.
+    """
+    session, cid = db
+    _add_voucher_with_classification(session, cid, 1, "룰 매칭 확정건", status="auto")
+
+    results = get_classifications(session, cid)
+    assert len(results) == 1
+    assert results[0]["raw"] == "룰 매칭 확정건"
+
+
 def test_get_classifications_excludes_unsent_confirmed(db):
     """확정만 되고 전송 전이면(sent_to_owner_at is null) 사장님 조회 결과에 안 나온다."""
     session, cid = db

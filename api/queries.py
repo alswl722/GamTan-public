@@ -111,12 +111,16 @@ def get_unit_prices(session: Session) -> list[UnitPrice]:
 
 
 def get_classifications(session: Session, company_id: int) -> list[dict]:
-    """장면③(AI 분류+근거)용 — 담당자가 확정 후 "전송"까지 마친 건만 반환.
+    """장면③(AI 분류+근거)용 — "auto"(HITL 안 거친 확정 케이스) 건 + 담당자가
+    확정 후 "전송"까지 마친 건을 반환.
 
-    확정(status: confirmed)과 사장님 전송(sent_to_owner_at)은 분리된 별개 동작이다.
-    담당자가 HITL 큐에서 개별 건을 확정해도 사장님 화면에는 바로 안 나타나고,
-    담당자가 해당 기업의 확정 건을 모아 "전송" 액션(send_classifications_to_owner)을
-    실행해야 그 시점의 sent_to_owner_at이 채워지며 이 목록에 나타난다 — 검토 중인
+    status: auto는 룰/고신뢰 LLM으로 애초에 사람 검토가 필요 없다고 판정된
+    건이라(CLAUDE.md §5-3 "확정 케이스는 LLM 안 태움"과 같은 결 — 여기서는 검토
+    게이트 자체가 불필요) 이 목록에 바로 나타난다. 반면 review_required로 갔다가
+    담당자가 확정(status: confirmed)한 건은 사장님 전송(sent_to_owner_at)까지
+    별개 동작으로 분리돼 있다 — 담당자가 HITL 큐에서 개별 건을 확정해도 사장님
+    화면에는 바로 안 나타나고, 담당자가 해당 기업의 확정 건을 모아 "전송" 액션
+    (send_classifications_to_owner)을 실행해야 이 목록에 나타난다 — 검토 중인
     기업 배치가 건별로 흘러들어가는 것을 막기 위함.
     HITL 대기(review_required) 건과 확정됐지만 미전송인 건은 원문·Scope·판단 근거를
     사장님에게 노출하지 않는다 — 건수만 get_hitl_pending_count()로 별도 안내.
@@ -127,8 +131,13 @@ def get_classifications(session: Session, company_id: int) -> list[dict]:
         .join(Voucher, Classification.voucher_id == Voucher.id)
         .where(Voucher.company_id == company_id)
         .where(Classification.scope.in_((1, 2)))
-        .where(Classification.status == "confirmed")
-        .where(Classification.sent_to_owner_at.isnot(None))
+        .where(
+            (Classification.status == "auto")
+            | (
+                (Classification.status == "confirmed")
+                & Classification.sent_to_owner_at.isnot(None)
+            )
+        )
         .order_by(Voucher.month, Voucher.issue_date)
     )
     rows = session.execute(stmt).all()
