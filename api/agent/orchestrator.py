@@ -117,7 +117,7 @@ def _execute(name: str, args: dict, session: Session, company: Company) -> dict:
         return calculate_pcaf(session, cid)
     if name == "get_industry_distribution":
         scope = int(args.get("scope", 1))
-        return get_industry_distribution(session, company.industry_code, scope) or {}
+        return get_industry_distribution(session, company.industry_code, scope, company.employee_count) or {}
     if name == "notify_owner":
         return {"ack": True, "message": args.get("message", "")}
     if name == "check_anomalies":

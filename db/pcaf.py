@@ -152,11 +152,13 @@ def company_pcaf_summary(
         raise ValueError(f"company_id={company_id} 없음")
 
     if dist_cache is not None:
+        # 캐시는 (industry_code, scope) 단위라 규모 밴드까지는 반영 못 함(N+1 방지가
+        # 우선) — 포트폴리오 일괄 조회는 전체 규모 통합 값을 그대로 씀.
         dist1 = dist_cache.get((company.industry_code, 1))
         dist2 = dist_cache.get((company.industry_code, 2))
     else:
-        dist1 = get_distribution(session, company.industry_code, 1)
-        dist2 = get_distribution(session, company.industry_code, 2)
+        dist1 = get_distribution(session, company.industry_code, 1, company.employee_count)
+        dist2 = get_distribution(session, company.industry_code, 2, company.employee_count)
 
     before = _before_baseline(company, dist1, dist2)
     after = _after_measured(session, company_id, dist1, dist2)

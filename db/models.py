@@ -221,8 +221,15 @@ class IndustryDistribution(Base):
     year = Column(SmallInteger, nullable=False)
     source = Column(String(100))
 
+    # 종사자 규모 밴드(예: "5인 ~ 9인") — NULL은 전체 규모 통합(밴드 무관 풀링,
+    # 좁은 밴드 표본 부족 시 api/queries.py::get_distribution()의 폴백용).
+    # 0022에서 추가 — scripts/fetch_industry_distributions.py 실데이터 도입과 함께.
+    worker_band = Column(String(30))
+    sample_size = Column(Integer)                        # 그 min/median/max 뒤 표본 사업장 수
+
     __table_args__ = (
         Index("ix_industry_dist_code_year", "industry_code", "year"),
+        Index("ix_industry_dist_code_scope_year_band", "industry_code", "scope", "year", "worker_band"),
     )
 
 

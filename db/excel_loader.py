@@ -13,6 +13,14 @@ DEFAULT_XLSX = os.path.join(
     "감탄_데이터준비_샘플.xlsx",
 )
 
+# 업종분포는 회계가 손으로 관리하는 원천이 아니라 공공데이터 기계 재가공 결과라
+# 별도 파일로 분리(scripts/fetch_industry_distributions.py가 생성·갱신).
+INDUSTRY_DIST_XLSX = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)),
+    "data",
+    "industry_distributions.xlsx",
+)
+
 # 시트마다 연료 표기가 흔들려 정규화 (계수·단가·분류가 같은 이름을 쓰도록)
 FUEL_ALIAS = {
     "도시가스(LNG등)": "도시가스",
@@ -86,6 +94,40 @@ def load_emission_factors(path: str = DEFAULT_XLSX) -> list[dict]:
                 gwp_co2e=float(gwp),
                 unit=r.get("단위"),
                 source=r.get("출처URL"),
+            )
+        )
+    return out
+
+
+def load_industry_distributions(path: str = INDUSTRY_DIST_XLSX) -> list[dict]:
+    """`업종분포` 시트(scripts/fetch_industry_distributions.py 산출물) → IndustryDistribution 입력.
+
+    이 파일은 회계가 손으로 채우는 원천이 아니라 공공데이터(한국에너지공단
+    마이크로데이터)를 기계적으로 재가공한 결과라, 값 검증(계수 없는 행 스킵 등)
+    없이 그대로 신뢰한다 — 스크립트 쪽에서 이미 정제됨.
+    """
+    rows = _rows_as_dicts(_sheet(_load(path), "업종분포"))
+    out = []
+    for r in rows:
+        code = r.get("업종코드")
+        scope = _scope_int(r.get("Scope"))
+        if not code or scope is None:
+            continue
+        out.append(
+            dict(
+                industry_code=str(code).strip(),
+                industry_name=r.get("업종명"),
+                scope=scope,
+                worker_band=r.get("종사자규모"),
+                emission_min_co2e=float(r["최소_tCO2e"]) if r.get("최소_tCO2e") is not None else None,
+                emission_median_co2e=float(r["중앙값_tCO2e"]) if r.get("중앙값_tCO2e") is not None else None,
+                emission_max_co2e=float(r["최대_tCO2e"]) if r.get("최대_tCO2e") is not None else None,
+                emission_median_per_employee=(
+                    float(r["인당_중앙값_tCO2e"]) if r.get("인당_중앙값_tCO2e") is not None else None
+                ),
+                sample_size=int(r["표본수"]) if r.get("표본수") is not None else None,
+                year=int(r["연도"]) if r.get("연도") is not None else None,
+                source=r.get("출처"),
             )
         )
     return out

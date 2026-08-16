@@ -344,12 +344,60 @@ def get_owner_progress(session: Session, company_id: int) -> dict:
     return {"steps": steps, "current_step": current_step}
 
 
-def get_distribution(session: Session, industry_code: str, scope: int) -> dict | None:
-    stmt = select(IndustryDistribution).where(
-        IndustryDistribution.industry_code == industry_code,
-        IndustryDistribution.scope == scope,
-    )
-    d = session.execute(stmt).scalars().first()
+# scripts/fetch_industry_distributions.py가 실데이터에서 실제로 쓰는 밴드 문자열과
+# 정확히 일치해야 한다(data/industry_distributions.xlsx 참고, 손으로 바꾸지 말 것).
+_WORKER_BAND_UPPER_BOUNDS = [
+    (4, "5인 미만"),
+    (9, "5인 ~ 9인"),
+    (19, "10인 ~ 19인"),
+    (49, "20인 ~ 49인"),
+    (99, "50인 ~ 99인"),
+    (299, "100인 ~ 299인"),
+    (499, "300인 ~ 499인"),
+    (999, "500인 ~ 999인"),
+]
+_WORKER_BAND_TOP = "1000인 이상"
+_MIN_BAND_SAMPLE_SIZE = 3  # 이 밑이면 규모 밴드 대신 전체 규모 통합(worker_band=NULL)으로 폴백
+
+
+def _worker_band_for(employee_count: int | None) -> str | None:
+    if employee_count is None:
+        return None
+    for upper, label in _WORKER_BAND_UPPER_BOUNDS:
+        if employee_count <= upper:
+            return label
+    return _WORKER_BAND_TOP
+
+
+def get_distribution(
+    session: Session, industry_code: str, scope: int, employee_count: int | None = None
+) -> dict | None:
+    """업종×Scope 배출량 분포 조회 — employee_count를 주면 그 규모 밴드를 우선
+    매칭하고, 밴드가 없거나 표본이 너무 적으면(<_MIN_BAND_SAMPLE_SIZE) 전체 규모
+    통합(worker_band=NULL) 값으로 폴백한다. employee_count 생략 시엔 처음부터
+    전체 규모 통합 값만 본다(기존 호출부 호환).
+    """
+    band = _worker_band_for(employee_count)
+    d = None
+    scale_matched = False
+    if band is not None:
+        stmt = select(IndustryDistribution).where(
+            IndustryDistribution.industry_code == industry_code,
+            IndustryDistribution.scope == scope,
+            IndustryDistribution.worker_band == band,
+        )
+        candidate = session.execute(stmt).scalars().first()
+        if candidate is not None and (candidate.sample_size or 0) >= _MIN_BAND_SAMPLE_SIZE:
+            d, scale_matched = candidate, True
+
+    if d is None:
+        stmt = select(IndustryDistribution).where(
+            IndustryDistribution.industry_code == industry_code,
+            IndustryDistribution.scope == scope,
+            IndustryDistribution.worker_band.is_(None),
+        )
+        d = session.execute(stmt).scalars().first()
+
     if not d:
         return None
     return {
@@ -362,4 +410,6 @@ def get_distribution(session: Session, industry_code: str, scope: int) -> dict |
         "median_per_employee": d.emission_median_per_employee,
         "year": d.year,
         "source": d.source,
+        "sample_size": d.sample_size,
+        "scale_matched": scale_matched,
     }

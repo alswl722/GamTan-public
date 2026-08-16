@@ -51,9 +51,11 @@ def collect_vouchers(session: Session, company_id: int) -> dict:
     return {"count": len(vouchers), "vouchers": vouchers, "coverage": coverage}
 
 
-def get_industry_distribution(session: Session, industry_code: str, scope: int) -> dict | None:
+def get_industry_distribution(
+    session: Session, industry_code: str, scope: int, employee_count: int | None = None
+) -> dict | None:
     """도구④ 업종 벤치마킹 — 동종 업종 배출량 분포(min/median/max)."""
-    return get_distribution(session, industry_code, scope)
+    return get_distribution(session, industry_code, scope, employee_count)
 
 
 def calculate_pcaf(session: Session, company_id: int) -> dict:
