@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { UploadCloud } from "lucide-react";
-import { apiGet, apiPatch, apiUpload, getCompanyId } from "@/lib/api";
+import { DOCUMENT_UPLOAD_TIMEOUT_MS, apiGet, apiPatch, apiUpload, getCompanyId } from "@/lib/api";
 
 /** 장면 ② — 연료 유형 체크 + 자료 업로드(세금계산서·전기요금고지서·도시가스고지서) 통합 화면.
  *
@@ -219,7 +219,11 @@ export function SceneUpload({
       form.append("mode", "ocr");
       // year/month는 안 보낸다 — 서버가 문서 내용에서 직접 읽어낸다
       // (db/document_text_extractor.py). 응답에 실려오는 month를 그대로 배지에 쓴다.
-      const res = await apiUpload<{ month?: number }>(`/owner/${cid}/documents/upload`, form);
+      const res = await apiUpload<{ month?: number }>(
+        `/owner/${cid}/documents/upload`,
+        form,
+        DOCUMENT_UPLOAD_TIMEOUT_MS,
+      );
       setEntries((e) => ({
         ...e,
         [docType]: [
@@ -262,6 +266,7 @@ export function SceneUpload({
       const res = await apiUpload<{ document_type: DocType; month?: number }>(
         `/owner/${cid}/documents/upload`,
         form,
+        DOCUMENT_UPLOAD_TIMEOUT_MS,
       );
       setEntries((e) => ({
         ...e,
@@ -290,6 +295,7 @@ export function SceneUpload({
       const res = await apiUpload<{ vouchers_created: number; skipped_rows: number }>(
         `/owner/${cid}/documents/upload`,
         form,
+        DOCUMENT_UPLOAD_TIMEOUT_MS,
       );
       setExcelResult({ status: "done", count: res.vouchers_created, skipped: res.skipped_rows });
       refreshCoverage();
