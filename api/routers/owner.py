@@ -36,6 +36,7 @@ from api.queries import get_coverage, get_owner_progress
 from db.alerts import detect_alerts
 from db.document_coverage import (
     delete_source_document,
+    document_pending_review_count,
     document_upload_grid,
     documents_for_cell,
     upload_streak,
@@ -216,6 +217,20 @@ def documents_in_cell(
     if document_type not in _VALID_DOCUMENT_TYPES:
         raise HTTPException(status_code=400, detail=f"invalid document_type: {document_type}")
     return {"documents": documents_for_cell(session, company_id, document_type, year, month)}
+
+
+@router.get("/{company_id}/documents/{document_id}/review-status")
+def document_review_status(company_id: int, document_id: int, session: Session = Depends(get_session)):
+    """업로드 완료 모달용 — 방금 올린 문서에서 만들어진 전표 중 몇 건이 담당자
+    검토 대기(review_required)인지. 어떤 항목이 왜 검토 대상인지(판단 근거·Scope
+    등)는 노출하지 않는다(api/queries.py::get_classifications와 같은 원칙 — 건수만).
+    프론트가 /classify/{company_id} 실행 직후 호출한다(분류가 끝나야 review_required
+    가 채워짐).
+    """
+    doc = session.get(SourceDocument, document_id)
+    if doc is None or doc.company_id != company_id:
+        raise HTTPException(status_code=404, detail=f"document_id={document_id} 없음")
+    return {"pending_review_count": document_pending_review_count(session, document_id)}
 
 
 @router.delete("/{company_id}/documents/{document_id}")

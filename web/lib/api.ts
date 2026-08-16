@@ -291,6 +291,19 @@ export function getDocumentsForCell(
   );
 }
 
+// GET /owner/{company_id}/documents/{document_id}/review-status — db/document_coverage.py::
+// document_pending_review_count. 업로드 완료 모달용 — 방금 올린 문서에서 만들어진 전표 중
+// 몇 건이 담당자 검토 대기(review_required)인지. 판단 근거 등 세부 내용은 안 실려 온다
+// (get_classifications()와 같은 원칙 — 건수만).
+export function getDocumentReviewStatus(
+  companyId: number,
+  documentId: number
+): Promise<{ pending_review_count: number }> {
+  return apiGet<{ pending_review_count: number }>(
+    `/owner/${companyId}/documents/${documentId}/review-status`
+  );
+}
+
 /** 업로드 파일 삭제 — 거기서 만들어진 전표·분류까지 연쇄 삭제된다(되돌릴 수 없음). */
 export function deleteDocument(
   companyId: number,

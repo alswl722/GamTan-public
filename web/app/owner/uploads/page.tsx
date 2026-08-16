@@ -12,6 +12,7 @@ import {
   deleteDocument,
   getCompanyId,
   getDocumentGrid,
+  getDocumentReviewStatus,
   getDocumentsForCell,
   getReportingYears,
   getUploadStreak,
@@ -38,8 +39,21 @@ const STATUS_LABEL: Record<string, string> = {
 
 type CellKey = `${DocumentType}-${number}`;
 
-/** 추가 업로드(초기 온보딩 위저드 제외) 완료 시 뜨는 축하 모달. */
-function UploadCompleteModal({ message, onClose }: { message: string; onClose: () => void }) {
+/** 추가 업로드(초기 온보딩 위저드 제외) 완료 시 뜨는 축하 모달.
+ *
+ * reviewNotice가 있으면(방금 올린 문서에서 담당자 검토 대기 건이 나온 경우) 같은
+ * 모달 안에 한 줄 더 보여준다 — 별도 모달을 새로 만들지 않는다. 어떤 항목이 왜
+ * 검토 대상인지(판단 근거 등)는 노출하지 않는다(api/queries.py::get_classifications
+ * 와 같은 원칙 — 건수만 안내). */
+function UploadCompleteModal({
+  message,
+  reviewNotice,
+  onClose,
+}: {
+  message: string;
+  reviewNotice?: string | null;
+  onClose: () => void;
+}) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-6">
       <div className="relative w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl">
@@ -58,6 +72,11 @@ function UploadCompleteModal({ message, onClose }: { message: string; onClose: (
           업로드가 완료됐어요!
         </h2>
         <p className="mt-1.5 text-[13px] leading-relaxed text-muted">{message}</p>
+        {reviewNotice && (
+          <p className="mt-2 rounded-xl bg-hitl/20 px-3 py-2 text-[12.5px] leading-relaxed text-hitl-ink">
+            {reviewNotice}
+          </p>
+        )}
 
         <div className="mt-1 flex justify-center">
           <Image src="/dandi_17.png" alt="" width={267} height={267} className="h-52 w-auto" />
@@ -105,6 +124,24 @@ function OwnerUploadsPageContent() {
   const autoFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [uploadCompleteMessage, setUploadCompleteMessage] = useState<string | null>(null);
+  const [uploadReviewNotice, setUploadReviewNotice] = useState<string | null>(null);
+
+  /** 방금 올린 문서(sourceDocumentId)에서 담당자 검토 대기 건이 나왔는지 확인해
+   * 모달 안내 문구를 만든다 — classifyNewVouchers()가 끝난 뒤에만 의미 있다
+   * (분류가 안 돌았으면 review_required 자체가 아직 없음). 실패해도(네트워크 등)
+   * 업로드 자체는 이미 성공이라 조용히 넘어간다 — 부가 정보라 화면을 막지 않음. */
+  async function reviewNoticeFor(cid: number, sourceDocumentId: number): Promise<string | null> {
+    try {
+      const { pending_review_count } = await getDocumentReviewStatus(cid, sourceDocumentId);
+      if (pending_review_count > 0) {
+        return `이 중 ${pending_review_count}건은 담당자가 검토할 예정이에요.`;
+      }
+      return null;
+    } catch (err) {
+      console.error("검토 대기 여부 조회 실패(부가 정보라 화면은 계속 진행):", err);
+      return null;
+    }
+  }
 
   /** 위저드 밖(이 탭)에서 올린 전표는 "AI 분류" 단계를 거칠 기회가 없어 미분류로
    * 남는다 — 그대로 두면 홈 진행바·리포트가 "미완료"로 보인다(api/queries.py::
@@ -222,11 +259,16 @@ function OwnerUploadsPageContent() {
       form.append("file", file);
       form.append("document_type", expanded.docType);
       form.append("mode", "ocr");
-      await apiUpload(`/owner/${companyId}/documents/upload`, form, DOCUMENT_UPLOAD_TIMEOUT_MS);
+      const res = await apiUpload<{ source_document_id: number }>(
+        `/owner/${companyId}/documents/upload`,
+        form,
+        DOCUMENT_UPLOAD_TIMEOUT_MS,
+      );
       await classifyNewVouchers(companyId);
       await loadCell(expanded.docType, expanded.month);
       await loadGrid();
       setUploadCompleteMessage(`${DOC_LABEL[expanded.docType]} ${expanded.month}월 자료가 등록됐어요.`);
+      setUploadReviewNotice(await reviewNoticeFor(companyId, res.source_document_id));
     } catch (err) {
       console.error("업로드 실패:", err);
       setUploadError(err instanceof Error ? err.message : "업로드에 실패했습니다.");
@@ -245,7 +287,7 @@ function OwnerUploadsPageContent() {
       form.append("file", file);
       form.append("mode", "ocr");
       // document_type을 안 보낸다 — OCR/비전이 스스로 문서종류를 판별한다("그냥 업로드").
-      const res = await apiUpload<{ document_type: DocumentType; month: number }>(
+      const res = await apiUpload<{ document_type: DocumentType; month: number; source_document_id: number }>(
         `/owner/${companyId}/documents/upload`,
         form,
         DOCUMENT_UPLOAD_TIMEOUT_MS,
@@ -253,6 +295,7 @@ function OwnerUploadsPageContent() {
       await classifyNewVouchers(companyId);
       await loadGrid();
       setUploadCompleteMessage(`${DOC_LABEL[res.document_type]} ${res.month}월로 인식해 등록했어요.`);
+      setUploadReviewNotice(await reviewNoticeFor(companyId, res.source_document_id));
     } catch (err) {
       console.error("자동 업로드 실패:", err);
       setAutoUploadError(err instanceof Error ? err.message : "업로드에 실패했습니다.");
@@ -477,7 +520,11 @@ function OwnerUploadsPageContent() {
       {uploadCompleteMessage && (
         <UploadCompleteModal
           message={uploadCompleteMessage}
-          onClose={() => setUploadCompleteMessage(null)}
+          reviewNotice={uploadReviewNotice}
+          onClose={() => {
+            setUploadCompleteMessage(null);
+            setUploadReviewNotice(null);
+          }}
         />
       )}
     </div>
