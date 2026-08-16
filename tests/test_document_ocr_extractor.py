@@ -182,7 +182,33 @@ def test_get_ocr_engine_disables_textline_orientation(monkeypatch):
     monkeypatch.setitem(sys.modules, "paddleocr", fake_module)
 
     ocr_mod._get_ocr_engine()
-    assert captured.get("lang") == "korean"
     assert captured.get("use_textline_orientation") is False
     assert captured.get("use_doc_orientation_classify") is False
+    ocr_mod._ocr_engine = None  # 다른 테스트에 영향 안 주게 정리
+
+
+def test_get_ocr_engine_uses_mobile_detection_model(monkeypatch):
+    """실측(Docker e2e) 확인: lang="korean" 기본 선택값(PP-OCRv5_server_det, "server"
+    등급 문자 감지 모델)이 표 테두리가 빽빽한 세금계산서 사진에서 메모리 부족으로
+    프로세스를 죽였다(SIGKILL) — 사용자에게는 그냥 업로드가 멈춘 것처럼 보였다.
+    "mobile" 등급 감지 모델로 낮추면 같은 파일이 정상 완료된다(인식 품질 저하
+    없음, 실측 확인). 감지 모델을 직접 지정하면 lang= 자동 선택이 무시되므로
+    한국어 인식 모델도 함께 명시해야 한다 — 둘 다 회귀 테스트로 고정."""
+    ocr_mod._ocr_engine = None
+    captured = {}
+
+    class _FakePaddleOCR:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    import sys
+    import types
+
+    fake_module = types.ModuleType("paddleocr")
+    fake_module.PaddleOCR = _FakePaddleOCR
+    monkeypatch.setitem(sys.modules, "paddleocr", fake_module)
+
+    ocr_mod._get_ocr_engine()
+    assert captured.get("text_detection_model_name") == "PP-OCRv5_mobile_det"
+    assert captured.get("text_recognition_model_name") == "korean_PP-OCRv5_mobile_rec"
     ocr_mod._ocr_engine = None  # 다른 테스트에 영향 안 주게 정리

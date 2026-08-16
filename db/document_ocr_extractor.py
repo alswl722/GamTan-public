@@ -67,10 +67,21 @@ def _get_ocr_engine():
             # 두 판별 모두 이득보다 오탐 위험이 크다고 보고 끈다. 문서 펴기
             # (use_doc_unwarping)는 실측에서 문제를 일으키지 않아 유지(비스듬히
             # 찍은 실사진의 원근 왜곡 보정용).
+            #
+            # text_detection_model_name/text_recognition_model_name — 실측으로 확인된
+            # 세 번째 버그: lang="korean" 기본 선택값은 문자 감지에 "server" 등급
+            # 모델(PP-OCRv5_server_det)을 쓰는데, 표 테두리가 빽빽한 세금계산서
+            # 사진(품목 표)에서 메모리 부족으로 프로세스가 죽었다(SIGKILL, "Failed to
+            # fetch"/"signal timed out"으로 사용자에게 보임 — 겉으로는 그냥 멈춘 것
+            # 처럼 보이지만 실제로는 OOM). 감지 모델을 "mobile" 등급으로 낮추면 같은
+            # 파일이 30초 이내 정상 완료된다(신뢰도·인식 품질 저하 없음, 실측 확인).
+            # 감지 모델을 직접 지정하면 lang= 자동 선택이 무시되므로 한국어 인식
+            # 모델도 함께 명시해 한국어 정확도를 유지한다.
             _ocr_engine = PaddleOCR(
-                lang="korean",
                 use_textline_orientation=False,
                 use_doc_orientation_classify=False,
+                text_detection_model_name="PP-OCRv5_mobile_det",
+                text_recognition_model_name="korean_PP-OCRv5_mobile_rec",
             )
         except Exception as e:  # noqa: BLE001 — 모델 로드·의존성 문제 등
             raise OcrEngineError(f"OCR 엔진을 불러오지 못했어요 — {e}") from e

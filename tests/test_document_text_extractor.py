@@ -13,6 +13,7 @@ from db.document_text_extractor import (
     detect_document_type,
     extract_pdf_text,
     parse_document_text,
+    parse_tax_invoice_date_table,
     parse_tax_invoice_table_rows,
 )
 
@@ -377,3 +378,41 @@ def test_parse_tax_invoice_table_rows_without_header_returns_none():
     """헤더 행을 못 찾으면 예외 대신 None — 호출부가 다른 경로를 계속 시도할 수 있게."""
     rows = [[(0.0, 55.0, "경유"), (580.0, 704.0, "420,833")]]
     assert parse_tax_invoice_table_rows(rows) is None
+
+
+# ── parse_tax_invoice_date_table (실측: 콜론 없는 헤더행/데이터행 서식) ─────────
+
+def test_parse_tax_invoice_date_table_matches_real_kepco_style_layout():
+    """실측(2026-08-16, 사용자 제공 합성 세금계산서 사진) — 국세청 표준 세금계산서는
+    "작성일자:" 콜론이 아니라 헤더행("작성일자"/"공급가액"/"세액"/"비고") 아래
+    데이터행이 오는 표 구조였다. 같은 문서에 공급가액 컬럼을 가진 표가 두 개
+    (이 요약행, 품목행) 있어도 "작성일자" 키워드로 올바른 헤더행을 구분해야 한다."""
+    rows = [
+        [(0.0, 80.0, "작성일자"), (150.0, 220.0, "공급가액"), (280.0, 320.0, "세액"), (360.0, 400.0, "비고")],
+        [(0.0, 90.0, "2025-01-11"), (150.0, 220.0, "460, 617"), (280.0, 320.0, "46, 062"), (500.0, 520.0, "월")],
+        [(0.0, 60.0, "품목"), (150.0, 220.0, "공급가액")],  # 품목행 헤더 — 여기 걸리면 안 됨
+        [(0.0, 55.0, "경유"), (150.0, 220.0, "420,833")],
+    ]
+    assert parse_tax_invoice_date_table(rows) == (2025, 1)
+
+
+def test_parse_tax_invoice_date_table_accepts_issue_date_label_synonym():
+    rows = [
+        [(0.0, 80.0, "발급일자"), (150.0, 220.0, "공급가액")],
+        [(0.0, 90.0, "2025.07.10"), (150.0, 220.0, "420,000")],
+    ]
+    assert parse_tax_invoice_date_table(rows) == (2025, 7)
+
+
+def test_parse_tax_invoice_date_table_without_header_returns_none():
+    rows = [[(0.0, 55.0, "경유"), (580.0, 704.0, "420,833")]]
+    assert parse_tax_invoice_date_table(rows) is None
+
+
+def test_parse_tax_invoice_date_table_header_without_value_returns_none():
+    """헤더는 찾았는데 그 아래 행에 날짜 형식 값이 없으면 예외 대신 None."""
+    rows = [
+        [(0.0, 80.0, "작성일자"), (150.0, 220.0, "공급가액")],
+        [(0.0, 90.0, "판독불가"), (150.0, 220.0, "460,617")],
+    ]
+    assert parse_tax_invoice_date_table(rows) is None

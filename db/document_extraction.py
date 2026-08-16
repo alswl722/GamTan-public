@@ -38,7 +38,9 @@ from db.document_text_extractor import (
     DocumentTypeMismatchError,
     detect_document_type,  # noqa: F401 — 하위 호환용 재노출(과거 호출부가 여기서 import)
     extract_pdf_text,  # noqa: F401 — 하위 호환용 재노출
+    find_supplier_name_best_effort,
     parse_document_text,
+    parse_tax_invoice_date_table,
     parse_tax_invoice_header,
     parse_tax_invoice_table_rows,
 )
@@ -90,6 +92,18 @@ def extract_document(file_bytes: bytes, document_type: DocumentType | None = Non
             header = parse_tax_invoice_header(ocr_result.text)
         except DocumentParseError:
             header = None
+        if header is None:
+            # 실측 확인(2026-08-16): 국세청 표준 세금계산서 서식은 "작성일자:" 콜론이
+            # 아니라 헤더행/데이터행 표 구조라 위 콜론 기반 정규식이 아예 안 통한다 —
+            # 좌표 기반으로 재시도(db/document_text_extractor.py::parse_tax_invoice_date_table).
+            date_result = parse_tax_invoice_date_table(ocr_result.rows)
+            if date_result is not None:
+                year, month = date_result
+                header = {
+                    "supplier_name": find_supplier_name_best_effort(ocr_result.text),
+                    "year": year,
+                    "month": month,
+                }
         if header is not None:
             item = parse_tax_invoice_table_rows(ocr_result.rows)
             if item is not None:
