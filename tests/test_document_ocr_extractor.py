@@ -161,9 +161,12 @@ def test_get_ocr_engine_disables_textline_orientation(monkeypatch):
     """실측(Docker e2e) 확인: 줄 단위 180도 회전 판별(use_textline_orientation)이
     똑바로 찍힌 멀쩡한 문서(관리비 고지서 사진)도 뒤집힌 걸로 오판해 글자를 깨뜨리는
     사례가 나왔다 — 전기고지서·세금계산서 사진은 정상이었는데 같은 조건의 다른
-    사진에서만 재현돼 이 모듈로 원인이 좁혀졌다. 사장님이 문서를 똑바로 찍어 올리는
-    실사용 케이스에서 이 옵션은 이득보다 오탐 위험이 커서 꺼둔다 — 누군가 나중에
-    무심코 지우지 않도록 회귀 테스트로 고정."""
+    사진에서만 재현돼 이 모듈로 원인이 좁혀졌다. 이어서 실제 한전 고지서 구조(청구
+    내역이 긴 표)를 흉내낸 사진에서는 use_doc_orientation_classify(전체 페이지 회전
+    판별)가 같은 종류로 또 오탐했다 — 정보량이 많거나 서식이 복잡하면 두 판별 모두
+    오탐 위험이 커지는 패턴. 사장님이 문서를 대체로 똑바로 찍어 올리는 실사용
+    케이스에서 둘 다 이득보다 오탐 위험이 커서 꺼둔다 — 누군가 나중에 무심코
+    지우지 않도록 회귀 테스트로 고정."""
     ocr_mod._ocr_engine = None  # 이전 테스트의 singleton 캐시 초기화
     captured = {}
 
@@ -181,4 +184,5 @@ def test_get_ocr_engine_disables_textline_orientation(monkeypatch):
     ocr_mod._get_ocr_engine()
     assert captured.get("lang") == "korean"
     assert captured.get("use_textline_orientation") is False
+    assert captured.get("use_doc_orientation_classify") is False
     ocr_mod._ocr_engine = None  # 다른 테스트에 영향 안 주게 정리

@@ -41,6 +41,10 @@ DOCUMENT_TYPE_LABEL = {
 _TITLE_TO_DOCUMENT_TYPE = {
     "전자세금계산서": "tax_invoice",
     "전기요금 고지서": "electric_bill",
+    # 실측(2026-08-15, 실제 한전 고지서 사진 확인): "OO월분 전기요금 청구서" /
+    # "OO월분 전기요금 청구 및 영수증(고지서)" — "전기요금 고지서"라는 정확한
+    # 문구는 실물에 없었다. "전기요금 청구"까지만 매칭해 두 실제 서식을 모두 커버.
+    "전기요금 청구": "electric_bill",
     "도시가스 요금고지서": "gas_bill",
 }
 
@@ -213,24 +217,42 @@ _DATE_SEP = r"[-./]"
 def _parse_electric_bill(text: str) -> dict:
     # 콜론 앞 공백 허용(\s*:) — "청구월 : 2025-06"처럼 OCR이 라벨과 콜론 사이에 공백을
     # 넣는 경우가 실측 스파이크에서 확인됐다(원래 "청구월:\s*"는 이 경우 매칭 실패).
-    date_m = re.search(rf"청구월\s*:\s*(\d{{4}}){_DATE_SEP}(\d{{2}})", text)
+    # 실측(2026-08-15, 실제 한전 고지서): "청구월:" 라벨 자체가 없고, 대신 제목 근처에
+    # "2021년 12월분"처럼 청구월이 찍혀 있었다 — 그쪽도 함께 시도한다. "사용기간:
+    # 10월22일~12월21일"처럼 청구월과 다른 달에 걸친 사용기간 범위는 있어도 청구월
+    # 자체를 명시한 라벨은 없었다.
+    date_m = re.search(
+        rf"청구월\s*:\s*(\d{{4}}){_DATE_SEP}(\d{{2}})", text
+    ) or re.search(r"(\d{4})년\s*(\d{1,2})월분", text)
     if not date_m:
         raise DocumentParseError("청구월을 찾지 못했어요")
-    quantity = _parse_amount(
-        _line_value(text, r"사용량\(kWh\)", field_label="사용량"), field_label="사용량"
-    )
+    # 실측: 실제 고지서는 "사용량(kWh)" 라벨을 못 찾을 수 있다(사용전력량이 비교
+    # 그래프·계량기 지침 표 등 다른 형태로 들어있는 서식이 있었음) — 세금계산서
+    # 물량 처리와 같은 원칙으로, 물량을 못 찾아도 금액만 있으면 파싱 자체는
+    # 성공시키고(금액÷단가 환산 경로로 계산), quantity 필드는 그냥 안 넣는다.
+    quantity = None
+    try:
+        quantity = _parse_amount(
+            _line_value(text, r"사용량\(kWh\)", field_label="사용량"), field_label="사용량"
+        )
+    except DocumentParseError:
+        pass
+    # 실측: "청구금액(원)"이 아니라 "청구금액"(단위 없이) 바로 뒤에 금액이 온다
+    # ("청구금액 9,240원") — "(원)"을 선택적으로 바꿔 둘 다 허용.
     amount = _parse_amount(
-        _line_value(text, r"청구금액\(원\)", field_label="청구금액"), field_label="청구금액"
+        _line_value(text, r"청구금액(?:\(원\))?", field_label="청구금액"), field_label="청구금액"
     )
-    return {
+    result = {
         "supplier_name": "한국전력공사",
         "item_description": "전기요금 (산업용 을)",
         "supply_amount_krw": amount,
-        "quantity": quantity,
-        "quantity_unit": "kWh",
         "year": int(date_m.group(1)),
         "month": int(date_m.group(2)),
     }
+    if quantity is not None:
+        result["quantity"] = quantity
+        result["quantity_unit"] = "kWh"
+    return result
 
 
 def _parse_gas_bill(text: str) -> dict:

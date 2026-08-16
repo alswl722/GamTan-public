@@ -10,6 +10,7 @@ from reportlab.pdfgen import canvas
 from db.document_text_extractor import (
     DocumentParseError,
     DocumentTypeMismatchError,
+    detect_document_type,
     extract_pdf_text,
     parse_document_text,
     parse_tax_invoice_table_rows,
@@ -247,6 +248,58 @@ def test_slotted_upload_without_title_or_fields_still_fails_clearly():
     text = extract_pdf_text(_pdf(["아무 문서", "관련 없는 내용"]))
     with pytest.raises(DocumentParseError):
         parse_document_text(text, "electric_bill")
+
+
+def test_real_kepco_bill_structure_parses_via_slotted_upload():
+    """실제 한전 전기요금 청구서 사진(사용자 제공, 2021-12/2022-01분) 실측 확인:
+    "청구월:" 라벨 자체가 없고 제목에 "2021년 12월분"으로 찍힘, "청구금액(원)"이
+    아니라 "청구금액"(단위 없이), "사용량(kWh)" 라벨은 아예 안 보임(사용전력량이
+    비교그래프·계량기지침 표 등 다른 형태), 청구내역이 기본요금·전력량요금·
+    기후환경요금·복지할인 등 여러 항목으로 나뉜 표. 이 모든 실측 특징을 한 번에
+    재현해 슬롯 지정 업로드가 성공하는지 확인한다."""
+    text = extract_pdf_text(_pdf([
+        "한국전력공사",
+        "2021년 12월분 전기요금 청구서",
+        "전기사용장소 ○○정밀 (경북 구미)",
+        "청구금액 9,240 원",
+        "고객번호 000000000  납기일 2022년 01월 17일",
+        "사용기간 2021년 10월 22일 ~ 2021년 12월 21일",
+        "기본요금 910",
+        "전력량요금 12,362",
+        "기후환경요금 742",
+        "복지할인 -12,000",
+        "부가가치세 201",
+        "당월청구요금 2,280",
+        "미납요금 4,460",
+    ]))
+    result = parse_document_text(text, "electric_bill")
+    assert result["document_type"] == "electric_bill"
+    assert result["year"] == 2021 and result["month"] == 12
+    assert result["supply_amount_krw"] == 9_240
+    assert "quantity" not in result  # 사용량 라벨을 못 찾아도 금액만으로 파싱 성공
+
+
+def test_real_kepco_bill_title_recognized_without_slot():
+    """"그냥 업로드"(슬롯 미지정)에서도 실측 제목("OO월분 전기요금 청구서")으로
+    문서종류를 판별한다 — "전기요금 고지서"라는 정확한 문구가 없어도 통과해야 한다."""
+    text = extract_pdf_text(_pdf([
+        "한국전력공사",
+        "2022년 01월분 전기요금 청구 및 영수증(고지서)",
+        "청구금액 15,000 원",
+    ]))
+    assert detect_document_type(text) == "electric_bill"
+
+
+def test_electric_bill_amount_label_without_won_unit_suffix():
+    """실측: "청구금액(원)"이 아니라 "청구금액"(단위 없이) 바로 뒤에 "9,240원"처럼
+    값 자체에 "원"이 붙어 온다."""
+    text = extract_pdf_text(_pdf([
+        "전기요금 고지서",
+        "청구월: 2025-06",
+        "청구금액 987,654원",
+    ]))
+    result = parse_document_text(text, "electric_bill")
+    assert result["supply_amount_krw"] == 987_654
 
 
 def test_tax_invoice_accepts_issue_date_label_synonym():
