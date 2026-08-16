@@ -126,15 +126,19 @@ function OwnerUploadsPageContent() {
   const [uploadCompleteMessage, setUploadCompleteMessage] = useState<string | null>(null);
   const [uploadReviewNotice, setUploadReviewNotice] = useState<string | null>(null);
 
-  /** 방금 올린 문서(sourceDocumentId)에서 담당자 검토 대기 건이 나왔는지 확인해
+  /** 방금 올린 문서들(sourceDocumentIds)에서 담당자 검토 대기 건이 나왔는지 확인해
    * 모달 안내 문구를 만든다 — classifyNewVouchers()가 끝난 뒤에만 의미 있다
-   * (분류가 안 돌았으면 review_required 자체가 아직 없음). 실패해도(네트워크 등)
-   * 업로드 자체는 이미 성공이라 조용히 넘어간다 — 부가 정보라 화면을 막지 않음. */
-  async function reviewNoticeFor(cid: number, sourceDocumentId: number): Promise<string | null> {
+   * (분류가 안 돌았으면 review_required 자체가 아직 없음). 여러 장을 한 번에 올린
+   * 경우 건별 대기 건수를 합산한다. 실패해도(네트워크 등) 업로드 자체는 이미
+   * 성공이라 조용히 넘어간다 — 부가 정보라 화면을 막지 않음. */
+  async function reviewNoticeFor(cid: number, sourceDocumentIds: number[]): Promise<string | null> {
     try {
-      const { pending_review_count } = await getDocumentReviewStatus(cid, sourceDocumentId);
-      if (pending_review_count > 0) {
-        return `이 중 ${pending_review_count}건은 담당자가 검토할 예정이에요.`;
+      const counts = await Promise.all(
+        sourceDocumentIds.map((id) => getDocumentReviewStatus(cid, id)),
+      );
+      const total = counts.reduce((sum, c) => sum + c.pending_review_count, 0);
+      if (total > 0) {
+        return `이 중 ${total}건은 담당자가 검토할 예정이에요.`;
       }
       return null;
     } catch (err) {
@@ -268,7 +272,7 @@ function OwnerUploadsPageContent() {
       await loadCell(expanded.docType, expanded.month);
       await loadGrid();
       setUploadCompleteMessage(`${DOC_LABEL[expanded.docType]} ${expanded.month}월 자료가 등록됐어요.`);
-      setUploadReviewNotice(await reviewNoticeFor(companyId, res.source_document_id));
+      setUploadReviewNotice(await reviewNoticeFor(companyId, [res.source_document_id]));
     } catch (err) {
       console.error("업로드 실패:", err);
       setUploadError(err instanceof Error ? err.message : "업로드에 실패했습니다.");
@@ -278,31 +282,46 @@ function OwnerUploadsPageContent() {
     }
   }
 
-  async function handleAutoUpload(file: File) {
-    if (companyId === null) return;
+  /** 여러 장을 한 번에 골라도 되도록 한 장씩 순차 업로드한다(문서마다 document_type을
+   * 스스로 판별해야 해서 uploadOcr류의 병렬 실행과 달리 완료 모달·그리드 새로고침을
+   * 마지막에 한 번만 띄우는 편이 자연스럽다). 일부만 실패해도 나머지는 계속 올리고,
+   * 성공한 장이 하나라도 있으면 그 결과로 모달을 띄운다. */
+  async function handleAutoUpload(files: File[]) {
+    if (companyId === null || files.length === 0) return;
     setAutoUploading(true);
     setAutoUploadError(null);
-    try {
-      const form = new FormData();
-      form.append("file", file);
-      form.append("mode", "ocr");
-      // document_type을 안 보낸다 — OCR/비전이 스스로 문서종류를 판별한다("그냥 업로드").
-      const res = await apiUpload<{ document_type: DocumentType; month: number; source_document_id: number }>(
-        `/owner/${companyId}/documents/upload`,
-        form,
-        DOCUMENT_UPLOAD_TIMEOUT_MS,
-      );
+    const successes: { document_type: DocumentType; month: number; source_document_id: number }[] = [];
+    const errors: string[] = [];
+    for (const file of files) {
+      try {
+        const form = new FormData();
+        form.append("file", file);
+        form.append("mode", "ocr");
+        // document_type을 안 보낸다 — OCR/비전이 스스로 문서종류를 판별한다("그냥 업로드").
+        const res = await apiUpload<{ document_type: DocumentType; month: number; source_document_id: number }>(
+          `/owner/${companyId}/documents/upload`,
+          form,
+          DOCUMENT_UPLOAD_TIMEOUT_MS,
+        );
+        successes.push(res);
+      } catch (err) {
+        console.error("자동 업로드 실패:", err);
+        errors.push(`${file.name}: ${err instanceof Error ? err.message : "업로드에 실패했습니다."}`);
+      }
+    }
+    if (successes.length > 0) {
       await classifyNewVouchers(companyId);
       await loadGrid();
-      setUploadCompleteMessage(`${DOC_LABEL[res.document_type]} ${res.month}월로 인식해 등록했어요.`);
-      setUploadReviewNotice(await reviewNoticeFor(companyId, res.source_document_id));
-    } catch (err) {
-      console.error("자동 업로드 실패:", err);
-      setAutoUploadError(err instanceof Error ? err.message : "업로드에 실패했습니다.");
-    } finally {
-      setAutoUploading(false);
-      if (autoFileInputRef.current) autoFileInputRef.current.value = "";
+      setUploadCompleteMessage(
+        successes.length === 1
+          ? `${DOC_LABEL[successes[0].document_type]} ${successes[0].month}월로 인식해 등록했어요.`
+          : `${successes.length}건을 인식해 등록했어요.`,
+      );
+      setUploadReviewNotice(await reviewNoticeFor(companyId, successes.map((s) => s.source_document_id)));
     }
+    setAutoUploadError(errors.length > 0 ? errors.join(" / ") : null);
+    setAutoUploading(false);
+    if (autoFileInputRef.current) autoFileInputRef.current.value = "";
   }
 
   return (
@@ -351,16 +370,17 @@ function OwnerUploadsPageContent() {
         </p>
         <label className="btn-cta mt-3 flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-2xl bg-brand py-3 text-[13px] font-bold text-white disabled:opacity-60">
           <UploadCloud size={16} />
-          {autoUploading ? "인식하는 중…" : "그냥 업로드하기"}
+          {autoUploading ? "인식하는 중…" : "여러 장 한 번에 그냥 업로드하기"}
           <input
             ref={autoFileInputRef}
             type="file"
             accept="image/*,.pdf,.html,.htm,.mhtml"
+            multiple
             className="hidden"
             disabled={autoUploading}
             onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) void handleAutoUpload(file);
+              const files = Array.from(e.target.files ?? []);
+              if (files.length > 0) void handleAutoUpload(files);
             }}
           />
         </label>
