@@ -271,8 +271,12 @@ function OwnerUploadsPageContent() {
       await classifyNewVouchers(companyId);
       await loadCell(expanded.docType, expanded.month);
       await loadGrid();
+      // 검토 대기 여부를 먼저 확인한 뒤에 모달을 연다 — 메시지부터 먼저 세팅해 모달이
+      // 바로 뜨고 안내 줄만 몇 초 뒤에 따라붙으면, 사용자가 뜨자마자 닫아버릴 경우
+      // 안내를 놓친다(실측으로 확인된 버그). 완성된 상태로 한 번에 띄운다.
+      const notice = await reviewNoticeFor(companyId, [res.source_document_id]);
+      setUploadReviewNotice(notice);
       setUploadCompleteMessage(`${DOC_LABEL[expanded.docType]} ${expanded.month}월 자료가 등록됐어요.`);
-      setUploadReviewNotice(await reviewNoticeFor(companyId, [res.source_document_id]));
     } catch (err) {
       console.error("업로드 실패:", err);
       setUploadError(err instanceof Error ? err.message : "업로드에 실패했습니다.");
@@ -312,12 +316,18 @@ function OwnerUploadsPageContent() {
     if (successes.length > 0) {
       await classifyNewVouchers(companyId);
       await loadGrid();
+      // 검토 대기 여부를 먼저 확인한 뒤에 모달을 연다 — 메시지부터 먼저 세팅해 모달이
+      // 바로 뜨고 안내 줄만 몇 초 뒤에 따라붙으면(여러 장일수록 review-status 병렬
+      // 호출이 늘어 더 오래 걸림), 사용자가 뜨자마자 닫아버릴 경우 안내를 놓친다
+      // (실측으로 확인된 버그 — "도장 꾹" 모달은 떴는데 검토 대기 줄만 없었음).
+      // 완성된 상태로 한 번에 띄운다.
+      const notice = await reviewNoticeFor(companyId, successes.map((s) => s.source_document_id));
+      setUploadReviewNotice(notice);
       setUploadCompleteMessage(
         successes.length === 1
           ? `${DOC_LABEL[successes[0].document_type]} ${successes[0].month}월로 인식해 등록했어요.`
           : `${successes.length}건을 인식해 등록했어요.`,
       );
-      setUploadReviewNotice(await reviewNoticeFor(companyId, successes.map((s) => s.source_document_id)));
     }
     setAutoUploadError(errors.length > 0 ? errors.join(" / ") : null);
     setAutoUploading(false);
