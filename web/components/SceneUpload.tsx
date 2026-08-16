@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { apiGet, apiPatch, apiUpload, getCompanyId } from "@/lib/api";
+import { UploadCloud } from "lucide-react";
+import { DOCUMENT_UPLOAD_TIMEOUT_MS, apiGet, apiPatch, apiUpload, getCompanyId } from "@/lib/api";
 
 /** 장면 ② — 연료 유형 체크 + 자료 업로드(세금계산서·전기요금고지서·도시가스고지서) 통합 화면.
  *
@@ -129,6 +130,8 @@ export function SceneUpload({
     error?: string;
   }>({ status: "idle" });
   const [coverage, setCoverage] = useState<Coverage | null>(null);
+  const [autoUploading, setAutoUploading] = useState(false);
+  const [autoUploadError, setAutoUploadError] = useState<string | null>(null);
 
   async function refreshCoverage() {
     try {
@@ -216,7 +219,11 @@ export function SceneUpload({
       form.append("mode", "ocr");
       // year/month는 안 보낸다 — 서버가 문서 내용에서 직접 읽어낸다
       // (db/document_text_extractor.py). 응답에 실려오는 month를 그대로 배지에 쓴다.
-      const res = await apiUpload<{ month?: number }>(`/owner/${cid}/documents/upload`, form);
+      const res = await apiUpload<{ month?: number }>(
+        `/owner/${cid}/documents/upload`,
+        form,
+        DOCUMENT_UPLOAD_TIMEOUT_MS,
+      );
       setEntries((e) => ({
         ...e,
         [docType]: [
@@ -242,6 +249,41 @@ export function SceneUpload({
     }
   }
 
+  /** "어떤 문서인지 모르겠다면" 박스 — document_type을 안 보내 OCR이 스스로 종류를
+   * 판별한다("그냥 업로드", /owner/uploads 탭의 같은 박스와 동일 계약). 판별된
+   * 종류의 카드(entries[docType])에 그대로 꽂아 넣어 그 카드의 뱃지·진행 상태가
+   * 자연스럽게 갱신되게 한다 — 위저드 안이라 AI 분류(4단계)를 따로 트리거할
+   * 필요는 없다(/owner/uploads처럼 위저드 밖 별도 탭이 아님). */
+  async function uploadAuto(file: File) {
+    const entryId = `auto-${Date.now()}-${file.name}`;
+    setAutoUploading(true);
+    setAutoUploadError(null);
+    try {
+      const cid = await getCompanyId();
+      const form = new FormData();
+      form.append("file", file);
+      form.append("mode", "ocr");
+      const res = await apiUpload<{ document_type: DocType; month?: number }>(
+        `/owner/${cid}/documents/upload`,
+        form,
+        DOCUMENT_UPLOAD_TIMEOUT_MS,
+      );
+      setEntries((e) => ({
+        ...e,
+        [res.document_type]: [
+          ...e[res.document_type],
+          { id: entryId, fileName: file.name, status: "done", month: res.month },
+        ],
+      }));
+      refreshCoverage();
+    } catch (err) {
+      console.error("자동 업로드 실패:", err);
+      setAutoUploadError(err instanceof Error ? err.message : "업로드에 실패했습니다.");
+    } finally {
+      setAutoUploading(false);
+    }
+  }
+
   async function uploadExcel(file: File) {
     setExcelResult({ status: "uploading" });
     try {
@@ -253,6 +295,7 @@ export function SceneUpload({
       const res = await apiUpload<{ vouchers_created: number; skipped_rows: number }>(
         `/owner/${cid}/documents/upload`,
         form,
+        DOCUMENT_UPLOAD_TIMEOUT_MS,
       );
       setExcelResult({ status: "done", count: res.vouchers_created, skipped: res.skipped_rows });
       refreshCoverage();
@@ -426,6 +469,31 @@ export function SceneUpload({
           {fuelError}
         </div>
       )}
+
+      <div className="mt-4 rounded-2xl bg-surface p-4 shadow-card">
+        <div className="text-[13.5px] font-bold text-ink">어떤 문서인지 모르겠다면</div>
+        <p className="mt-1 text-[12px] leading-relaxed text-muted">
+          사진이나 PDF를 올리면 AI가 문서종류와 월을 알아서 인식해요.
+        </p>
+        <label className="btn-cta mt-3 flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-xl bg-brand py-2.5 text-[13px] font-bold text-white disabled:opacity-60">
+          <UploadCloud size={16} />
+          {autoUploading ? "인식하는 중…" : "그냥 업로드하기"}
+          <input
+            type="file"
+            accept="image/*,.pdf,.html,.htm,.mhtml"
+            className="hidden"
+            disabled={autoUploading}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void uploadAuto(file);
+              e.target.value = "";
+            }}
+          />
+        </label>
+        {autoUploadError && (
+          <p className="mt-2 text-[11.5px] text-hitl-ink">{autoUploadError}</p>
+        )}
+      </div>
 
       <div className="mt-5">
         <div className="mb-2 text-[12.5px] font-bold text-ink">계산서</div>

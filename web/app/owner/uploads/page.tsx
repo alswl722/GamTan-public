@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
 import { Trash2, UploadCloud, X } from "lucide-react";
 import {
+  DOCUMENT_UPLOAD_TIMEOUT_MS,
   apiPost,
   apiUpload,
   deleteDocument,
@@ -221,7 +222,7 @@ function OwnerUploadsPageContent() {
       form.append("file", file);
       form.append("document_type", expanded.docType);
       form.append("mode", "ocr");
-      await apiUpload(`/owner/${companyId}/documents/upload`, form);
+      await apiUpload(`/owner/${companyId}/documents/upload`, form, DOCUMENT_UPLOAD_TIMEOUT_MS);
       await classifyNewVouchers(companyId);
       await loadCell(expanded.docType, expanded.month);
       await loadGrid();
@@ -246,7 +247,8 @@ function OwnerUploadsPageContent() {
       // document_type을 안 보낸다 — OCR/비전이 스스로 문서종류를 판별한다("그냥 업로드").
       const res = await apiUpload<{ document_type: DocumentType; month: number }>(
         `/owner/${companyId}/documents/upload`,
-        form
+        form,
+        DOCUMENT_UPLOAD_TIMEOUT_MS,
       );
       await classifyNewVouchers(companyId);
       await loadGrid();

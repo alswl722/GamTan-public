@@ -229,6 +229,37 @@ def test_tax_invoice_table_row_fallback_when_linear_text_row_unmatched(monkeypat
     assert result["extraction_method"] == "ocr"
 
 
+def test_tax_invoice_date_table_fallback_when_no_colon_label_at_all(monkeypatch):
+    """실측(2026-08-16, 사용자 제공 합성 세금계산서 사진) — 국세청 표준 서식은
+    "작성일자:" 콜론이 아예 없고 헤더행/데이터행 표 구조라, 선형 텍스트 기반
+    parse_tax_invoice_header도 실패한다. 이때 날짜까지 좌표 기반
+    (parse_tax_invoice_date_table)으로 찾아야 최종 성공한다 — 품목행 표와 날짜
+    요약행 표가 둘 다 "공급가액" 컬럼을 가져도 서로 헷갈리지 않아야 함."""
+    linear_text = (
+        "전 자 세 금 계 산 서\n공급자 구미에너지주유소\n"
+        "작성일자 공급가액 세액 비고\n2025-01-11 460, 617 46, 062\n"
+        "품목 규격 수량 단가 공급가액 세액 비고\n경유 L 329 1,400 460,617 46,062"
+    )
+    rows = [
+        [(0.0, 80.0, "작성일자"), (150.0, 220.0, "공급가액"), (280.0, 320.0, "세액"), (360.0, 400.0, "비고")],
+        [(0.0, 90.0, "2025-01-11"), (150.0, 220.0, "460, 617"), (280.0, 320.0, "46, 062")],
+        [(0.0, 60.0, "품목"), (129.0, 195.0, "규격"), (267.0, 336.0, "수량"),
+         (404.0, 516.0, "단가"), (581.0, 748.0, "공급가액"), (760.0, 800.0, "세액")],
+        [(0.0, 55.0, "경유"), (125.0, 154.0, "L"), (266.0, 344.0, "329"),
+         (401.0, 490.0, "1,400"), (580.0, 704.0, "460,617"), (760.0, 800.0, "46,062")],
+    ]
+    monkeypatch.setattr(
+        document_extraction, "ocr_extract",
+        lambda file_bytes: _stub_ocr(linear_text, rows=rows, confidence=0.95),
+    )
+    result = extract_document(b"fake jpeg bytes", "tax_invoice")
+    assert result["document_type"] == "tax_invoice"
+    assert result["year"] == 2025 and result["month"] == 1
+    assert result["item_description"] == "경유"
+    assert result["supply_amount_krw"] == 460_617
+    assert result["extraction_method"] == "ocr"
+
+
 def test_tax_invoice_table_fallback_not_attempted_for_other_slots(monkeypatch):
     """document_type이 electric_bill/gas_bill로 지정된 경우엔 표 매칭을 시도하지
     않는다 — 세금계산서 전용 재시도."""

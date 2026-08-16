@@ -41,6 +41,10 @@ DOCUMENT_TYPE_LABEL = {
 _TITLE_TO_DOCUMENT_TYPE = {
     "전자세금계산서": "tax_invoice",
     "전기요금 고지서": "electric_bill",
+    # 실측(2026-08-15, 실제 한전 고지서 사진 확인): "OO월분 전기요금 청구서" /
+    # "OO월분 전기요금 청구 및 영수증(고지서)" — "전기요금 고지서"라는 정확한
+    # 문구는 실물에 없었다. "전기요금 청구"까지만 매칭해 두 실제 서식을 모두 커버.
+    "전기요금 청구": "electric_bill",
     "도시가스 요금고지서": "gas_bill",
 }
 
@@ -213,24 +217,42 @@ _DATE_SEP = r"[-./]"
 def _parse_electric_bill(text: str) -> dict:
     # 콜론 앞 공백 허용(\s*:) — "청구월 : 2025-06"처럼 OCR이 라벨과 콜론 사이에 공백을
     # 넣는 경우가 실측 스파이크에서 확인됐다(원래 "청구월:\s*"는 이 경우 매칭 실패).
-    date_m = re.search(rf"청구월\s*:\s*(\d{{4}}){_DATE_SEP}(\d{{2}})", text)
+    # 실측(2026-08-15, 실제 한전 고지서): "청구월:" 라벨 자체가 없고, 대신 제목 근처에
+    # "2021년 12월분"처럼 청구월이 찍혀 있었다 — 그쪽도 함께 시도한다. "사용기간:
+    # 10월22일~12월21일"처럼 청구월과 다른 달에 걸친 사용기간 범위는 있어도 청구월
+    # 자체를 명시한 라벨은 없었다.
+    date_m = re.search(
+        rf"청구월\s*:\s*(\d{{4}}){_DATE_SEP}(\d{{2}})", text
+    ) or re.search(r"(\d{4})년\s*(\d{1,2})월분", text)
     if not date_m:
         raise DocumentParseError("청구월을 찾지 못했어요")
-    quantity = _parse_amount(
-        _line_value(text, r"사용량\(kWh\)", field_label="사용량"), field_label="사용량"
-    )
+    # 실측: 실제 고지서는 "사용량(kWh)" 라벨을 못 찾을 수 있다(사용전력량이 비교
+    # 그래프·계량기 지침 표 등 다른 형태로 들어있는 서식이 있었음) — 세금계산서
+    # 물량 처리와 같은 원칙으로, 물량을 못 찾아도 금액만 있으면 파싱 자체는
+    # 성공시키고(금액÷단가 환산 경로로 계산), quantity 필드는 그냥 안 넣는다.
+    quantity = None
+    try:
+        quantity = _parse_amount(
+            _line_value(text, r"사용량\(kWh\)", field_label="사용량"), field_label="사용량"
+        )
+    except DocumentParseError:
+        pass
+    # 실측: "청구금액(원)"이 아니라 "청구금액"(단위 없이) 바로 뒤에 금액이 온다
+    # ("청구금액 9,240원") — "(원)"을 선택적으로 바꿔 둘 다 허용.
     amount = _parse_amount(
-        _line_value(text, r"청구금액\(원\)", field_label="청구금액"), field_label="청구금액"
+        _line_value(text, r"청구금액(?:\(원\))?", field_label="청구금액"), field_label="청구금액"
     )
-    return {
+    result = {
         "supplier_name": "한국전력공사",
         "item_description": "전기요금 (산업용 을)",
         "supply_amount_krw": amount,
-        "quantity": quantity,
-        "quantity_unit": "kWh",
         "year": int(date_m.group(1)),
         "month": int(date_m.group(2)),
     }
+    if quantity is not None:
+        result["quantity"] = quantity
+        result["quantity_unit"] = "kWh"
+    return result
 
 
 def _parse_gas_bill(text: str) -> dict:
@@ -254,6 +276,16 @@ def _parse_gas_bill(text: str) -> dict:
     }
 
 
+def find_supplier_name_best_effort(text: str) -> str:
+    """"공급자: OO" 콜론 형식을 찾아보되, 없으면 "알 수 없음" — 공급자는 계산에
+    쓰이지 않는 표시용 필드라(CLAUDE.md 계산은 공급가액·수량만 본다) 못 찾아도
+    문서 전체를 실패시키지 않는다. db/document_extraction.py가 날짜를
+    parse_tax_invoice_date_table()(좌표 기반)로 찾은 경우에도 이 함수로 공급자를
+    같이 채운다."""
+    supplier_m = re.search(r"공급자\s*:\s*(.+)", text)
+    return supplier_m.group(1).strip() if supplier_m else "알 수 없음"
+
+
 def parse_tax_invoice_header(text: str) -> dict:
     """세금계산서의 날짜·공급자만 뽑는다(품목행과 분리 — db/document_ocr_extractor.py의
     표 재구성 경로가 품목행은 좌표 기반 parse_tax_invoice_table_rows()로 따로 뽑고
@@ -263,9 +295,8 @@ def parse_tax_invoice_header(text: str) -> dict:
     )
     if not date_m:
         raise DocumentParseError("작성일자를 찾지 못했어요")
-    supplier_m = re.search(r"공급자\s*:\s*(.+)", text)
     return {
-        "supplier_name": supplier_m.group(1).strip() if supplier_m else "알 수 없음",
+        "supplier_name": find_supplier_name_best_effort(text),
         "year": int(date_m.group(1)),
         "month": int(date_m.group(2)),
     }
@@ -303,7 +334,48 @@ _TABLE_HEADER_ITEM_KEYWORDS = ("품목명", "품목")
 _TABLE_HEADER_AMOUNT_KEYWORDS = ("공급가액",)
 _TABLE_HEADER_SPEC_KEYWORDS = ("규격",)
 _TABLE_HEADER_QTY_KEYWORDS = ("수량", "물량")
+_TABLE_HEADER_DATE_KEYWORDS = ("작성일자", "발급일자")
 _TABLE_COLUMN_MATCH_TOLERANCE = 10  # px, 컬럼 중심 좌표 매칭 여유
+
+
+def _cell_for_column(row: OcrRow, col_range: tuple[float, float]) -> str | None:
+    """행 안에서 주어진 컬럼 x범위 중심에 가장 가까운 셀 텍스트를 찾는다 —
+    parse_tax_invoice_table_rows()·parse_tax_invoice_date_table()이 공유."""
+    col_center = (col_range[0] + col_range[1]) / 2
+    best_text, best_dist = None, None
+    for x0, x1, text in row:
+        if x0 - _TABLE_COLUMN_MATCH_TOLERANCE <= col_center <= x1 + _TABLE_COLUMN_MATCH_TOLERANCE:
+            dist = abs((x0 + x1) / 2 - col_center)
+            if best_dist is None or dist < best_dist:
+                best_text, best_dist = text.strip(), dist
+    return best_text
+
+
+def parse_tax_invoice_date_table(rows: list[OcrRow]) -> tuple[int, int] | None:
+    """세금계산서 날짜가 "작성일자:" 콜론 형식이 아니라 헤더행/데이터행 표 구조일
+    때 좌표 기반으로 찾는다 — 실측 확인(2026-08-16, 사용자 제공 합성 세금계산서
+    사진): 실제 국세청 표준 세금계산서 서식은 "작성일자·공급가액·세액·비고" 헤더
+    행 아래 값이 오는 표라서, parse_tax_invoice_header()의 콜론 기반 정규식이
+    통하지 않는다. parse_tax_invoice_table_rows()와 같은 헤더행 탐지 방식이지만
+    "품목" 대신 "작성일자"/"발급일자"를 찾는다 — 같은 문서 안에 공급가액 컬럼을
+    가진 표가 두 개(작성일자 요약행, 품목행) 있을 수 있어 헤더 판별 키워드를
+    다르게 둔다(둘을 혼동하지 않음). 헤더나 값을 못 찾으면 None(예외 대신 —
+    호출부가 다른 경로를 계속 시도할 수 있게)."""
+    for i, row in enumerate(rows):
+        date_col = next(
+            ((x0, x1) for x0, x1, text in row if text.strip() in _TABLE_HEADER_DATE_KEYWORDS),
+            None,
+        )
+        if date_col is None:
+            continue
+        for data_row in rows[i + 1 : i + 3]:  # 바로 아래 한두 행 안에서 값을 찾는다
+            cell = _cell_for_column(data_row, date_col)
+            if cell:
+                m = re.search(rf"(\d{{4}}){_DATE_SEP}(\d{{2}}){_DATE_SEP}(\d{{2}})", cell)
+                if m:
+                    return int(m.group(1)), int(m.group(2))
+        return None  # 헤더는 찾았는데 값을 못 찾으면 더 이상 시도 안 함
+    return None
 
 
 def parse_tax_invoice_table_rows(rows: list[OcrRow]) -> dict | None:
@@ -335,16 +407,6 @@ def parse_tax_invoice_table_rows(rows: list[OcrRow]) -> dict | None:
             break
     if header_cols is None:
         return None
-
-    def _cell_for_column(row: OcrRow, col_range: tuple[float, float]) -> str | None:
-        col_center = (col_range[0] + col_range[1]) / 2
-        best_text, best_dist = None, None
-        for x0, x1, text in row:
-            if x0 - _TABLE_COLUMN_MATCH_TOLERANCE <= col_center <= x1 + _TABLE_COLUMN_MATCH_TOLERANCE:
-                dist = abs((x0 + x1) / 2 - col_center)
-                if best_dist is None or dist < best_dist:
-                    best_text, best_dist = text.strip(), dist
-        return best_text
 
     for row in rows[header_row_idx + 1:]:
         item = _cell_for_column(row, header_cols["item_description"])

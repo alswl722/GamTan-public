@@ -17,6 +17,7 @@ GET /admin/alerts(은행 담당자용 포트폴리오 전체)와 같은 판정 �
 은행이 먼저 알고 사장은 모르는 구도를 만들지 않기 위함(CLAUDE.md §9,
 "하지 말 것" — 알림은 항상 사장에게 먼저).
 """
+import asyncio
 import os
 from typing import Literal
 
@@ -144,7 +145,12 @@ async def upload_document(
     file_bytes = await file.read()
     filename = file.filename or "upload"
     try:
-        return ingest_uploaded_document(
+        # PaddleOCR(db/document_ocr_extractor.py)은 CPU 연산이라 동기 호출 그대로 두면
+        # 이 요청이 끝날 때까지 이벤트 루프 전체가 막힌다 — 그 사이 다른 사용자의 아무
+        # 요청도(연료 유형 저장 등 가벼운 PATCH까지) 응답을 못 받고 타임아웃난다(실측
+        # 확인). 스레드로 넘겨 이벤트 루프는 다른 요청을 계속 처리하게 한다.
+        return await asyncio.to_thread(
+            ingest_uploaded_document,
             session, company_id, file_bytes, filename,
             document_type, mode=mode,
         )

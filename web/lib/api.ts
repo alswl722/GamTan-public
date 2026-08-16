@@ -94,6 +94,11 @@ export async function apiUpload<T>(
 /** 에이전트 실행은 분류(LLM 병렬 호출) 포함이라 더 길게 허용. */
 export const AGENT_RUN_TIMEOUT_MS = 60_000;
 
+/** 문서 업로드는 PaddleOCR(로컬 추론) 처리가 포함돼 기본 15초로는 부족할 수 있다
+ * (모델 최초 로딩 시 특히) — apiUpload 호출부(SceneUpload.tsx, owner/uploads/page.tsx)
+ * 에서 이 값을 timeoutMs로 넘긴다. */
+export const DOCUMENT_UPLOAD_TIMEOUT_MS = 60_000;
+
 // 계정(로그인) 개념이 없어 "지금 어느 기업으로 보고 있는지"를 서버가 알 방법이 없다 —
 // 브라우저에 선택값을 저장해두고 모든 /owner 호출이 이 값을 쓴다. 기업 선택 화면
 // (web/app/owner/page.tsx)에서 setCompanyId()로 바꾸면 그 즉시 다음 getCompanyId()

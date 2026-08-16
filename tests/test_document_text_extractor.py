@@ -10,8 +10,10 @@ from reportlab.pdfgen import canvas
 from db.document_text_extractor import (
     DocumentParseError,
     DocumentTypeMismatchError,
+    detect_document_type,
     extract_pdf_text,
     parse_document_text,
+    parse_tax_invoice_date_table,
     parse_tax_invoice_table_rows,
 )
 
@@ -249,6 +251,58 @@ def test_slotted_upload_without_title_or_fields_still_fails_clearly():
         parse_document_text(text, "electric_bill")
 
 
+def test_real_kepco_bill_structure_parses_via_slotted_upload():
+    """실제 한전 전기요금 청구서 사진(사용자 제공, 2021-12/2022-01분) 실측 확인:
+    "청구월:" 라벨 자체가 없고 제목에 "2021년 12월분"으로 찍힘, "청구금액(원)"이
+    아니라 "청구금액"(단위 없이), "사용량(kWh)" 라벨은 아예 안 보임(사용전력량이
+    비교그래프·계량기지침 표 등 다른 형태), 청구내역이 기본요금·전력량요금·
+    기후환경요금·복지할인 등 여러 항목으로 나뉜 표. 이 모든 실측 특징을 한 번에
+    재현해 슬롯 지정 업로드가 성공하는지 확인한다."""
+    text = extract_pdf_text(_pdf([
+        "한국전력공사",
+        "2021년 12월분 전기요금 청구서",
+        "전기사용장소 ○○정밀 (경북 구미)",
+        "청구금액 9,240 원",
+        "고객번호 000000000  납기일 2022년 01월 17일",
+        "사용기간 2021년 10월 22일 ~ 2021년 12월 21일",
+        "기본요금 910",
+        "전력량요금 12,362",
+        "기후환경요금 742",
+        "복지할인 -12,000",
+        "부가가치세 201",
+        "당월청구요금 2,280",
+        "미납요금 4,460",
+    ]))
+    result = parse_document_text(text, "electric_bill")
+    assert result["document_type"] == "electric_bill"
+    assert result["year"] == 2021 and result["month"] == 12
+    assert result["supply_amount_krw"] == 9_240
+    assert "quantity" not in result  # 사용량 라벨을 못 찾아도 금액만으로 파싱 성공
+
+
+def test_real_kepco_bill_title_recognized_without_slot():
+    """"그냥 업로드"(슬롯 미지정)에서도 실측 제목("OO월분 전기요금 청구서")으로
+    문서종류를 판별한다 — "전기요금 고지서"라는 정확한 문구가 없어도 통과해야 한다."""
+    text = extract_pdf_text(_pdf([
+        "한국전력공사",
+        "2022년 01월분 전기요금 청구 및 영수증(고지서)",
+        "청구금액 15,000 원",
+    ]))
+    assert detect_document_type(text) == "electric_bill"
+
+
+def test_electric_bill_amount_label_without_won_unit_suffix():
+    """실측: "청구금액(원)"이 아니라 "청구금액"(단위 없이) 바로 뒤에 "9,240원"처럼
+    값 자체에 "원"이 붙어 온다."""
+    text = extract_pdf_text(_pdf([
+        "전기요금 고지서",
+        "청구월: 2025-06",
+        "청구금액 987,654원",
+    ]))
+    result = parse_document_text(text, "electric_bill")
+    assert result["supply_amount_krw"] == 987_654
+
+
 def test_tax_invoice_accepts_issue_date_label_synonym():
     text = extract_pdf_text(_pdf([
         "전자세금계산서",
@@ -324,3 +378,41 @@ def test_parse_tax_invoice_table_rows_without_header_returns_none():
     """헤더 행을 못 찾으면 예외 대신 None — 호출부가 다른 경로를 계속 시도할 수 있게."""
     rows = [[(0.0, 55.0, "경유"), (580.0, 704.0, "420,833")]]
     assert parse_tax_invoice_table_rows(rows) is None
+
+
+# ── parse_tax_invoice_date_table (실측: 콜론 없는 헤더행/데이터행 서식) ─────────
+
+def test_parse_tax_invoice_date_table_matches_real_kepco_style_layout():
+    """실측(2026-08-16, 사용자 제공 합성 세금계산서 사진) — 국세청 표준 세금계산서는
+    "작성일자:" 콜론이 아니라 헤더행("작성일자"/"공급가액"/"세액"/"비고") 아래
+    데이터행이 오는 표 구조였다. 같은 문서에 공급가액 컬럼을 가진 표가 두 개
+    (이 요약행, 품목행) 있어도 "작성일자" 키워드로 올바른 헤더행을 구분해야 한다."""
+    rows = [
+        [(0.0, 80.0, "작성일자"), (150.0, 220.0, "공급가액"), (280.0, 320.0, "세액"), (360.0, 400.0, "비고")],
+        [(0.0, 90.0, "2025-01-11"), (150.0, 220.0, "460, 617"), (280.0, 320.0, "46, 062"), (500.0, 520.0, "월")],
+        [(0.0, 60.0, "품목"), (150.0, 220.0, "공급가액")],  # 품목행 헤더 — 여기 걸리면 안 됨
+        [(0.0, 55.0, "경유"), (150.0, 220.0, "420,833")],
+    ]
+    assert parse_tax_invoice_date_table(rows) == (2025, 1)
+
+
+def test_parse_tax_invoice_date_table_accepts_issue_date_label_synonym():
+    rows = [
+        [(0.0, 80.0, "발급일자"), (150.0, 220.0, "공급가액")],
+        [(0.0, 90.0, "2025.07.10"), (150.0, 220.0, "420,000")],
+    ]
+    assert parse_tax_invoice_date_table(rows) == (2025, 7)
+
+
+def test_parse_tax_invoice_date_table_without_header_returns_none():
+    rows = [[(0.0, 55.0, "경유"), (580.0, 704.0, "420,833")]]
+    assert parse_tax_invoice_date_table(rows) is None
+
+
+def test_parse_tax_invoice_date_table_header_without_value_returns_none():
+    """헤더는 찾았는데 그 아래 행에 날짜 형식 값이 없으면 예외 대신 None."""
+    rows = [
+        [(0.0, 80.0, "작성일자"), (150.0, 220.0, "공급가액")],
+        [(0.0, 90.0, "판독불가"), (150.0, 220.0, "460,617")],
+    ]
+    assert parse_tax_invoice_date_table(rows) is None
