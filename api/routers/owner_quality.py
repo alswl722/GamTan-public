@@ -140,7 +140,13 @@ def owner_quality_report(
     inventories: dict[str, BorrowerEmissionInventory] = {}
     for scope in _SCOPES:
         inv = _latest_inventory(session, company_id, reporting_year, scope)
-        if inv is None:
+        # status='approved'만 그대로 재사용한다 — 은행 담당자가 승인한 결과는
+        # CLAUDE.md 원칙대로 덮어쓰지 않는다. 그 외(draft 등, 이 라우터가 만드는
+        # 값은 항상 draft)는 매 조회마다 다시 계산한다. 실측(2026-08-17): 분류
+        # 로직 버그를 고쳐도 예전에 한 번 조회돼 저장된 잘못된 draft가 계속
+        # 재사용돼 리포트가 그대로 틀리게 남는 사고가 있었다 — draft는 "확정"이
+        # 아니라 그냥 마지막 조회 시점 스냅숏일 뿐이라 재계산해도 원칙에 안 어긋난다.
+        if inv is None or inv.status != "approved":
             inv = save_quality_assessment_version(session, company_id, boundary, reporting_year, scope)
         inventories[scope] = inv
     session.commit()
