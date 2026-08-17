@@ -126,6 +126,9 @@ function OwnerUploadsPageContent() {
   const [uploadCompleteMessage, setUploadCompleteMessage] = useState<string | null>(null);
   const [uploadReviewNotice, setUploadReviewNotice] = useState<string | null>(null);
 
+  const [classifying, setClassifying] = useState(false);
+  const [classifyError, setClassifyError] = useState<string | null>(null);
+
   /** 방금 올린 문서들(sourceDocumentIds)에서 담당자 검토 대기 건이 나왔는지 확인해
    * 모달 안내 문구를 만든다 — classifyNewVouchers()가 끝난 뒤에만 의미 있다
    * (분류가 안 돌았으면 review_required 자체가 아직 없음). 여러 장을 한 번에 올린
@@ -149,13 +152,40 @@ function OwnerUploadsPageContent() {
 
   /** 위저드 밖(이 탭)에서 올린 전표는 "AI 분류" 단계를 거칠 기회가 없어 미분류로
    * 남는다 — 그대로 두면 홈 진행바·리포트가 "미완료"로 보인다(api/queries.py::
-   * get_owner_progress). 이미 분류된 전표는 건너뛰므로 매 업로드마다 불러도 안전. */
-  async function classifyNewVouchers(cid: number) {
+   * get_owner_progress). 이미 분류된 전표는 건너뛰므로 매 업로드마다 불러도 안전.
+   *
+   * 실패 가시성 원칙 — 이 호출이 실패하면(네트워크 순단 등) 예전엔 console.error로만
+   * 삼켜서 "전표는 있는데 분류만 안 된" 상태가 화면에 전혀 안 보였다(실제로 팀원이
+   * 겪음 — 재업로드해도 파일이 이미 있어 매번 409라 이 함수가 재호출될 기회조차
+   * 없었음). 이제 실패 여부를 반환하고, 실패하면 배너로 보여준다. 성공/실패와
+   * 무관하게 아래 "분류 다시 실행" 버튼으로 언제든 재시도할 수 있다(classify_vouchers
+   * 는 미분류 건만 처리하는 멱등 구조라 몇 번을 다시 불러도 안전). */
+  async function classifyNewVouchers(cid: number): Promise<boolean> {
     try {
       await apiPost(`/classify/${cid}`);
+      setClassifyError(null);
+      return true;
     } catch (err) {
       console.error("업로드 후 자동 분류 실패:", err);
+      setClassifyError(
+        "방금 올린 자료의 AI 분류에 실패했어요 — 아래 \"분류 다시 실행\"을 눌러 주세요.",
+      );
+      return false;
     }
+  }
+
+  /** "이미 업로드된 파일입니다"(409)로 전량 실패하면 handleAutoUpload/handleUpload가
+   * classifyNewVouchers를 아예 안 부른다(성공 0건이라 재분류 트리거 조건을 못 만족) —
+   * 그런데 그 파일들이 과거에 업로드만 되고 분류는 안 된 채 남아있을 수 있다. 이
+   * 버튼은 그 경로와 무관하게 항상 눌러서 미분류 잔여 건을 정리할 수 있게 한다. */
+  async function handleRetryClassification() {
+    if (companyId === null) return;
+    setClassifying(true);
+    const ok = await classifyNewVouchers(companyId);
+    if (ok) {
+      await loadGrid();
+    }
+    setClassifying(false);
   }
 
   /** year 생략 시 백엔드가 그 기업의 최신 전표 연도를 기본값으로 쓴다 — 리포트
@@ -352,6 +382,17 @@ function OwnerUploadsPageContent() {
             {streakMonths}개월 연속 업로드 중
           </span>
         )}
+        {/* 업로드는 됐는데 분류만 안 된 채 남는 경우를 위한 항상 열린 탈출구 — 업로드
+         * 실패(중복 등)와 무관하게 언제든 눌러서 밀린 분류를 정리할 수 있다.
+         * classify_vouchers가 미분류 건만 처리하는 멱등 구조라 반복 호출해도 안전. */}
+        <button
+          type="button"
+          onClick={() => void handleRetryClassification()}
+          disabled={classifying || companyId === null}
+          className="ml-auto text-[11.5px] font-semibold text-muted underline decoration-dotted underline-offset-2 hover:text-ink disabled:opacity-50"
+        >
+          {classifying ? "분류 실행 중…" : "분류 다시 실행"}
+        </button>
       </div>
 
       {years !== null && years.length > 1 && grid && (
@@ -370,6 +411,20 @@ function OwnerUploadsPageContent() {
               {y}년
             </button>
           ))}
+        </div>
+      )}
+
+      {classifyError && (
+        <div className="mt-4 rounded-2xl bg-hitl/20 px-4 py-3 text-[12.5px] leading-relaxed text-hitl-ink">
+          <p>{classifyError}</p>
+          <button
+            type="button"
+            onClick={() => void handleRetryClassification()}
+            disabled={classifying}
+            className="btn-cta mt-2 rounded-xl bg-brand px-4 py-2 text-[12.5px] font-bold text-white disabled:opacity-60"
+          >
+            {classifying ? "분류 실행 중…" : "분류 다시 실행"}
+          </button>
         </div>
       )}
 

@@ -2,7 +2,14 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { UploadCloud } from "lucide-react";
-import { DOCUMENT_UPLOAD_TIMEOUT_MS, apiGet, apiPatch, apiUpload, getCompanyId } from "@/lib/api";
+import {
+  DOCUMENT_UPLOAD_TIMEOUT_MS,
+  apiGet,
+  apiPatch,
+  apiUpload,
+  getCompanyId,
+  getDocumentGrid,
+} from "@/lib/api";
 
 /** 장면 ② — 연료 유형 체크 + 자료 업로드(세금계산서·전기요금고지서·도시가스고지서) 통합 화면.
  *
@@ -145,6 +152,36 @@ export function SceneUpload({
     }
   }
 
+  /** "다음" 버튼(canProceed)이 이번 세션에 성공한 업로드(entries)만 보고 있어서
+   * 생기던 버그 — 파일이 이미 서버에 있으면("이미 업로드된 파일입니다" 409) 카드는
+   * 계속 "필수" 미충족으로 남아 위저드가 영영 안 넘어갔다(재업로드도 중복이라 막힘).
+   * 서버 실제 그리드(문서종류×월, /owner/uploads 탭과 같은 근거)를 조회해, 이미
+   * 최소 1건이라도 있는 문서종류는 entries에 서버 근거 항목을 채워 카드가 충족된
+   * 것으로 보이게 한다. 마운트 시(새로고침·뒤로가기 등으로 세션 상태가 비어도) +
+   * 업로드 시도 후(성공이든 중복 실패든) 호출한다. */
+  async function refreshDocumentGrid() {
+    try {
+      const cid = await getCompanyId();
+      const grid = await getDocumentGrid(cid);
+      setEntries((e) => {
+        const next = { ...e };
+        for (const row of grid.document_types) {
+          const hasAny = Object.values(row.months).some((count) => count > 0);
+          const alreadyMarked = next[row.document_type].some((m) => m.id === "server-coverage");
+          if (hasAny && !alreadyMarked) {
+            next[row.document_type] = [
+              ...next[row.document_type],
+              { id: "server-coverage", fileName: "(이미 업로드된 자료)", status: "done" },
+            ];
+          }
+        }
+        return next;
+      });
+    } catch (err) {
+      console.error("문서 현황 조회 실패:", err);
+    }
+  }
+
   useEffect(() => {
     // 리뷰 지적사항 — fuel_types_json이 저장 안 된 채(null) "다음"으로 넘어가면 필터가 안
     // 걸려 안전하지만, 사용자가 도시가스 pill을 실수로 안 누르고 다른 연료만 저장하면
@@ -172,6 +209,14 @@ export function SceneUpload({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 마운트 시 1회만, initialFuel 변화엔 반응 안 함
+  }, []);
+
+  // 새로고침·뒤로가기로 이 화면에 다시 들어와도(entries는 세션 상태라 비어있음)
+  // 서버에 이미 있는 문서는 카드가 충족 상태로 보이게 — fuel 저장 여부와 무관하게
+  // 항상 1회 실행.
+  useEffect(() => {
+    void refreshDocumentGrid();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 마운트 시 1회만
   }, []);
 
   async function saveFuel(next: FuelTypesState) {
@@ -246,6 +291,10 @@ export function SceneUpload({
           },
         ],
       }));
+      // "이미 업로드된 파일입니다"(409)면 그 문서종류는 이미 서버에 있다는 뜻이다 —
+      // 에러로만 남기면 카드가 영영 "필수" 미충족으로 보이니, 실제 서버 현황을
+      // 다시 물어 카드를 충족 처리한다(refreshDocumentGrid 참고).
+      void refreshDocumentGrid();
     }
   }
 
@@ -294,6 +343,9 @@ export function SceneUpload({
       console.error("자동 업로드 실패:", err);
       const message = err instanceof Error ? err.message : "업로드에 실패했습니다.";
       setAutoUploadErrors((errs) => [...errs, `${file.name}: ${message}`]);
+      // uploadOcr와 동일한 이유 — "이미 업로드된 파일"이면 서버 현황을 다시 물어
+      // 해당 문서종류 카드를 충족 처리한다.
+      void refreshDocumentGrid();
     } finally {
       setAutoUploading((n) => n - 1);
     }
