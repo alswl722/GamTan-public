@@ -62,6 +62,21 @@ def test_electric_bill_parses_date_amount_quantity():
     }
 
 
+def test_electric_bill_rejects_forecast_labeled_amount():
+    """실측(2026-08-17, 실제 한전 카카오 알림톡 캡처): "예상청구금액"처럼 실제
+    라벨과 겉보기엔 비슷한 문구로 AI 예측치를 안내하는 경우가 있다 — 값을 지어내지
+    않는다는 원칙상, 실제 청구금액이 아니라 예상치임을 알아채면 명확히 실패해야
+    한다(더 선명한 사진으로는 해결 안 되는 문제이므로 그 사실을 메시지로 알려준다)."""
+    text = extract_pdf_text(_pdf([
+        "전기요금 고지서",
+        "청구월: 2025-01 계약종별: 산업용(을) 고압A",
+        "사용량(kWh) 4,477",
+        "예상청구금액(원) 5,491,807",
+    ]))
+    with pytest.raises(DocumentParseError, match="예상"):
+        parse_document_text(text, "electric_bill")
+
+
 def test_parse_document_text_without_expected_type_auto_detects():
     """expected_document_type 생략("그냥 업로드")하면 대조 없이 판별된 종류를
     그대로 신뢰하고 반환 dict의 document_type으로 알려준다."""
