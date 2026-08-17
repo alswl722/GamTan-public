@@ -13,6 +13,8 @@
 - GET   /owner/{company_id}/k-taxonomy-leads    K택소노미·설비투자 리드(있으면 설비금융 안내 요청 버튼 노출)
 - GET   /owner/{company_id}/anomaly-checks      이상치 되묻기 — 답변 대기 중인 확인 요청 목록
 - PATCH /owner/{company_id}/classifications/{voucher_id}/anomaly-check  이상치 확인 답변(네/아니오/모르겠어요, 숫자 입력 없음)
+- GET   /owner/{company_id}/notifications       확정 전송 알림 목록(메인 화면 배너, 폴링 조회, ?unread=true)
+- PATCH /owner/{company_id}/notifications/{id}/read  알림 읽음 처리(배너 클릭 시)
 
 GET /admin/alerts(은행 담당자용 포트폴리오 전체)와 같은 판정 로직
 (db/alerts.py::detect_alerts)을 재사용하되 자기 기업으로만 필터한다 —
@@ -21,6 +23,7 @@ GET /admin/alerts(은행 담당자용 포트폴리오 전체)와 같은 판정 �
 """
 import asyncio
 import os
+from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -35,7 +38,7 @@ from api.document_ingestion import (
     MissingInstitutionAttributionError,
     ingest_uploaded_document,
 )
-from api.queries import get_coverage, get_owner_progress, get_pending_anomaly_checks
+from api.queries import get_coverage, get_owner_notifications, get_owner_progress, get_pending_anomaly_checks
 from db.alerts import detect_alerts
 from db.document_coverage import (
     delete_source_document,
@@ -48,7 +51,7 @@ from db.document_requirements import FuelTypes, required_documents
 from db.document_text_extractor import DocumentParseError
 from db.hometax_excel_parser import HometaxExcelFormatError
 from db.k_taxonomy import k_taxonomy_leads_for_company
-from db.models import Classification, Company, SourceDocument, Voucher
+from db.models import Classification, Company, OwnerNotification, SourceDocument, Voucher
 from db.pcaf_quality import default_reporting_year
 from db.rate_products import rate_product_status_for_company
 from db.quality_issues import record_ingestion_failure
@@ -382,3 +385,36 @@ def k_taxonomy_leads(company_id: int, session: Session = Depends(get_session)):
     데이터를 자기 기업으로 좁혀 재사용한다(db/k_taxonomy.py::k_taxonomy_leads_for_company).
     """
     return {"leads": k_taxonomy_leads_for_company(session, company_id)}
+
+
+@router.get("/{company_id}/notifications")
+def owner_notifications(
+    company_id: int,
+    unread: bool = False,
+    session: Session = Depends(get_session),
+):
+    """메인 화면 배너용 — 확정 전송 알림 목록 (v1 §6-2). 폴링(10~15초)으로 조회한다.
+
+    unread=true면 아직 안 읽은 것만 — 배너가 "새 알림 있음"만 감지하면 되는
+    경우에 쓴다.
+    """
+    return {"notifications": get_owner_notifications(session, company_id, unread_only=unread)}
+
+
+@router.patch("/{company_id}/notifications/{notification_id}/read")
+def mark_notification_read(
+    company_id: int,
+    notification_id: int,
+    session: Session = Depends(get_session),
+):
+    """배너 클릭 시 읽음 처리. 다른 기업 소유 알림을 잘못 건드리지 않도록
+    company_id도 함께 검증한다(기존 documents DELETE 엔드포인트와 같은 패턴)."""
+    notification = session.get(OwnerNotification, notification_id)
+    if notification is None or notification.company_id != company_id:
+        raise HTTPException(status_code=404, detail="알림을 찾을 수 없습니다")
+
+    if notification.read_at is None:
+        notification.read_at = datetime.now(timezone.utc)
+        session.commit()
+
+    return {"id": notification.id, "read_at": notification.read_at}
