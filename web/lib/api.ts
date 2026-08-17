@@ -96,8 +96,13 @@ export const AGENT_RUN_TIMEOUT_MS = 60_000;
 
 /** 문서 업로드는 PaddleOCR(로컬 추론) 처리가 포함돼 기본 15초로는 부족할 수 있다
  * (모델 최초 로딩 시 특히) — apiUpload 호출부(SceneUpload.tsx, owner/uploads/page.tsx)
- * 에서 이 값을 timeoutMs로 넘긴다. */
-export const DOCUMENT_UPLOAD_TIMEOUT_MS = 60_000;
+ * 에서 이 값을 timeoutMs로 넘긴다.
+ *
+ * 60초였을 때 실측(2026-08-17, 처음 보는 서식의 전기요금 이메일 청구서 업로드)
+ * 타임아웃 발생 — 로그 기준 OCR 콜드 로딩만 약 28초, 거기에 OCR 추론 + 4단계
+ * LLM 최후수단(Gemini 호출 최대 20초 × 최대 2회 재시도)까지 이어지면 90초를
+ * 넘길 수 있는 구조였다. 여유 있게 2분으로 올림. */
+export const DOCUMENT_UPLOAD_TIMEOUT_MS = 120_000;
 
 // 계정(로그인) 개념이 없어 "지금 어느 기업으로 보고 있는지"를 서버가 알 방법이 없다 —
 // 브라우저에 선택값을 저장해두고 모든 /owner 호출이 이 값을 쓴다. 기업 선택 화면
