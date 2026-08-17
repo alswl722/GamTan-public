@@ -742,3 +742,27 @@ class FxRate(Base):
         ),
         Index("ix_fx_rates_pair_date", "base_currency", "quote_currency", "rate_date"),
     )
+
+
+class OwnerNotification(Base):
+    """사장님 화면 알림 — "확정 전송 → 사장님에게 알림" 축소판 (v1 Tier 2,
+    docs/v1-plan.md §5 "PCAF 데이터 품질 실시간 지표화"의 착수분, docs/tasks.md 참고).
+
+    별도 푸시 인프라 없이 DB 레코드 하나로 알림을 표현한다 — 사장님 화면이
+    폴링(10~15초, SceneTrace.tsx와 동일 패턴)으로 조회한다. 담당자가
+    POST /admin/companies/{id}/send-classifications 로 확정 건을 사장님 화면에
+    전송할 때만 레코드가 생긴다(건수 0이면 생성 안 함).
+    """
+    __tablename__ = "owner_notifications"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    type = Column(String(30), nullable=False, default="classification_sent")
+    message = Column(Text, nullable=False)
+    payload = Column(JSON)  # {"sent_count": int} 등 — 표시 문구 재구성용 원자료
+    created_at = Column(DateTime(timezone=True), default=now)
+    read_at = Column(DateTime(timezone=True))
+
+    __table_args__ = (
+        Index("ix_owner_notifications_company_unread", "company_id", "read_at"),
+    )

@@ -10,6 +10,7 @@ from db.models import (
     Classification,
     Company,
     InstitutionBorrower,
+    OwnerNotification,
     SourceDocument,
     TraceLog,
     Voucher,
@@ -413,3 +414,27 @@ def get_distribution(
         "sample_size": d.sample_size,
         "scale_matched": scale_matched,
     }
+
+
+def get_owner_notifications(session: Session, company_id: int, *, unread_only: bool = False) -> list[dict]:
+    """사장님 메인 화면 배너용 — 확정 전송 알림 목록 (v1 §6-2, docs/tasks.md).
+
+    최신순 정렬. unread_only=True면 아직 안 읽은(read_at is null) 것만 —
+    배너 폴링이 "새 알림 있음"만 감지하면 되는 경우에 쓴다.
+    """
+    stmt = select(OwnerNotification).where(OwnerNotification.company_id == company_id)
+    if unread_only:
+        stmt = stmt.where(OwnerNotification.read_at.is_(None))
+    stmt = stmt.order_by(OwnerNotification.created_at.desc())
+    rows = session.execute(stmt).scalars().all()
+    return [
+        {
+            "id": n.id,
+            "type": n.type,
+            "message": n.message,
+            "payload": n.payload,
+            "created_at": n.created_at,
+            "read_at": n.read_at,
+        }
+        for n in rows
+    ]

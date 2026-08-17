@@ -27,7 +27,7 @@ from api.queries import (
     get_hitl_queue,
     get_pending_send_count,
 )
-from db.models import Base, Classification, Company, Voucher
+from db.models import Base, Classification, Company, OwnerNotification, Voucher
 
 YEAR = 2025
 
@@ -230,3 +230,33 @@ def test_hitl_queue_drops_item_only_after_send(db, client):
 
     client.post(f"/admin/companies/{cid}/send-classifications")
     assert get_hitl_queue(session) == []
+
+
+# ── 확정 전송 → 사장님 알림(OwnerNotification, §6-2) ──────────────────────────
+def test_send_classifications_creates_owner_notification(db, client):
+    """전송이 실제로 일어나면(건수 > 0) 알림 레코드가 생긴다."""
+    session, cid = db
+    vid = _add_voucher_with_classification(session, cid, 1, "검토중건", status="review_required")
+    client.patch(f"/admin/classifications/{vid}/confirm")
+
+    res = client.post(f"/admin/companies/{cid}/send-classifications")
+    assert res.status_code == 200
+    assert res.json()["sent_count"] == 1
+
+    notifications = session.query(OwnerNotification).filter_by(company_id=cid).all()
+    assert len(notifications) == 1
+    assert notifications[0].type == "classification_sent"
+    assert "1건" in notifications[0].message
+    assert notifications[0].payload == {"sent_count": 1}
+    assert notifications[0].read_at is None
+
+
+def test_send_classifications_skips_notification_when_nothing_sent(db, client):
+    """전송 대상이 0건이면(확정된 건 없음) 알림도 만들지 않는다 — 빈 알림 방지."""
+    session, cid = db
+
+    res = client.post(f"/admin/companies/{cid}/send-classifications")
+    assert res.status_code == 200
+    assert res.json()["sent_count"] == 0
+
+    assert session.query(OwnerNotification).filter_by(company_id=cid).count() == 0
