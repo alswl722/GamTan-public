@@ -222,22 +222,30 @@ const FUEL_BAR_COLOR: Record<string, string> = {
 const FUEL_ORDER = ["전기", "가스", "경유/유류", "기타"];
 const CHART_HEIGHT_PX = 96;
 
-// 점들을 부드러운 곡선으로 잇는 SVG path — 각 구간을 다음 점과의 중점까지
-// 2차 베지어(Q)로 그리고, 마지막만 실제 마지막 점까지 부드럽게 이어지도록(T)
-// 마무리한다. 외부 차트 라이브러리 없이 표준적인 "점 중점 스무딩" 기법.
+// 점들을 부드러운 곡선으로 잇는 SVG path — Catmull-Rom 스플라인을 3차 베지어로
+// 변환해서 그린다. 예전엔 "다음 점과의 중점까지만" 잇는 근사 기법(2차 베지어)을
+// 썼는데, 이러면 한 달만 튀고 양옆이 0인 경우(실측 사례) 곡선 봉우리가 실제
+// 막대 꼭대기까지 안 닿고 중간에서 눌려 보였다(2026-08-17, 막대 색이 꽉 차게
+// 고쳐지면서 이 어긋남이 눈에 띄게 드러나 발견 — "선 그래프랑 다르잖아"). 이
+// 방식은 모든 데이터 점을 정확히 지나가므로 막대 꼭대기와 곡선이 항상 일치한다.
 function smoothLinePath(pts: { x: number; y: number }[]): string {
   if (pts.length === 0) return "";
   if (pts.length === 1) return `M ${pts[0].x},${pts[0].y} L ${pts[0].x},${pts[0].y}`;
+  if (pts.length === 2) return `M ${pts[0].x},${pts[0].y} L ${pts[1].x},${pts[1].y}`;
+
+  const at = (i: number) => pts[Math.max(0, Math.min(pts.length - 1, i))];
   let d = `M ${pts[0].x},${pts[0].y}`;
   for (let i = 0; i < pts.length - 1; i++) {
-    const curr = pts[i];
-    const next = pts[i + 1];
-    const midX = (curr.x + next.x) / 2;
-    const midY = (curr.y + next.y) / 2;
-    d += ` Q ${curr.x},${curr.y} ${midX},${midY}`;
+    const p0 = at(i - 1);
+    const p1 = at(i);
+    const p2 = at(i + 1);
+    const p3 = at(i + 2);
+    const cp1x = p1.x + (p2.x - p0.x) / 6;
+    const cp1y = p1.y + (p2.y - p0.y) / 6;
+    const cp2x = p2.x - (p3.x - p1.x) / 6;
+    const cp2y = p2.y - (p3.y - p1.y) / 6;
+    d += ` C ${cp1x},${cp1y} ${cp2x},${cp2y} ${p2.x},${p2.y}`;
   }
-  const last = pts[pts.length - 1];
-  d += ` T ${last.x},${last.y}`;
   return d;
 }
 
