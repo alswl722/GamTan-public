@@ -532,16 +532,21 @@ export function ScenePcaf({ showHeading = true }: { showHeading?: boolean } = {}
       // 우대금리 카드는 이제 메인 화면(web/components/RateProductCard.tsx)이 조회한다.
       // K택소노미 리드 카드도 마찬가지로 메인 화면(web/components/KTaxonomyCard.tsx)이 조회한다.
       // 월별 배출 추이만 구 엔진에서 재사용(파일 상단 주석 참고) — 부가 정보라
-      // 실패해도 리포트 본문(Scope 품질 후보)은 그대로 보여준다. 구 엔진은 연도
-      // 필터가 없어 선택한 연도와 무관하게 항상 전체 전표 기준으로 나온다(기존 한계).
-      apiGet<LegacyPcafResponse>(`/pcaf/${cid}`)
+      // 실패해도 리포트 본문(Scope 품질 후보)은 그대로 보여준다. year를 명시적으로
+      // 안 주면(undefined) 이 함수 인자와 무관하게 res.reporting_year(quality-report가
+      // 실제로 확정한 연도, db/pcaf_quality.py::default_reporting_year)를 그대로
+      // 넘긴다 — 실측(2026-08-17) 연도 선택기를 바꿔도 이 차트만 항상 똑같이
+      // 보이던 문제 발견, db/pcaf.py::_monthly_by_fuel에 연도 필터를 추가하며 같이 고침.
+      apiGet<LegacyPcafResponse>(`/pcaf/${cid}?year=${res.reporting_year}`)
         .then((r) => setMonthly(r.after?.monthly ?? null))
         .catch((err) => console.error("월별 추이 조회 실패(부가 정보라 화면은 계속 진행):", err));
-      if (years === null) {
-        getReportingYears(cid)
-          .then((r) => setYears(r.years))
-          .catch((err) => console.error("연도 목록 조회 실패(부가 정보라 화면은 계속 진행):", err));
-      }
+      // 연도 목록은 매번 다시 조회한다 — 캐시해서 최초 1회만 부르면, 그 해의 마지막
+      // 자료를 다른 탭(데이터 업로드)에서 삭제한 뒤 돌아와도 이미 사라진 연도가
+      // 선택기에 그대로 남을 수 있다(web/app/owner/uploads/page.tsx와 동일한 이유로
+      // 2026-08-17 같이 수정).
+      getReportingYears(cid)
+        .then((r) => setYears(r.years))
+        .catch((err) => console.error("연도 목록 조회 실패(부가 정보라 화면은 계속 진행):", err));
     } catch (err) {
       // 목업으로 위장하지 않는다 — 실패는 실패로 표시
       console.error("PCAF 품질 조회 실패:", err);

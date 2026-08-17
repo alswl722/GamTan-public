@@ -236,12 +236,16 @@ function OwnerUploadsPageContent() {
       setExpanded(null);
       setCellDocs({});
       void refreshUnclassifiedCount(cid);
-      if (years === null) {
-        getReportingYears(cid)
-          .then((r) => setYears(r.years))
-          .catch((err) => console.error("연도 목록 조회 실패(부가 정보라 화면은 계속 진행):", err));
+      // 연도 목록은 매번 다시 조회한다 — 캐시해서 최초 1회만 부르면, 그 해의
+      // 마지막 문서를 삭제(handleDelete → loadGrid)해도 이미 사라진 연도가
+      // 선택기에 그대로 남는다(실측 확인, 2026-08-17). 삭제·업로드 둘 다 이
+      // 함수를 거치므로 여기서만 고치면 항상 실제 서버 상태와 맞는다.
+      getReportingYears(cid)
+        .then((r) => setYears(r.years))
+        .catch((err) => console.error("연도 목록 조회 실패(부가 정보라 화면은 계속 진행):", err));
+      if (streakMonths === null) {
         // 스트릭은 "이번 달 직전까지"만 세므로 방금 올린 업로드로는 안 바뀐다 —
-        // 연도 선택기와 마찬가지로 최초 1회만 조회하면 충분하다.
+        // 연도 선택기와 달리 최초 1회만 조회하면 충분하다.
         getUploadStreak(cid)
           .then((r) => setStreakMonths(r.streak_months))
           .catch((err) => console.error("업로드 스트릭 조회 실패(부가 정보라 화면은 계속 진행):", err));

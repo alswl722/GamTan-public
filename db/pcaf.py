@@ -138,7 +138,10 @@ def _clip_grade(g: float) -> int:
 
 
 def company_pcaf_summary(
-    session: Session, company_id: int, dist_cache: dict[tuple[str, int], dict] | None = None
+    session: Session,
+    company_id: int,
+    dist_cache: dict[tuple[str, int], dict] | None = None,
+    year: int | None = None,
 ) -> dict:
     """기업의 PCAF Before/After + 벤치마킹. 분류 미실행 시 after=None.
 
@@ -146,6 +149,9 @@ def company_pcaf_summary(
     (portfolio_summary가 전 기업을 순회할 때 기업마다 다시 조회하지 않도록—
     N+1 방지). 기업 1곳만 볼 때(에이전트 도구, 사장님 리포트)는 생략하면
     기존과 동일하게 그때그때 조회한다.
+
+    year는 after.monthly에만 적용된다(_after_measured 주석 참고) — 생략하면
+    (portfolio_summary 등 기존 호출부) 이전과 동일하게 전체 연도 합산.
     """
     company = session.get(Company, company_id)
     if company is None:
@@ -161,7 +167,7 @@ def company_pcaf_summary(
         dist2 = get_distribution(session, company.industry_code, 2, company.employee_count)
 
     before = _before_baseline(company, dist1, dist2)
-    after = _after_measured(session, company_id, dist1, dist2)
+    after = _after_measured(session, company_id, dist1, dist2, year=year)
     benchmark = benchmark_against_industry(company, dist1, dist2, after["total"] if after else None)
 
     return {"before": before, "after": after, "benchmark": benchmark}
@@ -184,14 +190,20 @@ def _before_baseline(company, dist1, dist2) -> dict:
     }
 
 
-def _monthly_by_fuel(session: Session, company_id: int) -> list[dict]:
+def _monthly_by_fuel(session: Session, company_id: int, year: int | None = None) -> list[dict]:
     """월(1~12) × 연료 대분류 실측 배출량 그리드 — 리포트 월별 추이 차트 재료.
 
     결손 보정치는 섞지 않는다. 자료가 없는 달은 그대로 0으로 비워서 결손 자체가
     차트에 드러나게 한다(업종평균 추정을 실측인 것처럼 섞어 보여주지 않음 —
     §5-1 LLM 산수 금지와 같은 결의 "숫자를 지어내지 않는다" 원칙).
+
+    year를 주면 그 해 전표만 집계한다 — 실측(2026-08-17) year 필터가 없어
+    연도 선택기를 바꿔도 이 차트만 항상 전체 기간 합산으로 똑같이 보이던
+    문제 발견, 프론트가 현재 리포트 연도(quality-report의 reporting_year)를
+    그대로 넘긴다. 생략하면(관리자 포트폴리오 집계 등 다른 호출부) 기존과
+    동일하게 전체 연도를 합산한다 — 하위호환 유지.
     """
-    rows = session.execute(
+    stmt = (
         select(Voucher.month, Classification.fuel_type, Classification.emission_co2e)
         .join(Classification, Classification.voucher_id == Voucher.id)
         .where(
@@ -199,7 +211,10 @@ def _monthly_by_fuel(session: Session, company_id: int) -> list[dict]:
             Classification.scope.in_((1, 2)),
             Classification.status != "rejected",
         )
-    ).all()
+    )
+    if year is not None:
+        stmt = stmt.where(Voucher.year == year)
+    rows = session.execute(stmt).all()
 
     by_month_bucket_kg: dict[int, dict[str, float]] = {m: {} for m in range(1, 13)}
     for month, fuel_type, emission in rows:
@@ -219,11 +234,17 @@ def _monthly_by_fuel(session: Session, company_id: int) -> list[dict]:
     ]
 
 
-def _after_measured(session, company_id, dist1, dist2) -> dict | None:
+def _after_measured(session, company_id, dist1, dist2, year: int | None = None) -> dict | None:
     """전표 기반 실측 — 저장된 Classification 집계 + 결손월 업종 평균 보정.
 
     분류가 한 건도 없으면 None (프론트가 '③ 먼저 실행하세요' 안내).
     emission_co2e 는 kgCO2e 로 저장돼 있으므로 ÷1000 해 tCO2e 로 집계한다.
+
+    year는 monthly(월별 추이 차트)에만 흘려보낸다 — 등급·Scope 합계·결손
+    보정(get_coverage)까지 연도로 쪼개면 "3~5월 결손" 킬러씬(CLAUDE.md §6)이
+    연도 경계에 걸려 흔들릴 수 있고, 어차피 이 구 엔진의 등급·Scope 값은
+    이제 프론트가 안 쓴다(정식 엔진 db/pcaf_quality.py로 교체됨 — CLAUDE.md
+    §8 각주). monthly만 실제로 재사용 중이라 그것만 연도를 존중하게 한다.
     """
     rows = (
         session.execute(
@@ -316,7 +337,7 @@ def _after_measured(session, company_id, dist1, dist2) -> dict | None:
         "gap_months": gap_detail,
         "projected_grade": projected_grade,
         "by_fuel": by_fuel,
-        "monthly": _monthly_by_fuel(session, company_id),
+        "monthly": _monthly_by_fuel(session, company_id, year=year),
     }
 
 

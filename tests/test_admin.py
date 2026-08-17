@@ -55,8 +55,8 @@ def client(db):
     app.dependency_overrides.clear()
 
 
-def _add(session, cid, month, item, *, scope, emission, status, conf=0.9, fuel_type="도시가스", quantity=100):
-    v = Voucher(company_id=cid, source="hometax", year=2025, month=month,
+def _add(session, cid, month, item, *, scope, emission, status, conf=0.9, fuel_type="도시가스", quantity=100, year=2025):
+    v = Voucher(company_id=cid, source="hometax", year=year, month=month,
                 supplier_name="테스트", item_description=item,
                 supply_amount_krw=100000,
                 raw_json={"quantity": quantity} if quantity is not None else {})
@@ -171,6 +171,43 @@ def test_monthly_grid_has_all_12_months_and_excludes_rejected(db):
     # 자료 자체가 없는 달(예: 3월)은 0
     mar = next(r for r in monthly if r["month"] == 3)
     assert mar["total_tco2e"] == 0.0
+
+
+def test_monthly_grid_filters_by_year_when_given(db):
+    """실측(2026-08-17, 사장님 탄소리포트 화면): 연도 선택기를 바꿔도 월별 추이
+    차트가 매년 똑같이 보인다는 지적으로 발견 — company_pcaf_summary(year=...)를
+    안 주면(기본값) 예전처럼 전체 연도가 합산되고, 주면 그 해만 집계돼야 한다."""
+    session, cid = db
+    _add(session, cid, 1, "2024년 1월 도시가스", scope=1, emission=1000.0, status="auto",
+         fuel_type="도시가스", year=2024)
+    _add(session, cid, 1, "2025년 1월 도시가스", scope=1, emission=2000.0, status="auto",
+         fuel_type="도시가스", year=2025)
+
+    all_years = company_pcaf_summary(session, cid)["after"]["monthly"]
+    jan_all = next(r for r in all_years if r["month"] == 1)
+    assert jan_all["total_tco2e"] == pytest.approx(3.0, abs=0.01)  # 필터 없으면 두 해 합산(기존 동작 유지)
+
+    only_2024 = company_pcaf_summary(session, cid, year=2024)["after"]["monthly"]
+    jan_2024 = next(r for r in only_2024 if r["month"] == 1)
+    assert jan_2024["total_tco2e"] == pytest.approx(1.0, abs=0.01)
+
+    only_2025 = company_pcaf_summary(session, cid, year=2025)["after"]["monthly"]
+    jan_2025 = next(r for r in only_2025 if r["month"] == 1)
+    assert jan_2025["total_tco2e"] == pytest.approx(2.0, abs=0.01)
+
+
+def test_pcaf_endpoint_accepts_year_query_param(db, client):
+    """GET /pcaf/{id}?year= — ScenePcaf.tsx가 실제로 이 쿼리스트링으로 호출한다."""
+    session, cid = db
+    _add(session, cid, 1, "2024년 1월 도시가스", scope=1, emission=1000.0, status="auto",
+         fuel_type="도시가스", year=2024)
+    _add(session, cid, 1, "2025년 1월 도시가스", scope=1, emission=2000.0, status="auto",
+         fuel_type="도시가스", year=2025)
+
+    res = client.get(f"/pcaf/{cid}?year=2024")
+    assert res.status_code == 200
+    jan = next(r for r in res.json()["after"]["monthly"] if r["month"] == 1)
+    assert jan["total_tco2e"] == pytest.approx(1.0, abs=0.01)
 
 
 def test_by_fuel_includes_gap_estimated_bucket_even_without_measured_data(db):
