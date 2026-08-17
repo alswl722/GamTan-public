@@ -125,9 +125,10 @@ def test_tax_invoice_without_printed_quantity_omits_quantity_fields(session):
         "전자세금계산서",
         "작성일자: 2025-01-18",
         "공급자: 구미석유",
-        "유류대금 외1종 - 1,400 420,000",
+        "유류대금 - - 1,400 420,000",
     ])
     result = extract_document(session, pdf, "tax_invoice")
+    assert result["item_description"] == "유류대금"
     assert "quantity" not in result
     assert result["supply_amount_krw"] == 420_000
 
