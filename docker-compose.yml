@@ -12,7 +12,10 @@ services:
       - ./api:/app/api # 핫리로드용 소스 마운트
       - ./db:/app/db
       - ./data:/app/data # 회계 Excel (init_db·생성기 입력)
-    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+    # --reload-dir로 감시 범위를 코드로 한정 — 지정 안 하면 /app 전체(볼륨마운트된
+    # ./data 포함)를 감시해, 사용자가 업로드한 파일이 쌓이기만 해도 리로더가
+    # 재시작돼 그 순간의 요청이 끊길 수 있다(실측: 업로드 중 Failed to fetch).
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir api --reload-dir db
     healthcheck:
       test:
         - CMD
