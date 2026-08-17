@@ -120,6 +120,24 @@ def documents_for_cell(
     ]
 
 
+def document_pending_review_count(session: Session, source_document_id: int) -> int:
+    """방금 올린 문서 1건에서 만들어진 전표 중 담당자 검토 대기(review_required)로
+    빠진 건수 — 업로드 완료 모달이 "N건은 담당자가 검토할 예정이에요"를 보여줄 때
+    쓴다. api/queries.py::get_classifications()가 지키는 것과 같은 원칙(HITL 대기
+    건은 판단 근거·Scope 등 세부 내용을 사장님에게 노출하지 않는다)에 따라 건수만
+    반환한다 — 어떤 항목이 왜 검토 대상인지는 노출하지 않음.
+    """
+    return session.execute(
+        select(func.count())
+        .select_from(Classification)
+        .join(Voucher, Classification.voucher_id == Voucher.id)
+        .where(
+            Voucher.source_document_id == source_document_id,
+            Classification.status == "review_required",
+        )
+    ).scalar_one()
+
+
 def delete_source_document(session: Session, document: SourceDocument) -> str | None:
     """원본 문서와 거기서 만들어진 전표·분류·접근로그를 지운다. 물리 파일 삭제는
     호출부(api 레이어) 책임 — 이 함수는 지워야 할 file_path만 반환한다(db/ 모듈은

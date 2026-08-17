@@ -151,7 +151,26 @@ def seed_unit_prices(session: Session):
 
 
 def seed_industry_distributions(session: Session):
-    """업종별 배출량 분포 — Excel 소스 없음, 전량 하드코딩·목업. 벤치마킹·이상치 검증용."""
+    """업종별 배출량 분포 — 공공데이터(한국에너지공단 마이크로데이터) Excel 값을
+    항상 우선 반영 (기존 데이터 삭제 후 재적재, scripts/fetch_industry_distributions.py 산출물).
+    Excel 없거나 파싱 실패 시에만 하드코딩 폴백(2023 목업, source에 '하드코딩' 명시)."""
+    try:
+        from db.excel_loader import load_industry_distributions
+        rows = load_industry_distributions()
+        if rows:
+            session.execute(delete(IndustryDistribution))
+            for r in rows:
+                session.add(IndustryDistribution(**r))
+            session.commit()
+            print(f"[OK] 업종분포 {len(rows)}건 적재 (실데이터: 한국에너지공단 마이크로데이터, 기존 데이터 교체)")
+            return
+    except (FileNotFoundError, LookupError) as e:
+        print(f"[i] Excel 업종분포 미사용({e}) → 하드코딩 폴백")
+
+    if session.query(IndustryDistribution).count() > 0:
+        print("[SKIP] 업종분포 이미 존재 (하드코딩 폴백은 교체하지 않음)")
+        return
+
     rows = [
         IndustryDistribution(
             industry_code="C251", industry_name="구조용 금속제품 제조", scope=1,
@@ -177,7 +196,7 @@ def seed_industry_distributions(session: Session):
     for row in rows:
         session.add(row)
     session.commit()
-    print(f"[OK] 업종분포 {len(rows)}건 적재")
+    print(f"[OK] 업종분포 {len(rows)}건 적재 (하드코딩 폴백)")
 
 
 def seed_pcaf_quality_rules(session: Session):
@@ -300,15 +319,11 @@ def main():
     migrate_columns(engine)
 
     with Session(engine) as session:
-        # 배출계수·환산단가: Excel 값이 있으면 항상 최신 값으로 교체 (skip 없음)
+        # 배출계수·환산단가·업종분포: Excel 값이 있으면 항상 최신 값으로 교체 (skip 없음,
+        # 각 함수 내부에서 Excel 우선 → 없으면 하드코딩 폴백을 자체 처리)
         seed_emission_factors(session)
         seed_unit_prices(session)
-
-        # 업종분포: Excel 소스 자체가 없는 순수 하드코딩 → 존재하면 그대로 유지
-        if session.query(IndustryDistribution).count() == 0:
-            seed_industry_distributions(session)
-        else:
-            print("[SKIP] 업종분포 이미 존재")
+        seed_industry_distributions(session)
 
         # PCAF 품질규칙: 회계 검수 전 초안 → 존재하면 그대로 유지(seed_pcaf_quality_rules 내부에서 skip 처리)
         seed_pcaf_quality_rules(session)

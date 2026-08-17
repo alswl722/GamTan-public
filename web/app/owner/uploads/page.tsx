@@ -12,6 +12,7 @@ import {
   deleteDocument,
   getCompanyId,
   getDocumentGrid,
+  getDocumentReviewStatus,
   getDocumentsForCell,
   getReportingYears,
   getUploadStreak,
@@ -38,8 +39,21 @@ const STATUS_LABEL: Record<string, string> = {
 
 type CellKey = `${DocumentType}-${number}`;
 
-/** 추가 업로드(초기 온보딩 위저드 제외) 완료 시 뜨는 축하 모달. */
-function UploadCompleteModal({ message, onClose }: { message: string; onClose: () => void }) {
+/** 추가 업로드(초기 온보딩 위저드 제외) 완료 시 뜨는 축하 모달.
+ *
+ * reviewNotice가 있으면(방금 올린 문서에서 담당자 검토 대기 건이 나온 경우) 같은
+ * 모달 안에 한 줄 더 보여준다 — 별도 모달을 새로 만들지 않는다. 어떤 항목이 왜
+ * 검토 대상인지(판단 근거 등)는 노출하지 않는다(api/queries.py::get_classifications
+ * 와 같은 원칙 — 건수만 안내). */
+function UploadCompleteModal({
+  message,
+  reviewNotice,
+  onClose,
+}: {
+  message: string;
+  reviewNotice?: string | null;
+  onClose: () => void;
+}) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-6">
       <div className="relative w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl">
@@ -58,6 +72,11 @@ function UploadCompleteModal({ message, onClose }: { message: string; onClose: (
           업로드가 완료됐어요!
         </h2>
         <p className="mt-1.5 text-[13px] leading-relaxed text-muted">{message}</p>
+        {reviewNotice && (
+          <p className="mt-2 rounded-xl bg-hitl/20 px-3 py-2 text-[12.5px] leading-relaxed text-hitl-ink">
+            {reviewNotice}
+          </p>
+        )}
 
         <div className="mt-1 flex justify-center">
           <Image src="/dandi_17.png" alt="" width={267} height={267} className="h-52 w-auto" />
@@ -105,6 +124,28 @@ function OwnerUploadsPageContent() {
   const autoFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [uploadCompleteMessage, setUploadCompleteMessage] = useState<string | null>(null);
+  const [uploadReviewNotice, setUploadReviewNotice] = useState<string | null>(null);
+
+  /** 방금 올린 문서들(sourceDocumentIds)에서 담당자 검토 대기 건이 나왔는지 확인해
+   * 모달 안내 문구를 만든다 — classifyNewVouchers()가 끝난 뒤에만 의미 있다
+   * (분류가 안 돌았으면 review_required 자체가 아직 없음). 여러 장을 한 번에 올린
+   * 경우 건별 대기 건수를 합산한다. 실패해도(네트워크 등) 업로드 자체는 이미
+   * 성공이라 조용히 넘어간다 — 부가 정보라 화면을 막지 않음. */
+  async function reviewNoticeFor(cid: number, sourceDocumentIds: number[]): Promise<string | null> {
+    try {
+      const counts = await Promise.all(
+        sourceDocumentIds.map((id) => getDocumentReviewStatus(cid, id)),
+      );
+      const total = counts.reduce((sum, c) => sum + c.pending_review_count, 0);
+      if (total > 0) {
+        return `이 중 ${total}건은 담당자가 검토할 예정이에요.`;
+      }
+      return null;
+    } catch (err) {
+      console.error("검토 대기 여부 조회 실패(부가 정보라 화면은 계속 진행):", err);
+      return null;
+    }
+  }
 
   /** 위저드 밖(이 탭)에서 올린 전표는 "AI 분류" 단계를 거칠 기회가 없어 미분류로
    * 남는다 — 그대로 두면 홈 진행바·리포트가 "미완료"로 보인다(api/queries.py::
@@ -222,10 +263,19 @@ function OwnerUploadsPageContent() {
       form.append("file", file);
       form.append("document_type", expanded.docType);
       form.append("mode", "ocr");
-      await apiUpload(`/owner/${companyId}/documents/upload`, form, DOCUMENT_UPLOAD_TIMEOUT_MS);
+      const res = await apiUpload<{ source_document_id: number }>(
+        `/owner/${companyId}/documents/upload`,
+        form,
+        DOCUMENT_UPLOAD_TIMEOUT_MS,
+      );
       await classifyNewVouchers(companyId);
       await loadCell(expanded.docType, expanded.month);
       await loadGrid();
+      // 검토 대기 여부를 먼저 확인한 뒤에 모달을 연다 — 메시지부터 먼저 세팅해 모달이
+      // 바로 뜨고 안내 줄만 몇 초 뒤에 따라붙으면, 사용자가 뜨자마자 닫아버릴 경우
+      // 안내를 놓친다(실측으로 확인된 버그). 완성된 상태로 한 번에 띄운다.
+      const notice = await reviewNoticeFor(companyId, [res.source_document_id]);
+      setUploadReviewNotice(notice);
       setUploadCompleteMessage(`${DOC_LABEL[expanded.docType]} ${expanded.month}월 자료가 등록됐어요.`);
     } catch (err) {
       console.error("업로드 실패:", err);
@@ -236,30 +286,52 @@ function OwnerUploadsPageContent() {
     }
   }
 
-  async function handleAutoUpload(file: File) {
-    if (companyId === null) return;
+  /** 여러 장을 한 번에 골라도 되도록 한 장씩 순차 업로드한다(문서마다 document_type을
+   * 스스로 판별해야 해서 uploadOcr류의 병렬 실행과 달리 완료 모달·그리드 새로고침을
+   * 마지막에 한 번만 띄우는 편이 자연스럽다). 일부만 실패해도 나머지는 계속 올리고,
+   * 성공한 장이 하나라도 있으면 그 결과로 모달을 띄운다. */
+  async function handleAutoUpload(files: File[]) {
+    if (companyId === null || files.length === 0) return;
     setAutoUploading(true);
     setAutoUploadError(null);
-    try {
-      const form = new FormData();
-      form.append("file", file);
-      form.append("mode", "ocr");
-      // document_type을 안 보낸다 — OCR/비전이 스스로 문서종류를 판별한다("그냥 업로드").
-      const res = await apiUpload<{ document_type: DocumentType; month: number }>(
-        `/owner/${companyId}/documents/upload`,
-        form,
-        DOCUMENT_UPLOAD_TIMEOUT_MS,
-      );
+    const successes: { document_type: DocumentType; month: number; source_document_id: number }[] = [];
+    const errors: string[] = [];
+    for (const file of files) {
+      try {
+        const form = new FormData();
+        form.append("file", file);
+        form.append("mode", "ocr");
+        // document_type을 안 보낸다 — OCR/비전이 스스로 문서종류를 판별한다("그냥 업로드").
+        const res = await apiUpload<{ document_type: DocumentType; month: number; source_document_id: number }>(
+          `/owner/${companyId}/documents/upload`,
+          form,
+          DOCUMENT_UPLOAD_TIMEOUT_MS,
+        );
+        successes.push(res);
+      } catch (err) {
+        console.error("자동 업로드 실패:", err);
+        errors.push(`${file.name}: ${err instanceof Error ? err.message : "업로드에 실패했습니다."}`);
+      }
+    }
+    if (successes.length > 0) {
       await classifyNewVouchers(companyId);
       await loadGrid();
-      setUploadCompleteMessage(`${DOC_LABEL[res.document_type]} ${res.month}월로 인식해 등록했어요.`);
-    } catch (err) {
-      console.error("자동 업로드 실패:", err);
-      setAutoUploadError(err instanceof Error ? err.message : "업로드에 실패했습니다.");
-    } finally {
-      setAutoUploading(false);
-      if (autoFileInputRef.current) autoFileInputRef.current.value = "";
+      // 검토 대기 여부를 먼저 확인한 뒤에 모달을 연다 — 메시지부터 먼저 세팅해 모달이
+      // 바로 뜨고 안내 줄만 몇 초 뒤에 따라붙으면(여러 장일수록 review-status 병렬
+      // 호출이 늘어 더 오래 걸림), 사용자가 뜨자마자 닫아버릴 경우 안내를 놓친다
+      // (실측으로 확인된 버그 — "도장 꾹" 모달은 떴는데 검토 대기 줄만 없었음).
+      // 완성된 상태로 한 번에 띄운다.
+      const notice = await reviewNoticeFor(companyId, successes.map((s) => s.source_document_id));
+      setUploadReviewNotice(notice);
+      setUploadCompleteMessage(
+        successes.length === 1
+          ? `${DOC_LABEL[successes[0].document_type]} ${successes[0].month}월로 인식해 등록했어요.`
+          : `${successes.length}건을 인식해 등록했어요.`,
+      );
     }
+    setAutoUploadError(errors.length > 0 ? errors.join(" / ") : null);
+    setAutoUploading(false);
+    if (autoFileInputRef.current) autoFileInputRef.current.value = "";
   }
 
   return (
@@ -308,16 +380,17 @@ function OwnerUploadsPageContent() {
         </p>
         <label className="btn-cta mt-3 flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-2xl bg-brand py-3 text-[13px] font-bold text-white disabled:opacity-60">
           <UploadCloud size={16} />
-          {autoUploading ? "인식하는 중…" : "그냥 업로드하기"}
+          {autoUploading ? "인식하는 중…" : "여러 장 한 번에 그냥 업로드하기"}
           <input
             ref={autoFileInputRef}
             type="file"
             accept="image/*,.pdf,.html,.htm,.mhtml"
+            multiple
             className="hidden"
             disabled={autoUploading}
             onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) void handleAutoUpload(file);
+              const files = Array.from(e.target.files ?? []);
+              if (files.length > 0) void handleAutoUpload(files);
             }}
           />
         </label>
@@ -477,7 +550,11 @@ function OwnerUploadsPageContent() {
       {uploadCompleteMessage && (
         <UploadCompleteModal
           message={uploadCompleteMessage}
-          onClose={() => setUploadCompleteMessage(null)}
+          reviewNotice={uploadReviewNotice}
+          onClose={() => {
+            setUploadCompleteMessage(null);
+            setUploadReviewNotice(null);
+          }}
         />
       )}
     </div>

@@ -357,3 +357,55 @@ def test_delete_document_returns_404_when_not_found(db, client):
     _, company_id = db
     res = client.delete(f"/owner/{company_id}/documents/99999")
     assert res.status_code == 404
+
+
+# ── GET .../documents/{id}/review-status ─────────────────────────────────────
+
+def test_review_status_counts_review_required_classification(db, client):
+    """업로드 완료 모달용 — 방금 올린 문서에서 만들어진 전표가 담당자 검토
+    대기(review_required)로 분류되면 건수로 잡힌다."""
+    session, company_id = db
+    upload_res = client.post(
+        f"/owner/{company_id}/documents/upload",
+        files={"file": ("고지서.pdf", _gas_bill_pdf(month="08"), "application/pdf")},
+        data={"document_type": "gas_bill", "mode": "ocr"},
+    )
+    doc_id = upload_res.json()["source_document_id"]
+    voucher = session.query(Voucher).filter_by(source_document_id=doc_id).one()
+    session.add(Classification(voucher_id=voucher.id, scope=1, status="review_required"))
+    session.commit()
+
+    res = client.get(f"/owner/{company_id}/documents/{doc_id}/review-status")
+    assert res.status_code == 200, res.text
+    assert res.json() == {"pending_review_count": 1}
+
+
+def test_review_status_zero_before_classification_runs(db, client):
+    session, company_id = db
+    upload_res = client.post(
+        f"/owner/{company_id}/documents/upload",
+        files={"file": ("고지서.pdf", _gas_bill_pdf(month="09"), "application/pdf")},
+        data={"document_type": "gas_bill", "mode": "ocr"},
+    )
+    doc_id = upload_res.json()["source_document_id"]
+
+    res = client.get(f"/owner/{company_id}/documents/{doc_id}/review-status")
+    assert res.status_code == 200, res.text
+    assert res.json() == {"pending_review_count": 0}
+
+
+def test_review_status_returns_404_for_other_company(db, client):
+    session, company_id = db
+    upload_res = client.post(
+        f"/owner/{company_id}/documents/upload",
+        files={"file": ("고지서.pdf", _gas_bill_pdf(month="10"), "application/pdf")},
+        data={"document_type": "gas_bill", "mode": "ocr"},
+    )
+    doc_id = upload_res.json()["source_document_id"]
+
+    other = Company(name="타사", industry_code="C251")
+    session.add(other)
+    session.commit()
+
+    res = client.get(f"/owner/{other.id}/documents/{doc_id}/review-status")
+    assert res.status_code == 404

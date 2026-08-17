@@ -198,8 +198,8 @@ def owner_quality_report(
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
-    dist1 = get_distribution(session, company.industry_code, 1)
-    dist2 = get_distribution(session, company.industry_code, 2)
+    dist1 = get_distribution(session, company.industry_code, 1, company.employee_count)
+    dist2 = get_distribution(session, company.industry_code, 2, company.employee_count)
     e1 = inventories["scope_1"].emission_tco2e
     e2 = inventories["scope_2"].emission_tco2e
     total_emission = (e1 or 0) + (e2 or 0) if (e1 is not None or e2 is not None) else None

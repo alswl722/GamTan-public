@@ -13,8 +13,16 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from db.document_coverage import upload_streak
-from db.models import Base, Company, FinancialInstitution, InstitutionBorrower, SourceDocument
+from db.document_coverage import document_pending_review_count, upload_streak
+from db.models import (
+    Base,
+    Classification,
+    Company,
+    FinancialInstitution,
+    InstitutionBorrower,
+    SourceDocument,
+    Voucher,
+)
 
 
 def _shift(year: int, month: int, delta: int) -> tuple[int, int]:
@@ -132,3 +140,68 @@ def test_streak_ignores_not_applicable_document_types(db):
 
     result = upload_streak(session, cid)
     assert result["streak_months"] == 1
+
+
+# ── document_pending_review_count ────────────────────────────────────────────
+# 업로드 완료 모달용 — 방금 올린 문서에서 만들어진 전표 중 담당자 검토 대기
+# (review_required) 건수만 센다. api/queries.py::get_classifications()와 같은
+# 원칙(HITL 대기 건은 판단 근거를 사장님에게 노출하지 않는다, 건수만).
+
+def _add_voucher_with_classification(session, cid, source_document_id, status):
+    v = Voucher(
+        company_id=cid, source="tax_invoice", year=2025, month=1,
+        source_document_id=source_document_id,
+    )
+    session.add(v)
+    session.flush()
+    session.add(Classification(voucher_id=v.id, scope=1, status=status))
+    session.commit()
+    return v
+
+
+def test_pending_review_count_counts_only_review_required(db):
+    session, cid, inst_id = db
+    doc = SourceDocument(
+        financial_institution_id=inst_id, company_id=cid, document_type="tax_invoice",
+        source_system="upload:ocr",
+    )
+    session.add(doc)
+    session.commit()
+
+    _add_voucher_with_classification(session, cid, doc.id, "review_required")
+    _add_voucher_with_classification(session, cid, doc.id, "confirmed")
+    _add_voucher_with_classification(session, cid, doc.id, "auto")
+
+    assert document_pending_review_count(session, doc.id) == 1
+
+
+def test_pending_review_count_ignores_other_documents(db):
+    """다른 문서의 review_required 건은 안 센다 — 이 업로드 건에만 스코프."""
+    session, cid, inst_id = db
+    doc_a = SourceDocument(
+        financial_institution_id=inst_id, company_id=cid, document_type="tax_invoice",
+        source_system="upload:ocr",
+    )
+    doc_b = SourceDocument(
+        financial_institution_id=inst_id, company_id=cid, document_type="tax_invoice",
+        source_system="upload:ocr",
+    )
+    session.add_all([doc_a, doc_b])
+    session.commit()
+
+    _add_voucher_with_classification(session, cid, doc_a.id, "review_required")
+
+    assert document_pending_review_count(session, doc_b.id) == 0
+
+
+def test_pending_review_count_zero_when_no_classification_yet(db):
+    """분류가 아직 안 돌았으면(classifications 행 자체가 없음) 0 — 실패가 아님."""
+    session, cid, inst_id = db
+    doc = SourceDocument(
+        financial_institution_id=inst_id, company_id=cid, document_type="tax_invoice",
+        source_system="upload:ocr",
+    )
+    session.add(doc)
+    session.commit()
+
+    assert document_pending_review_count(session, doc.id) == 0
