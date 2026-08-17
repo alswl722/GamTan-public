@@ -166,13 +166,24 @@ export function SceneUpload({
       setEntries((e) => {
         const next = { ...e };
         for (const row of grid.document_types) {
-          const hasAny = Object.values(row.months).some((count) => count > 0);
-          const alreadyMarked = next[row.document_type].some((m) => m.id === "server-coverage");
-          if (hasAny && !alreadyMarked) {
-            next[row.document_type] = [
-              ...next[row.document_type],
-              { id: "server-coverage", fileName: "(이미 업로드된 자료)", status: "done" },
-            ];
+          const monthsWithData = Object.entries(row.months)
+            .filter(([, count]) => count > 0)
+            .map(([month]) => Number(month));
+          const existingServerMonths = new Set(
+            next[row.document_type]
+              .filter((m) => m.id.startsWith("server-coverage-"))
+              .map((m) => m.month),
+          );
+          const additions = monthsWithData
+            .filter((month) => !existingServerMonths.has(month))
+            .map((month) => ({
+              id: `server-coverage-${month}`,
+              fileName: "(이미 업로드된 자료)",
+              status: "done" as const,
+              month,
+            }));
+          if (additions.length > 0) {
+            next[row.document_type] = [...next[row.document_type], ...additions];
           }
         }
         return next;
