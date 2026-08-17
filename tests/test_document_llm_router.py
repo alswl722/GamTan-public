@@ -159,3 +159,59 @@ def test_route_fields_handles_empty_rows_by_attempting_image_only(monkeypatch):
     )
     with pytest.raises(DocumentParseError):
         router.route_fields(_session(), b"fake-bytes-9", None, "tax_invoice")
+
+
+# ── 회귀 방지: item_description 미채움 ────────────────────────────────────────
+# 실측 확인된 실제 사고 — electric_bill에서 item_cell_id를 못 가리켰는데도(전기
+# 고지서엔 "품목" 개념이 원래 약함) route_fields()가 item_description 없이
+# 그대로 성공을 반환해 voucher.item_description이 NULL로 저장됐고, 한참 뒤
+# 분류 단계에서야 크래시했다(hash_item의 None.encode()). 전기·가스는 결정론적
+# 파서와 동일한 고정 문구로 채우고, 세금계산서는 품목이 실질 정보라 명확히
+# 실패시켜야 한다.
+ELECTRIC_ROWS_NO_ITEM_LABEL = [
+    [(0.0, 80.0, "청구월"), (150.0, 220.0, "청구금액")],
+    [(0.0, 90.0, "2025-07"), (150.0, 220.0, "157,340")],
+]
+
+
+def _gemini_response_no_item(**overrides) -> dict:
+    base = {
+        "document_type": "electric_bill",
+        "date_cell_id": "2",   # "2025-07"
+        "amount_cell_id": "3",  # "157,340"
+        "item_cell_id": None,  # 전기 고지서라 가리킬 품목 셀이 없음
+        "quantity_cell_id": None,
+        "supplier_cell_id": None,
+        "confidence": 0.9,
+        "evidence": "청구월과 청구금액만 찾음",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_route_fields_defaults_item_description_for_electric_bill(monkeypatch):
+    monkeypatch.setattr(
+        router, "_call_gemini", lambda images, cells, doc_type: _gemini_response_no_item(),
+    )
+    parsed, _ = router.route_fields(_session(), b"fake-bytes-10", ELECTRIC_ROWS_NO_ITEM_LABEL, "electric_bill")
+    assert parsed["item_description"] == "전기요금 (산업용 을)"
+
+
+def test_route_fields_defaults_item_description_for_gas_bill(monkeypatch):
+    monkeypatch.setattr(
+        router, "_call_gemini",
+        lambda images, cells, doc_type: _gemini_response_no_item(document_type="gas_bill"),
+    )
+    parsed, _ = router.route_fields(_session(), b"fake-bytes-11", ELECTRIC_ROWS_NO_ITEM_LABEL, "gas_bill")
+    assert parsed["item_description"] == "도시가스"
+
+
+def test_route_fields_tax_invoice_without_item_fails_instead_of_null(monkeypatch):
+    """세금계산서는 품목이 Scope·연료 분류에 실제로 쓰이는 정보라, 전기·가스처럼
+    대충 채우지 않고 명확히 실패한다(값을 지어내지 않는다는 원칙)."""
+    monkeypatch.setattr(
+        router, "_call_gemini",
+        lambda images, cells, doc_type: _gemini_response_no_item(document_type="tax_invoice"),
+    )
+    with pytest.raises(DocumentParseError):
+        router.route_fields(_session(), b"fake-bytes-12", ELECTRIC_ROWS_NO_ITEM_LABEL, "tax_invoice")
