@@ -62,6 +62,7 @@ def client(db):
 
 def _add_voucher_with_classification(
     session, cid, inst_id, month, item, *, status, evidence="근거", document_type="tax_invoice",
+    activity_amount=None, activity_unit=None,
 ):
     doc = SourceDocument(
         financial_institution_id=inst_id, company_id=cid, document_type=document_type,
@@ -78,7 +79,8 @@ def _add_voucher_with_classification(
     session.flush()
     session.add(Classification(
         voucher_id=v.id, scope=1, category="고정연소", fuel_type="도시가스",
-        amount_krw=100000, emission_co2e=500.0, confidence=0.9,
+        amount_krw=100000, activity_amount=activity_amount, activity_unit=activity_unit,
+        emission_co2e=500.0, confidence=0.9,
         evidence=evidence, method="rule", status=status,
     ))
     session.commit()
@@ -143,6 +145,22 @@ def test_get_classifications_hides_raw_for_electric_and_gas_bills(db):
     raws = [r["raw"] for r in results]
     assert raws.count(None) == 2
     assert "지게차 경유 외 1종" in raws
+
+
+def test_get_classifications_includes_activity_amount_for_calc_evidence(db):
+    """탄소량은 activity_amount(사용량) × 배출계수로 계산되고 amount_krw(청구금액)는
+    계산에 안 쓰인다 — 사장님 화면이 실제 계산 근거를 보여주려면 이 값이 필요하다
+    (2026-08-17, 카드가 청구금액만 보여주고 있다는 지적으로 발견)."""
+    session, cid, inst_id = db
+    _add_voucher_with_classification(
+        session, cid, inst_id, 1, "전기요금 (산업용 을)", status="auto",
+        document_type="electric_bill", activity_amount=182.0, activity_unit="kWh",
+    )
+
+    results = get_classifications(session, cid)
+    assert len(results) == 1
+    assert results[0]["activity_amount"] == 182.0
+    assert results[0]["activity_unit"] == "kWh"
 
 
 def test_get_hitl_pending_count_includes_unsent_confirmed(db):

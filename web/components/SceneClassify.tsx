@@ -14,6 +14,10 @@ type Row = {
   category: string | null;
   fuel: string | null;
   amount_krw: number | null;
+  // 탄소량은 이 값(사용량) × 배출계수로 계산된다 — amount_krw(청구금액)는 계산에
+  // 안 쓰이는 참고 정보다. skip 처리된 건(연료 불명 등)은 0/null일 수 있다.
+  activity_amount: number | null;
+  activity_unit: string | null;
   confidence: number;
   evidence: string | null;
   method: "rule" | "llm";
@@ -83,6 +87,13 @@ function ClassifyProgressRing({
   );
 }
 
+/** 탄소량 계산의 실제 근거(사용량)를 표시용 문자열로 — 0/단위 없음(skip된 건)이면
+ * null을 반환해 호출부가 청구금액만 보여주는 기존 표시로 자연스럽게 폴백한다. */
+function formatActivity(amount: number | null, unit: string | null): string | null {
+  if (!amount || amount <= 0 || !unit) return null;
+  return `${amount.toLocaleString(undefined, { maximumFractionDigits: 1 })} ${unit}`;
+}
+
 function ClassificationCard({
   row,
   open,
@@ -92,6 +103,7 @@ function ClassificationCard({
   open: boolean;
   onToggle: () => void;
 }) {
+  const activityLabel = formatActivity(row.activity_amount, row.activity_unit);
   return (
     <div className="rounded-xl bg-surface shadow-card transition-all duration-200 hover:-translate-y-0.5 hover:shadow-float">
       <button
@@ -105,9 +117,16 @@ function ClassificationCard({
               {row.raw ?? row.category ?? "분류 결과"}
             </span>
           </div>
-          <span className="text-[13px] font-semibold tabular-nums text-ink">
-            {(row.amount_krw ?? 0).toLocaleString()}원
-          </span>
+          <div className="flex flex-col items-end">
+            <span className="text-[13px] font-semibold tabular-nums text-ink">
+              {activityLabel ?? `${(row.amount_krw ?? 0).toLocaleString()}원`}
+            </span>
+            {activityLabel && (
+              <span className="text-[10.5px] tabular-nums text-faint">
+                청구금액 {(row.amount_krw ?? 0).toLocaleString()}원
+              </span>
+            )}
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5 text-[11.5px]">

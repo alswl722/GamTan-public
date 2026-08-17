@@ -157,6 +157,11 @@ def get_classifications(session: Session, company_id: int) -> list[dict]:
             "category": c.category,
             "fuel": c.fuel_type,
             "amount_krw": int(c.amount_krw) if c.amount_krw is not None else None,
+            # 탄소량은 이 값(사용량) × 배출계수로 계산된다(db/calc_engine.py::
+            # compute_emission) — amount_krw(청구금액)는 계산에 안 쓰이는 참고
+            # 정보일 뿐이라, 실제 근거인 사용량을 화면에 같이 보여준다.
+            "activity_amount": c.activity_amount,
+            "activity_unit": c.activity_unit,
             "confidence": c.confidence,
             "evidence": c.evidence,
             "method": c.method,
