@@ -10,11 +10,13 @@ from reportlab.pdfgen import canvas
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
+import api.document_ingestion as document_ingestion
 from api.document_ingestion import (
     DuplicateDocumentError,
     MissingInstitutionAttributionError,
     ingest_uploaded_document,
 )
+from db.document_text_extractor import DocumentParseError
 from db.models import Base, Company, FinancialInstitution, InstitutionBorrower, SourceDocument, Voucher
 
 pdfmetrics.registerFont(UnicodeCIDFont("HYGothic-Medium"))
@@ -171,6 +173,33 @@ def test_duplicate_file_upload_is_rejected(db_with_institution):
     ingest_uploaded_document(session, company_id, content, "a.pdf", "gas_bill", mode="ocr")
     with pytest.raises(DuplicateDocumentError):
         ingest_uploaded_document(session, company_id, content, "a.pdf", "gas_bill", mode="ocr")
+
+
+def test_missing_item_description_is_rejected_before_saving(db_with_institution, monkeypatch):
+    """회귀 방지 — 실측 확인된 실제 사고: db/document_llm_router.py가 electric_bill
+    에서 item_description을 못 채운 채 "성공"을 반환해 voucher.item_description이
+    NULL로 저장됐고, 한참 뒤 분류 단계(hash_item)에서야 'NoneType' object has no
+    attribute 'encode'로 크래시했다. 추출 결과에 item_description이 없으면 저장
+    자체를 막아야 한다 — 어느 추출 경로(db/document_extraction.py의 4단계 중
+    어디든)의 버그든 여기서 막힌다. 세션에 아무것도 안 남아야 한다(반쪽 저장 없음)."""
+    monkeypatch.setattr(
+        document_ingestion, "extract_document",
+        lambda session, file_bytes, document_type: {
+            "document_type": "electric_bill",
+            "year": 2026, "month": 7,
+            "supplier_name": "알 수 없음",
+            "item_description": None,
+            "supply_amount_krw": 157_340,
+            "extraction_method": "ocr_llm",
+            "extraction_confidence": 0.9,
+        },
+    )
+    session, company_id, _inst_id, _ib_id = db_with_institution
+    with pytest.raises(DocumentParseError):
+        ingest_uploaded_document(session, company_id, b"fake", "a.jpg", "electric_bill", mode="ocr")
+
+    assert session.execute(select(SourceDocument)).scalars().all() == []
+    assert session.execute(select(Voucher)).scalars().all() == []
 
 
 def test_db_constraint_blocks_duplicate_even_if_app_check_is_bypassed(db_with_institution):

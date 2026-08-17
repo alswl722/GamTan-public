@@ -284,6 +284,21 @@ def route_fields(
     if parsed.get("supply_amount_krw") is None:
         raise DocumentParseError("금액을 읽어내지 못했어요 — 더 선명한 사진으로 다시 올려 주세요")
 
+    # item_description은 voucher.item_description으로 그대로 저장되고, 나중에
+    # 분류 단계(api/agent/tools.py::classify_vouchers)가 이 값을 해시·매칭 키로
+    # 쓴다 — None으로 새 나가면 그때 가서야 크래시(hash_item이 None.encode() 호출)
+    # 한다(실측 확인). 전기·도시가스는 청구서마다 품목명이 달라질 이유가 없어
+    # db/document_text_extractor.py의 결정론적 파서와 동일한 고정 문구로 채운다.
+    # 세금계산서는 품목이 Scope·연료 분류에 직접 쓰이는 실질 정보라 대충 채우지
+    # 않고 못 찾으면 명확히 실패시킨다.
+    if not parsed.get("item_description"):
+        if resolved_type == "electric_bill":
+            parsed["item_description"] = "전기요금 (산업용 을)"
+        elif resolved_type == "gas_bill":
+            parsed["item_description"] = "도시가스"
+        else:
+            raise DocumentParseError("품목명을 읽어내지 못했어요 — 더 선명한 사진으로 다시 올려 주세요")
+
     if not parsed.get("supplier_name"):
         parsed["supplier_name"] = find_supplier_name_best_effort("\n".join(c["text"] for c in cells))
 

@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from api.queries import resolve_institution_borrower
 from db.document_extraction import extract_document
+from db.document_text_extractor import DocumentParseError
 from db.hometax_excel_parser import parse_hometax_excel
 from db.models import SourceDocument, Voucher
 
@@ -157,6 +158,17 @@ def ingest_uploaded_document(
         month=rows[0]["month"] if mode == "ocr" else None,
     )
     voucher_source = DOCUMENT_TYPE_TO_VOUCHER_SOURCE[resolved_document_type]
+
+    # 방어선 — 어느 추출 경로(db/document_extraction.py의 4단계 중 어디든)가 실수로
+    # item_description을 못 채운 채 "성공"을 반환해도, 여기서 걸러내지 않으면
+    # NULL이 voucher에 그대로 저장됐다가 한참 뒤 분류 단계(api/agent/tools.py::
+    # classify_vouchers → hash_item)에서야 "'NoneType' object has no attribute
+    # 'encode'"로 크래시한다(실측 확인 — LLM 라우터 경로에 이 검증이 빠져 있었음).
+    # 세션에 아직 아무것도 add하기 전이라 롤백 없이 그냥 실패시키면 된다.
+    for row in rows:
+        if not row.get("item_description"):
+            raise DocumentParseError("품목명을 읽어내지 못했어요 — 더 선명하게 다시 올려 주세요")
+
     created: list[Voucher] = []
     try:
         # doc 추가부터 commit까지 통째로 감싼다 — 중간의 session.flush()가 doc의
