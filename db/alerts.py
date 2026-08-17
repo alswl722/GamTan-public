@@ -10,6 +10,7 @@
 해석이 갈리므로 severity/message 를 다르게 낸다. 판단은 여기서 끝내지 않고
 문구로만 안내 — 여신 결정은 하지 않는다(CLAUDE.md §9).
 """
+from datetime import datetime, timezone
 from statistics import mean
 
 from sqlalchemy import select
@@ -104,17 +105,22 @@ def _trend_signal(totals: dict[int, float]) -> dict | None:
     return None
 
 
-def _gap_signal(totals: dict[int, float]) -> dict | None:
+def _gap_signal(totals: dict[int, float], *, as_of: datetime | None = None) -> dict | None:
     """최신 데이터 이후 연속 공백 개월 수가 임계치 이상이면 알림.
 
-    1~12월 전체를 훑어 "데이터가 있던 마지막 달 이후" 몇 달이 비었는지 본다 —
+    "데이터가 있던 마지막 달 이후" 몇 달이 비었는지 보되, 달력상 올해 안에서는
+    아직 오지 않은 달(예: 지금이 8월이면 9~12월)까지 공백으로 세지 않는다 —
+    실측(2026-08-17): 7월 이후 전표가 없다고 해서 아직 끝나지도 않은 올해
+    9~12월까지 싸잡아 "5개월째 연동 안 됨"이라 알리면 실제보다 훨씬 심각한
+    공백처럼 보인다. get_coverage/assess_inventory_completeness와 같은 원칙.
     아예 연동을 시작 안 한 기업(공백 0건)은 이 신호가 아니라 별도 커버리지
     로직(get_coverage)의 몫이라 여기서는 제외한다.
     """
     if not totals:
         return None
     last_reported = max(totals)
-    missing = [m for m in range(last_reported + 1, 13)]
+    current_month = (as_of or datetime.now(timezone.utc)).month
+    missing = [m for m in range(last_reported + 1, current_month + 1)]
     if len(missing) >= GAP_MONTHS_THRESHOLD:
         return {
             "type": "gap",
