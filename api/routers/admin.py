@@ -48,7 +48,7 @@ from db.calc_engine import CalcDataGap, ClassifiedItemInput, compute_emission, \
 from db.audit_package import build_audit_package
 from db.audit_report_pdf import build_audit_report_pdf
 from db.document_access_log import access_history, record_access, recent_access_log
-from db.models import Classification, Company, SourceDocument, TraceLog, Voucher
+from db.models import Classification, Company, OwnerNotification, SourceDocument, TraceLog, Voucher
 from db.pcaf import company_pcaf_summary, portfolio_summary
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -232,8 +232,18 @@ def send_classifications_to_owner(company_id: int, session: Session = Depends(ge
     sent_at = datetime.now(timezone.utc)
     for c in pending:
         c.sent_to_owner_at = sent_at
+    sent_count = len(pending)
+    if sent_count > 0:
+        # 확정 전송 → 사장님 알림 (docs/v1-plan.md §6-2). 건수 0이면 알릴 게
+        # 없으므로 레코드를 만들지 않는다 — 빈 알림으로 배너를 채우지 않기 위함.
+        session.add(OwnerNotification(
+            company_id=company_id,
+            type="classification_sent",
+            message=f"{sent_count}건이 확정되어 리포트에 반영됐어요",
+            payload={"sent_count": sent_count},
+        ))
     session.commit()
-    return {"company_id": company_id, "sent_count": len(pending), "sent_at": sent_at}
+    return {"company_id": company_id, "sent_count": sent_count, "sent_at": sent_at}
 
 
 @router.patch("/classifications/{voucher_id}")

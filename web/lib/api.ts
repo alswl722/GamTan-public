@@ -174,6 +174,35 @@ export function getOwnerProgress(companyId: number): Promise<OwnerProgress> {
   return apiGet<OwnerProgress>(`/owner/${companyId}/progress`);
 }
 
+// GET /owner/{company_id}/notifications — 확정 전송 알림(docs/v1-plan.md §6-2,
+// docs/tasks.md). 홈 화면 배너가 폴링으로 조회한다.
+export interface OwnerNotification {
+  id: number;
+  type: string;
+  message: string;
+  payload: { sent_count?: number } | null;
+  created_at: string;
+  read_at: string | null;
+}
+
+export function getOwnerNotifications(
+  companyId: number,
+  unreadOnly = false,
+): Promise<OwnerNotification[]> {
+  const q = unreadOnly ? "?unread=true" : "";
+  return apiGet<{ notifications: OwnerNotification[] }>(
+    `/owner/${companyId}/notifications${q}`,
+  ).then((r) => r.notifications);
+}
+
+/** 배너 클릭 시 읽음 처리. */
+export function markNotificationRead(
+  companyId: number,
+  notificationId: number,
+): Promise<{ id: number; read_at: string }> {
+  return apiPatch(`/owner/${companyId}/notifications/${notificationId}/read`);
+}
+
 // GET /owner/{company_id}/rate-candidate — db/rate_products.py::rate_product_status_for_company.
 // status가 "eligible"(이미 상품 자격 충족) | "upgrade_needed"(등급 개선 필요)로 갈린다.
 // 이전엔 ScenePcaf.tsx 로컬 타입이었으나 web/components/RateProductCard.tsx로 카드가

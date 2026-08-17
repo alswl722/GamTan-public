@@ -12,6 +12,7 @@ import {
   type CompanyListItem,
   type OwnerProgress,
 } from "@/lib/api";
+import OwnerNotificationBanner from "@/components/OwnerNotificationBanner";
 
 /** 사장님 앱 메인 화면 — 계정(로그인) 개념이 없어 기업을 직접 골라야 한다.
  * 고른 기업은 setCompanyId()로 저장되고, 이후 /owner/measure의 모든 단계가
@@ -193,6 +194,8 @@ export default function OwnerHomePage() {
           ))}
         </span>
       </Link>
+
+      {selectedId !== null && <OwnerNotificationBanner companyId={selectedId} />}
 
       {/* 기능 카드 그리드 — 하단바 목적지를 홈에서도 바로 눌러 들어갈 수 있게 */}
       <div className="mt-3 grid grid-cols-2 gap-3">
