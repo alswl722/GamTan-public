@@ -41,9 +41,9 @@ def db(tmp_path):
         yield session, company.id
 
 
-def _add_voucher(session, cid, month, item, *, quantity=None, scope=1, k_taxonomy_lead=False, fuel_type="도시가스"):
+def _add_voucher(session, cid, month, item, *, quantity=None, scope=1, k_taxonomy_lead=False, fuel_type="도시가스", year=YEAR):
     v = Voucher(
-        company_id=cid, source="hometax", year=YEAR, month=month,
+        company_id=cid, source="hometax", year=year, month=month,
         supplier_name="테스트", item_description=item,
         supply_amount_krw=100000,
         raw_json={"quantity": quantity} if quantity is not None else {},
@@ -144,12 +144,18 @@ def test_revenue_dominant_scope_needs_upgrade(db):
 
 def test_upgrade_needed_includes_structured_missing_items(db):
     """결손월은 프론트가 /owner/uploads 그리드로 바로 딥링크할 수 있게 문서종류·월
-    단위로도 구조화돼 나온다(missing 문장과 별개, web/app/owner/benefits 소비 대상)."""
-    session, cid = db
-    for m in (1, 2, 3):
-        _add_voucher(session, cid, m, "도시가스", quantity=100)
+    단위로도 구조화돼 나온다(missing 문장과 별개, web/app/owner/benefits 소비 대상).
 
-    status = rate_product_status_for_scope(session, cid, YEAR, "scope_1")
+    과거 연도(YEAR - 1)로 조회한다 — assess_inventory_completeness가 "아직 안 온
+    달은 결손 아님"으로 취급하는 건 조회 연도가 달력상 올해일 때뿐이라(실측
+    2026-08-17), 이미 다 지난 연도를 봐야 4~12월 전부가 결손으로 잡히는 이
+    테스트의 전제가 실행 시점(오늘이 몇 월인지)과 무관하게 안정적으로 성립한다."""
+    session, cid = db
+    past_year = YEAR - 1
+    for m in (1, 2, 3):
+        _add_voucher(session, cid, m, "도시가스", quantity=100, year=past_year)
+
+    status = rate_product_status_for_scope(session, cid, past_year, "scope_1")
     assert status["status"] == "upgrade_needed"
     assert status["missing_items"] == [
         {"document_type": "gas_bill", "fuel_label": "가스", "months": list(range(4, 13))}

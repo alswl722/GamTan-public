@@ -151,10 +151,14 @@ def test_quality_report_auto_provisions_boundary_and_first_version(api_client):
     assert session.query(OrganizationalBoundary).filter_by(company_id=cid, reporting_year=YEAR).count() == 1
 
 
-def test_quality_report_defaults_to_latest_year_with_data_not_calendar_year(api_client):
-    """year 파라미터를 생략하면 달력상 올해가 아니라 그 기업 전표가 실제로 있는
-    가장 최근 연도를 기본값으로 쓴다 — 결산 데이터가 항상 "올해"일 필요는 없고,
-    "올해"로 고정하면 데이터가 전부 과거 연도인 기업은 리포트가 늘 텅 비어 보인다."""
+def test_quality_report_defaults_to_calendar_year_even_when_only_past_year_has_data(api_client):
+    """year 파라미터를 생략하면 그 기업 전표가 있는 연도가 아니라 달력상 올해를
+    기본값으로 쓴다(실측 2026-08-17 변경) — 예전엔 "가장 최근 전표 연도"를 썼는데,
+    시연용 고정 연도 데이터 없이 사장님이 실시간으로 당해년도 전표를 올리는
+    구조가 된 뒤로는 반대로 작년 전표가 있는 기업이 올해 걸 새로 올려도 리포트가
+    계속 작년에 머물러 "방금 올린 데이터가 안 보인다"는 문제가 됐다. 그래서 올해
+    전표가 아직 하나도 없어 리포트가 비어 보이더라도 항상 달력상 올해를 기본값으로
+    쓴다 — 과거 연도는 연도 선택기(reporting-years)로 본다."""
     client, session, cid = api_client
     _add_institution_borrower(session, cid)
     past_year = YEAR - 1  # 달력상 "올해"(YEAR)와 다른 연도임을 명확히 하기 위해
@@ -176,8 +180,8 @@ def test_quality_report_defaults_to_latest_year_with_data_not_calendar_year(api_
     res = client.get(f"/owner/{cid}/quality-report")  # year 생략
     body = res.json()
 
-    assert body["reporting_year"] == past_year
-    assert body["scope_1"]["emission_tco2e"] is not None
+    assert body["reporting_year"] == YEAR
+    assert body["scope_1"]["emission_tco2e"] is None  # 올해 전표가 없어 미산정(null, 0 아님)
 
 
 def test_quality_report_recomputes_draft_on_repeat_calls(api_client):

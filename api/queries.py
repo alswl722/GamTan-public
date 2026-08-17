@@ -2,6 +2,8 @@
 
 여기 모아두면 "전표/분포를 DB에서 꺼내는" 로직이 한 곳에만 존재한다.
 """
+from datetime import datetime, timezone
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -74,16 +76,27 @@ def _selected_coverage_fuels(fuel_types: dict | None) -> set[str] | None:
     return selected
 
 
-def get_coverage(session: Session, company_id: int) -> dict:
+def get_coverage(session: Session, company_id: int, year: int | None = None, *, as_of: datetime | None = None) -> dict:
     """월(1~12) × 연료 대분류 존재 여부 매트릭스 + 결손 목록.
 
     에이전트가 "3~5월 가스가 0건이네?"를 스스로 관찰하는 재료. matrix는 체크
     여부와 무관하게 전체를 반환하고(참고용), gaps만 선택된 연료로 필터한다.
+
+    year 생략 시 달력상 올해(as_of 기준)로 검사한다. 올해를 보는 경우 아직 오지
+    않은 달(예: 지금이 8월이면 9~12월)은 결손으로 잡지 않는다 — 아직 발행되지도
+    않은 전표를 "빠졌다"고 알리게 되는 걸 막기 위함(실측 2026-08-17). 과거 연도를
+    명시하면 그 해 12개월 전부를 본다.
     """
+    today = as_of or datetime.now(timezone.utc)
+    target_year = year if year is not None else today.year
+    applicable_months = today.month if target_year == today.year else 12
+
     vouchers = get_vouchers(session, company_id)
     fuels = ["전기", "가스", "경유/유류"]
     matrix = {f: {m: 0 for m in range(1, 13)} for f in fuels}
     for v in vouchers:
+        if v["year"] != target_year:
+            continue
         fc = _fuel_class(v["item_description"])
         if fc in matrix:
             matrix[fc][v["month"]] += 1
@@ -95,7 +108,7 @@ def get_coverage(session: Session, company_id: int) -> dict:
     for f in fuels:
         if selected_fuels is not None and f not in selected_fuels:
             continue
-        missing = [m for m in range(1, 13) if matrix[f][m] == 0]
+        missing = [m for m in range(1, applicable_months + 1) if matrix[f][m] == 0]
         if missing:
             gaps.append({"fuel": f, "missing_months": missing})
     return {"matrix": matrix, "gaps": gaps}

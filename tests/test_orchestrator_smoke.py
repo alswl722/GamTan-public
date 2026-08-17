@@ -6,11 +6,14 @@
 
 네트워크는 쓰지 않는다 — LLM 호출 지점 2곳(분류·이상치 판단)을 스텁으로 대체.
 """
+from datetime import datetime
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 import api.agent.orchestrator as orch
+import api.queries as queries
 from db.init_db import (
     seed_emission_factors,
     seed_industry_distributions,
@@ -18,6 +21,23 @@ from db.init_db import (
 )
 from db.models import Base, Company, TraceLog
 from db.scenarios import load_scenario
+
+
+class _FixedDatetime(datetime):
+    """get_coverage()가 "올해"로 인식할 기준시각을 2025년 말로 고정."""
+
+    @classmethod
+    def now(cls, tz=None):
+        return datetime(2025, 12, 31, 12, 0, tzinfo=tz)
+
+
+@pytest.fixture(autouse=True)
+def _freeze_coverage_year(monkeypatch):
+    """get_coverage()는 연도를 생략하면 이제 달력상 올해만 본다(실측 2026-08-17)
+    — 이 스모크 테스트는 2025년 고정 시나리오 데이터(db/scenarios.py, 회계 엑셀
+    단가 연도와 맞물려 있어 임의로 못 바꿈)를 쓰므로, "올해"를 2025년으로 고정해
+    기존 시나리오 동작을 그대로 재현한다."""
+    monkeypatch.setattr(queries, "datetime", _FixedDatetime)
 
 
 def _stub_llm_classify(text: str, amount: int, rule_hint=None) -> dict:
