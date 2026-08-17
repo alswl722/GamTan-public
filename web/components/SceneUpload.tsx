@@ -2,7 +2,14 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { UploadCloud } from "lucide-react";
-import { DOCUMENT_UPLOAD_TIMEOUT_MS, apiGet, apiPatch, apiUpload, getCompanyId } from "@/lib/api";
+import {
+  DOCUMENT_UPLOAD_TIMEOUT_MS,
+  apiGet,
+  apiPatch,
+  apiUpload,
+  getCompanyId,
+  getDocumentGrid,
+} from "@/lib/api";
 
 /** 장면 ② — 연료 유형 체크 + 자료 업로드(세금계산서·전기요금고지서·도시가스고지서) 통합 화면.
  *
@@ -145,6 +152,47 @@ export function SceneUpload({
     }
   }
 
+  /** "다음" 버튼(canProceed)이 이번 세션에 성공한 업로드(entries)만 보고 있어서
+   * 생기던 버그 — 파일이 이미 서버에 있으면("이미 업로드된 파일입니다" 409) 카드는
+   * 계속 "필수" 미충족으로 남아 위저드가 영영 안 넘어갔다(재업로드도 중복이라 막힘).
+   * 서버 실제 그리드(문서종류×월, /owner/uploads 탭과 같은 근거)를 조회해, 이미
+   * 최소 1건이라도 있는 문서종류는 entries에 서버 근거 항목을 채워 카드가 충족된
+   * 것으로 보이게 한다. 마운트 시(새로고침·뒤로가기 등으로 세션 상태가 비어도) +
+   * 업로드 시도 후(성공이든 중복 실패든) 호출한다. */
+  async function refreshDocumentGrid() {
+    try {
+      const cid = await getCompanyId();
+      const grid = await getDocumentGrid(cid);
+      setEntries((e) => {
+        const next = { ...e };
+        for (const row of grid.document_types) {
+          const monthsWithData = Object.entries(row.months)
+            .filter(([, count]) => count > 0)
+            .map(([month]) => Number(month));
+          const existingServerMonths = new Set(
+            next[row.document_type]
+              .filter((m) => m.id.startsWith("server-coverage-"))
+              .map((m) => m.month),
+          );
+          const additions = monthsWithData
+            .filter((month) => !existingServerMonths.has(month))
+            .map((month) => ({
+              id: `server-coverage-${month}`,
+              fileName: "(이미 업로드된 자료)",
+              status: "done" as const,
+              month,
+            }));
+          if (additions.length > 0) {
+            next[row.document_type] = [...next[row.document_type], ...additions];
+          }
+        }
+        return next;
+      });
+    } catch (err) {
+      console.error("문서 현황 조회 실패:", err);
+    }
+  }
+
   useEffect(() => {
     // 리뷰 지적사항 — fuel_types_json이 저장 안 된 채(null) "다음"으로 넘어가면 필터가 안
     // 걸려 안전하지만, 사용자가 도시가스 pill을 실수로 안 누르고 다른 연료만 저장하면
@@ -172,6 +220,14 @@ export function SceneUpload({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 마운트 시 1회만, initialFuel 변화엔 반응 안 함
+  }, []);
+
+  // 새로고침·뒤로가기로 이 화면에 다시 들어와도(entries는 세션 상태라 비어있음)
+  // 서버에 이미 있는 문서는 카드가 충족 상태로 보이게 — fuel 저장 여부와 무관하게
+  // 항상 1회 실행.
+  useEffect(() => {
+    void refreshDocumentGrid();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 마운트 시 1회만
   }, []);
 
   async function saveFuel(next: FuelTypesState) {
@@ -246,6 +302,19 @@ export function SceneUpload({
           },
         ],
       }));
+      // "이미 업로드된 파일입니다"(409)면 그 문서종류는 이미 서버에 있다는 뜻이다 —
+      // 에러로만 남기면 카드가 영영 "필수" 미충족으로 보이니, 실제 서버 현황을
+      // 다시 물어 카드를 충족 처리한다(refreshDocumentGrid 참고).
+      void refreshDocumentGrid();
+    }
+  }
+
+  /** 슬롯 지정 카드의 "여러 장 한 번에 올리기" — uploadAuto와 같은 이유로 순차 처리.
+   * 각 파일은 독립적인 entryId로 카드에 uploading→done/error 상태가 개별 반영된다. */
+  async function uploadOcrFiles(docType: DocType, files: File[]) {
+    for (let i = 0; i < files.length; i++) {
+      const entryId = `${Date.now()}-${i}-${files[i].name}`;
+      await uploadOcr(docType, files[i], entryId);
     }
   }
 
@@ -255,8 +324,11 @@ export function SceneUpload({
    * 자연스럽게 갱신되게 한다 — 위저드 안이라 AI 분류(4단계)를 따로 트리거할
    * 필요는 없다(/owner/uploads처럼 위저드 밖 별도 탭이 아님).
    *
-   * 여러 장을 한 번에 골라도 되도록 파일별로 독립 실행한다(uploadOcr의 병렬 패턴과
-   * 동일) — 한 장이 실패해도 나머지 장은 계속 올라간다. */
+   * 여러 장을 한 번에 골라도 순차로 하나씩 올린다 — 백엔드 OCR(PaddleOCR)이
+   * 프로세스당 한 번에 한 건만 처리하도록 락이 걸려 있어서(db/document_ocr_extractor.py,
+   * 동시 predict() 호출 시 네이티브 엔진이 죽는 버그가 실측 확인됨), 여러 장을
+   * 동시에 쏴봐야 뒤 순번 파일은 앞 파일들의 처리 시간만큼 대기가 쌓여 클라이언트
+   * 타임아웃(60초)을 넘겨버린다. 한 장이 실패해도 나머지 장은 계속 올라간다. */
   async function uploadAuto(file: File) {
     const entryId = `auto-${Date.now()}-${file.name}`;
     setAutoUploading((n) => n + 1);
@@ -282,14 +354,19 @@ export function SceneUpload({
       console.error("자동 업로드 실패:", err);
       const message = err instanceof Error ? err.message : "업로드에 실패했습니다.";
       setAutoUploadErrors((errs) => [...errs, `${file.name}: ${message}`]);
+      // uploadOcr와 동일한 이유 — "이미 업로드된 파일"이면 서버 현황을 다시 물어
+      // 해당 문서종류 카드를 충족 처리한다.
+      void refreshDocumentGrid();
     } finally {
       setAutoUploading((n) => n - 1);
     }
   }
 
-  function uploadAutoFiles(files: File[]) {
+  async function uploadAutoFiles(files: File[]) {
     setAutoUploadErrors([]);
-    files.forEach((f) => void uploadAuto(f));
+    for (const f of files) {
+      await uploadAuto(f);
+    }
   }
 
   async function uploadExcel(file: File) {
@@ -401,10 +478,7 @@ export function SceneUpload({
                 className="hidden"
                 onChange={(e) => {
                   const files = Array.from(e.target.files ?? []);
-                  files.forEach((f, i) => {
-                    const entryId = `${Date.now()}-${i}-${f.name}`;
-                    uploadOcr(docType, f, entryId);
-                  });
+                  if (files.length > 0) void uploadOcrFiles(docType, files);
                   e.target.value = "";
                 }}
               />

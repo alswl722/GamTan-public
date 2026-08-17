@@ -1,4 +1,4 @@
-# iM-Bridge — 앱만 (DB 컨테이너 없음, 외부 Supabase 사용)
+# 감탄 — 앱만 (DB 컨테이너 없음, 외부 Supabase 사용)
 # 실행: docker compose up --build
 services:
   api:

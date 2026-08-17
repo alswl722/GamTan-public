@@ -227,6 +227,76 @@ def test_electric_bill_tolerates_dot_date_separator():
     assert result["year"] == 2025 and result["month"] == 6
 
 
+def test_detect_document_type_tolerates_letter_spaced_title():
+    """실측(2026-08-17, 실제 국세청 표준 세금계산서): 제목이 "전 자 세 금 계 산 서"
+    처럼 글자 사이가 벌어져 렌더링된다(디자인상 자간 강조) — PDF 텍스트 레이어·
+    OCR 재구성 텍스트 둘 다 이 간격을 그대로 보존한다."""
+    assert detect_document_type("전 자 세 금 계 산 서\n공급자: 테스트") == "tax_invoice"
+
+
+def test_electric_bill_tolerates_letter_spaced_label():
+    """같은 자간 문제가 본문 라벨에도 적용될 수 있다 — "청 구 월"."""
+    text = extract_pdf_text(_pdf([
+        "전기요금 고지서",
+        "청 구 월: 2025-06",
+        "사용량(kWh) 1,234",
+        "청구금액(원) 987,654",
+    ]))
+    result = parse_document_text(text, "electric_bill")
+    assert result["year"] == 2025 and result["month"] == 6
+
+
+def test_gas_bill_tolerates_letter_spaced_label():
+    text = extract_pdf_text(_pdf([
+        "도시가스 요금고지서",
+        "사 용 월: 2025-06",
+        "사용량(m³) 120",
+        "청구금액(원) 55,000",
+    ]))
+    result = parse_document_text(text, "gas_bill")
+    assert result["year"] == 2025 and result["month"] == 6
+
+
+def test_tax_invoice_tolerates_letter_spaced_date_label():
+    text = extract_pdf_text(_pdf([
+        "전자세금계산서",
+        "작 성 일 자: 2025-02-11",
+        "공급자: 구미에너지주유소",
+        "경유 L 301L 1,400 420,833",
+    ]))
+    result = parse_document_text(text, "tax_invoice")
+    assert result["year"] == 2025 and result["month"] == 2
+
+
+def test_date_sep_tolerates_space_after_separator():
+    """실측(2026-08-17): 표 형식 요약행의 날짜 셀이 OCR에서 "2025- 02-11"처럼
+    구분자 뒤에 공백이 섞여 재구성됐다(등록번호·금액 셀도 동일 패턴)."""
+    rows = [
+        [(0.0, 80.0, "작성일자"), (150.0, 220.0, "공급가액")],
+        [(0.0, 90.0, "2025- 02-11"), (150.0, 220.0, "420, 833")],
+    ]
+    assert parse_tax_invoice_date_table(rows) == (2025, 2)
+
+
+def test_parse_tax_invoice_date_table_tolerates_letter_spaced_header_cell():
+    """헤더 셀 자체가 "작 성 일 자"처럼 자간이 벌어져도 좌표 기반 매칭이 통해야 한다."""
+    rows = [
+        [(0.0, 80.0, "작 성 일 자"), (150.0, 220.0, "공급가액")],
+        [(0.0, 90.0, "2025-03-05"), (150.0, 220.0, "300,000")],
+    ]
+    assert parse_tax_invoice_date_table(rows) == (2025, 3)
+
+
+def test_parse_tax_invoice_table_rows_tolerates_letter_spaced_header_cell():
+    rows = [
+        [(0.0, 82.0, "품 목 명"), (267.0, 336.0, "수량"), (581.0, 748.0, "공급가액(원)")],
+        [(0.0, 55.0, "경유"), (266.0, 344.0, "301L"), (580.0, 704.0, "420,833")],
+    ]
+    result = parse_tax_invoice_table_rows(rows)
+    assert result["item_description"] == "경유"
+    assert result["supply_amount_krw"] == 420_833
+
+
 def test_slotted_upload_does_not_require_exact_title_phrase():
     """슬롯이 이미 정해졌으면(예: electric_bill 칸에 업로드) 제목이 이 프로젝트가 아는
     정확한 3개 문구("전기요금 고지서" 등)와 달라도(실제 문서는 "전기요금청구서" 같은

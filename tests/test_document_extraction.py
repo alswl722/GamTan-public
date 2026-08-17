@@ -1,21 +1,37 @@
-"""db/document_extraction.py — 텍스트 레이어→OCR(PaddleOCR, 100% 로컬) 3단계 라우팅 검증.
+"""db/document_extraction.py — 텍스트 레이어→OCR(PaddleOCR, 100% 로컬)→LLM 최후
+수단(라우팅) 4단계 라우팅 검증.
 
 OCR 엔진 호출은 스텁으로 대체한다(무거운 모델 로딩 없이) — db.document_extraction의
-`ocr_extract`를 monkeypatch한다(과거 `extract_via_vision` 자리를 대신함, Gemini 비전은
-제거됨)."""
+`ocr_extract`를 monkeypatch한다. LLM 최후 수단(db/document_llm_router.py)은 이
+파일이 쓰는 모든 픽스처가 실제 이미지 매직바이트가 아니라서(`_minimal_pdf`는
+PDF, 나머지는 `b"fake jpeg bytes"` 같은 자리표시자) rasterize_to_images()에서
+곧장 DocumentParseError로 끝나 네트워크 호출까지 가지 않는다 — session 픽스처는
+그 경로(llm_cache 조회)가 죽지 않게 인메모리 DB만 붙여준다. LLM 라우팅 자체의
+동작(캐시·값 재해석·신뢰도)은 tests/test_document_llm_router.py에서 별도 검증."""
 import io
 
 import pytest
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfgen import canvas
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 
 import db.document_extraction as document_extraction
 from db.document_extraction import extract_document
 from db.document_ocr_extractor import OcrResult
 from db.document_text_extractor import DocumentParseError
+from db.models import Base
 
 pdfmetrics.registerFont(UnicodeCIDFont("HYGothic-Medium"))
+
+
+@pytest.fixture()
+def session():
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    with Session(engine) as s:
+        yield s
 
 
 def _minimal_pdf(lines: list[str]) -> bytes:
@@ -40,7 +56,7 @@ def _stub_ocr(text: str, rows=None, confidence: float = 0.9):
 
 # ── 텍스트 레이어 경로 (변경 없음) ────────────────────────────────────────────
 
-def test_real_pdf_text_is_extracted():
+def test_real_pdf_text_is_extracted(session):
     """PDF 텍스트 레이어에서 문서 종류·날짜·금액·수량을 정규식으로 그대로 읽는다
     — 값을 지어내지 않는다(CLAUDE.md §6 실패 가시성 원칙)."""
     pdf = _minimal_pdf([
@@ -51,7 +67,7 @@ def test_real_pdf_text_is_extracted():
         "사용량(kWh) 1,234",
         "청구금액(원) 987,654",
     ])
-    result = extract_document(pdf, "electric_bill")
+    result = extract_document(session, pdf, "electric_bill")
     assert result["year"] == 2025 and result["month"] == 6
     assert result["supply_amount_krw"] == 987_654
     assert result["quantity"] == 1234
@@ -59,7 +75,7 @@ def test_real_pdf_text_is_extracted():
     assert result["extraction_confidence"] is None
 
 
-def test_extract_document_auto_detects_type_when_omitted():
+def test_extract_document_auto_detects_type_when_omitted(session):
     """document_type 생략("그냥 업로드")하면 텍스트에서 판별한 종류를 그대로
     신뢰하고 반환 dict의 document_type으로 알려준다."""
     pdf = _minimal_pdf([
@@ -69,12 +85,12 @@ def test_extract_document_auto_detects_type_when_omitted():
         "사용량(m³) 800",
         "청구금액(원) 800,000",
     ])
-    result = extract_document(pdf)
+    result = extract_document(session, pdf)
     assert result["document_type"] == "gas_bill"
     assert result["year"] == 2025 and result["month"] == 4
 
 
-def test_gas_bill_includes_quantity_fields():
+def test_gas_bill_includes_quantity_fields(session):
     pdf = _minimal_pdf([
         "도시가스 요금고지서",
         "고객명(사업장): 테스트기업 (경북 구미)",
@@ -82,12 +98,12 @@ def test_gas_bill_includes_quantity_fields():
         "사용량(m³) 800",
         "청구금액(원) 800,000",
     ])
-    result = extract_document(pdf, "gas_bill")
+    result = extract_document(session, pdf, "gas_bill")
     assert result["quantity_unit"] == "m3"
     assert result["quantity"] == 800
 
 
-def test_tax_invoice_includes_quantity_when_printed():
+def test_tax_invoice_includes_quantity_when_printed(session):
     """품목 행에 수량+단위(예: "300L")가 찍혀 있으면 캡처한다 — 세금계산서 경로로
     들어온 유류비 전표도 PCAF 2a(energy_consumption) 판정에 도달할 수 있어야 한다."""
     pdf = _minimal_pdf([
@@ -96,13 +112,13 @@ def test_tax_invoice_includes_quantity_when_printed():
         "공급자: 구미석유",
         "경유 L 300L 1,400 420,000",
     ])
-    result = extract_document(pdf, "tax_invoice")
+    result = extract_document(session, pdf, "tax_invoice")
     assert result["quantity"] == 300
     assert result["quantity_unit"] == "L"
     assert result["supply_amount_krw"] == 420_000
 
 
-def test_tax_invoice_without_printed_quantity_omits_quantity_fields():
+def test_tax_invoice_without_printed_quantity_omits_quantity_fields(session):
     """세금계산서는 물량이 안 찍혀 있는 경우("-" 등)가 더 흔하다 — 이때는 quantity를
     합성해 넣지 않고 기존 계산 엔진 우선순위(실측 > 금액÷단가)의 후자 경로를 탄다."""
     pdf = _minimal_pdf([
@@ -111,14 +127,14 @@ def test_tax_invoice_without_printed_quantity_omits_quantity_fields():
         "공급자: 구미석유",
         "유류대금 외1종 - 1,400 420,000",
     ])
-    result = extract_document(pdf, "tax_invoice")
+    result = extract_document(session, pdf, "tax_invoice")
     assert "quantity" not in result
     assert result["supply_amount_krw"] == 420_000
 
 
 # ── 슬롯 불일치는 OCR 재시도 없이 즉시 실패 ───────────────────────────────────
 
-def test_wrong_document_type_raises_immediately_without_ocr_fallback(monkeypatch):
+def test_wrong_document_type_raises_immediately_without_ocr_fallback(monkeypatch, session):
     """전기요금고지서를 세금계산서 칸에 올리는 등 알려진 서식인데 슬롯이 틀리면,
     OCR로 재시도해도 답이 바뀌지 않으므로 곧장 실패한다(OCR 호출 낭비 없음) —
     ocr_extract가 호출되지 않는 것까지 확인."""
@@ -134,12 +150,12 @@ def test_wrong_document_type_raises_immediately_without_ocr_fallback(monkeypatch
         "청구금액(원) 987,654",
     ])
     with pytest.raises(DocumentParseError, match="전기요금고지서"):
-        extract_document(pdf, "tax_invoice")
+        extract_document(session, pdf, "tax_invoice")
 
 
 # ── 텍스트 레이어 실패 → OCR 폴백 ─────────────────────────────────────────────
 
-def test_unrecognized_format_falls_back_to_ocr(monkeypatch):
+def test_unrecognized_format_falls_back_to_ocr(monkeypatch, session):
     """텍스트는 있지만 아예 모르는 서식(예: 국세청 표준 세금계산서)이면 OCR
     폴백을 탄다."""
     monkeypatch.setattr(
@@ -150,13 +166,13 @@ def test_unrecognized_format_falls_back_to_ocr(monkeypatch):
         ),
     )
     pdf = _minimal_pdf(["전 자 세 금 계 산 서", "작성일자 공급가액", "2025-01-11 460,617"])
-    result = extract_document(pdf, "tax_invoice")
+    result = extract_document(session, pdf, "tax_invoice")
     assert result["supplier_name"] == "구미에너지주유소"
     assert result["extraction_method"] == "ocr"
     assert result["extraction_confidence"] == pytest.approx(0.9)
 
 
-def test_no_text_layer_falls_back_to_ocr(monkeypatch):
+def test_no_text_layer_falls_back_to_ocr(monkeypatch, session):
     """텍스트 레이어가 아예 없으면(비-PDF, 실 사진 등) 곧장 OCR 폴백을 탄다."""
     monkeypatch.setattr(
         document_extraction, "ocr_extract",
@@ -164,12 +180,12 @@ def test_no_text_layer_falls_back_to_ocr(monkeypatch):
             "전기요금 고지서\n청구월: 2025-03\n사용량(kWh) 500\n청구금액(원) 100,000"
         ),
     )
-    result = extract_document(b"not a pdf at all", "electric_bill")
+    result = extract_document(session, b"not a pdf at all", "electric_bill")
     assert result["year"] == 2025
     assert result["extraction_method"] == "ocr"
 
 
-def test_field_parse_failure_on_recognized_title_falls_back_to_ocr(monkeypatch):
+def test_field_parse_failure_on_recognized_title_falls_back_to_ocr(monkeypatch, session):
     """제목은 알아봤지만(예: "전자세금계산서") 필드 레이아웃이 이 프로젝트 정규식
     전제와 달라 못 찾으면(작성일자 없음) OCR로 재시도한다 — 실제 홈택스/한전 PDF는
     제목은 같아도 필드 서식이 다를 수 있어, 텍스트 파싱 실패가 곧 "이 문서는 못
@@ -188,21 +204,21 @@ def test_field_parse_failure_on_recognized_title_falls_back_to_ocr(monkeypatch):
         "공급자: 구미석유",
         "경유 L 300L 1,400 420,000",
     ])
-    result = extract_document(pdf, "tax_invoice")
+    result = extract_document(session, pdf, "tax_invoice")
     assert result["supplier_name"] == "구미석유"
     assert result["extraction_method"] == "ocr"
 
 
-def test_ocr_fallback_failure_propagates():
+def test_ocr_fallback_failure_propagates(session):
     """OCR 폴백까지 실패하면(monkeypatch 없이 실제 rasterize_to_images가 못 알아보는
     바이트) 값을 지어내지 않고 DocumentParseError 그대로 던진다."""
     with pytest.raises(DocumentParseError):
-        extract_document(b"not a pdf at all", "tax_invoice")
+        extract_document(session, b"not a pdf at all", "tax_invoice")
 
 
 # ── 세금계산서 표(품목행) 좌표 기반 재시도 ────────────────────────────────────
 
-def test_tax_invoice_table_row_fallback_when_linear_text_row_unmatched(monkeypatch):
+def test_tax_invoice_table_row_fallback_when_linear_text_row_unmatched(monkeypatch, session):
     """OCR 선형 재구성으로는 품목행을 못 찾아도(사진에서 컬럼이 어긋난 경우), 헤더
     행 좌표 기반 표 매칭(parse_tax_invoice_table_rows)으로 성공한다 — 실측 스파이크
     좌표를 그대로 재현."""
@@ -221,7 +237,7 @@ def test_tax_invoice_table_row_fallback_when_linear_text_row_unmatched(monkeypat
         document_extraction, "ocr_extract",
         lambda file_bytes: _stub_ocr(linear_text, rows=rows, confidence=0.93),
     )
-    result = extract_document(b"fake jpeg bytes", "tax_invoice")
+    result = extract_document(session, b"fake jpeg bytes", "tax_invoice")
     assert result["document_type"] == "tax_invoice"
     assert result["item_description"] == "경유"
     assert result["supply_amount_krw"] == 420_833
@@ -229,7 +245,7 @@ def test_tax_invoice_table_row_fallback_when_linear_text_row_unmatched(monkeypat
     assert result["extraction_method"] == "ocr"
 
 
-def test_tax_invoice_date_table_fallback_when_no_colon_label_at_all(monkeypatch):
+def test_tax_invoice_date_table_fallback_when_no_colon_label_at_all(monkeypatch, session):
     """실측(2026-08-16, 사용자 제공 합성 세금계산서 사진) — 국세청 표준 서식은
     "작성일자:" 콜론이 아예 없고 헤더행/데이터행 표 구조라, 선형 텍스트 기반
     parse_tax_invoice_header도 실패한다. 이때 날짜까지 좌표 기반
@@ -252,7 +268,7 @@ def test_tax_invoice_date_table_fallback_when_no_colon_label_at_all(monkeypatch)
         document_extraction, "ocr_extract",
         lambda file_bytes: _stub_ocr(linear_text, rows=rows, confidence=0.95),
     )
-    result = extract_document(b"fake jpeg bytes", "tax_invoice")
+    result = extract_document(session, b"fake jpeg bytes", "tax_invoice")
     assert result["document_type"] == "tax_invoice"
     assert result["year"] == 2025 and result["month"] == 1
     assert result["item_description"] == "경유"
@@ -260,7 +276,7 @@ def test_tax_invoice_date_table_fallback_when_no_colon_label_at_all(monkeypatch)
     assert result["extraction_method"] == "ocr"
 
 
-def test_tax_invoice_table_fallback_not_attempted_for_other_slots(monkeypatch):
+def test_tax_invoice_table_fallback_not_attempted_for_other_slots(monkeypatch, session):
     """document_type이 electric_bill/gas_bill로 지정된 경우엔 표 매칭을 시도하지
     않는다 — 세금계산서 전용 재시도."""
     monkeypatch.setattr(
@@ -268,19 +284,19 @@ def test_tax_invoice_table_fallback_not_attempted_for_other_slots(monkeypatch):
         lambda file_bytes: _stub_ocr("알아볼 수 없는 텍스트", rows=[], confidence=0.5),
     )
     with pytest.raises(DocumentParseError):
-        extract_document(b"fake jpeg bytes", "electric_bill")
+        extract_document(session, b"fake jpeg bytes", "electric_bill")
 
 
 # ── 관리비 고지서 (OCR 경로) ──────────────────────────────────────────────────
 
-def test_management_fee_bill_via_ocr_returns_electric_bill_with_quality_flag(monkeypatch):
+def test_management_fee_bill_via_ocr_returns_electric_bill_with_quality_flag(monkeypatch, session):
     monkeypatch.setattr(
         document_extraction, "ocr_extract",
         lambda file_bytes: _stub_ocr(
             "○○빌딩 관리비 고지서\n부과월: 2025-06\n전기료 187,000원", confidence=0.88
         ),
     )
-    result = extract_document(b"fake jpeg bytes")  # "그냥 업로드"
+    result = extract_document(session, b"fake jpeg bytes")  # "그냥 업로드"
     assert result["document_type"] == "electric_bill"
     assert result["quality_flag"] == "mgmt_fee_estimate"
     assert result["extraction_method"] == "ocr"

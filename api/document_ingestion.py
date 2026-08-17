@@ -118,7 +118,7 @@ def ingest_uploaded_document(
         source_system = "upload:excel"
         resolved_document_type = "tax_invoice"
     else:
-        row = extract_document(file_bytes, document_type)
+        row = extract_document(session, file_bytes, document_type)
         rows = [row]
         extracted = row
         source_system = "upload:ocr"
