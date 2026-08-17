@@ -7,7 +7,9 @@ import { apiGet, apiPost, getCompanyId } from "@/lib/api";
 
 type Row = {
   voucher_id: number;
-  raw: string;
+  // 세금계산서 원문만 실제 판단 근거라 채워져 온다 — 전기/가스고지서는 문서
+  // 종류만으로 Scope가 정해지고 원문 자체는 근거가 아니라 항상 null이다.
+  raw: string | null;
   scope: 1 | 2 | null;
   category: string | null;
   fuel: string | null;
@@ -100,7 +102,7 @@ function ClassificationCard({
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <span className="font-mono text-[13px] font-semibold text-ink">
-              {row.raw}
+              {row.raw ?? row.category ?? "분류 결과"}
             </span>
           </div>
           <span className="text-[13px] font-semibold tabular-nums text-ink">
