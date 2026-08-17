@@ -273,7 +273,15 @@ function MonthlyTrendChart({ monthly }: { monthly: MonthlyRow[] }) {
               {fuels.map((f) => {
                 const v = m.by_fuel[f] || 0;
                 if (v <= 0) return null;
-                return <div key={f} className={FUEL_BAR_COLOR[f]} style={{ flexGrow: v }} />;
+                // flex-basis를 auto(기본값)로 두면 빈 div의 콘텐츠 기준 크기 계산에
+                // 기대야 해서 렌더링 환경에 따라 회색 배경(bg-line)이 안 채워지고
+                // 남는 경우가 실측 확인됐다(2026-08-17, 실제 데이터로 검증 — total/
+                // by_fuel 합은 정확히 일치해 데이터 문제가 아니었음) — flex-basis를
+                // 0으로 명시해 flex-grow 비율로만 채워지도록 고정한다(막대 그래프의
+                // 표준 관례).
+                return (
+                  <div key={f} className={FUEL_BAR_COLOR[f]} style={{ flex: `${v} 0 0` }} />
+                );
               })}
             </div>
           </div>
