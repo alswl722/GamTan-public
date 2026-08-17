@@ -40,6 +40,9 @@ const STATUS_LABEL: Record<string, string> = {
 
 type CellKey = `${DocumentType}-${number}`;
 
+// POST /classify/{company_id} 응답 요약 — api/agent/tools.py::classify_vouchers.
+type ClassifySummary = { processed: number; auto: number; review_required: number };
+
 /** 추가 업로드(초기 온보딩 위저드 제외) 완료 시 뜨는 축하 모달.
  *
  * reviewNotice가 있으면(방금 올린 문서에서 담당자 검토 대기 건이 나온 경우) 같은
@@ -129,6 +132,7 @@ function OwnerUploadsPageContent() {
 
   const [classifying, setClassifying] = useState(false);
   const [classifyError, setClassifyError] = useState<string | null>(null);
+  const [classifySuccessMessage, setClassifySuccessMessage] = useState<string | null>(null);
   const [unclassifiedCount, setUnclassifiedCount] = useState<number | null>(null);
 
   /** "분류 다시 실행" 버튼을 실제로 미분류 건이 남아있을 때만 보여주기 위한 조회 —
@@ -172,20 +176,22 @@ function OwnerUploadsPageContent() {
    * 겪음 — 재업로드해도 파일이 이미 있어 매번 409라 이 함수가 재호출될 기회조차
    * 없었음). 이제 실패 여부를 반환하고, 실패하면 배너로 보여준다. 성공/실패와
    * 무관하게 아래 "분류 다시 실행" 버튼으로 언제든 재시도할 수 있다(classify_vouchers
-   * 는 미분류 건만 처리하는 멱등 구조라 몇 번을 다시 불러도 안전). */
-  async function classifyNewVouchers(cid: number): Promise<boolean> {
+   * 는 미분류 건만 처리하는 멱등 구조라 몇 번을 다시 불러도 안전). 반환값은
+   * 처리 건수 요약(api/agent/tools.py::classify_vouchers의 summary) — 실패하면
+   * null(호출부가 "성공했는지"만 판단하려면 결과값을 truthy 체크하면 된다). */
+  async function classifyNewVouchers(cid: number): Promise<ClassifySummary | null> {
     try {
-      await apiPost(`/classify/${cid}`);
+      const summary = await apiPost<ClassifySummary>(`/classify/${cid}`);
       setClassifyError(null);
       await refreshUnclassifiedCount(cid);
-      return true;
+      return summary;
     } catch (err) {
       console.error("업로드 후 자동 분류 실패:", err);
       setClassifyError(
         "방금 올린 자료의 AI 분류에 실패했어요 — 아래 \"분류 다시 실행\"을 눌러 주세요.",
       );
       await refreshUnclassifiedCount(cid);
-      return false;
+      return null;
     }
   }
 
@@ -197,9 +203,22 @@ function OwnerUploadsPageContent() {
   async function handleRetryClassification() {
     if (companyId === null) return;
     setClassifying(true);
-    const ok = await classifyNewVouchers(companyId);
-    if (ok) {
+    setClassifySuccessMessage(null);
+    const summary = await classifyNewVouchers(companyId);
+    if (summary) {
       await loadGrid();
+      // 버튼을 누르자마자 처리 대상이 0건이면(unclassifiedCount가 이미 stale하거나,
+      // 다른 탭·기기에서 먼저 처리된 경우) 버튼이 조건부 렌더링 때문에 바로 사라져
+      // "눌렀는데 아무 반응도 없었다"로 보인다(실측 확인, 2026-08-17) — 무슨 일이
+      // 있었는지 최소 한 줄은 남긴다. 몇 초 뒤 자동으로 사라진다(토스트처럼).
+      setClassifySuccessMessage(
+        summary.processed > 0
+          ? `${summary.processed}건 분류를 완료했어요${
+              summary.review_required > 0 ? ` (이 중 ${summary.review_required}건은 담당자 검토 대기예요)` : ""
+            }.`
+          : "새로 분류할 자료가 없었어요.",
+      );
+      setTimeout(() => setClassifySuccessMessage(null), 5000);
     }
     setClassifying(false);
   }
@@ -432,6 +451,12 @@ function OwnerUploadsPageContent() {
               {y}년
             </button>
           ))}
+        </div>
+      )}
+
+      {classifySuccessMessage && (
+        <div className="mt-4 rounded-2xl bg-brand-soft px-4 py-3 text-[12.5px] leading-relaxed text-brand-ink">
+          {classifySuccessMessage}
         </div>
       )}
 
