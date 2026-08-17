@@ -15,6 +15,7 @@ from db.document_text_extractor import (
     parse_document_text,
     parse_tax_invoice_date_table,
     parse_tax_invoice_table_rows,
+    parse_year_month_from_cell_text,
 )
 
 pdfmetrics.registerFont(UnicodeCIDFont("HYGothic-Medium"))
@@ -363,6 +364,33 @@ def test_real_kepco_bill_structure_parses_via_slotted_upload():
     assert result["year"] == 2021 and result["month"] == 12
     assert result["supply_amount_krw"] == 9_240
     assert "quantity" not in result  # 사용량 라벨을 못 찾아도 금액만으로 파싱 성공
+
+
+def test_real_kepco_bill_date_without_bun_suffix_parses():
+    """실측(2026-08-17, 사용자 제공 "전기요금청구 및 영수증" 캡처): 이 서식은
+    "2021년 1월"처럼 "분" 없이 청구월이 찍힌다 — "12월분"만 인식하던 기존 정규식
+    으로는 청구월을 못 찾아 문서 전체가 실패했다(4단계 LLM 최후수단까지도, 그
+    재파싱 함수가 같은 -./ 구분자 전제를 썼기 때문). "분" 없는 표기도 통과해야
+    한다."""
+    text = extract_pdf_text(_pdf([
+        "홍길동 고객님의 2021년 1월",
+        "전기요금청구 및 영수증(고객용)",
+        "청구 금액 26,270 원",
+        "납기일 2021년 02월 15일",
+        "사용 기간 2021년 01월 06일 ~ 2021년 01월 23일",
+    ]))
+    result = parse_document_text(text, "electric_bill")
+    assert result["year"] == 2021 and result["month"] == 1
+    assert result["supply_amount_krw"] == 26_270
+
+
+def test_parse_year_month_from_cell_text_accepts_korean_year_month():
+    """db/document_llm_router.py가 LLM이 가리킨 셀 원문을 재파싱할 때 쓰는 공개
+    진입점 — -./ 구분자 없이 "년/월"만 쓴 셀 텍스트도 인식해야 한다(위 테스트와
+    같은 실측 근거)."""
+    assert parse_year_month_from_cell_text("2021년 1월") == (2021, 1)
+    assert parse_year_month_from_cell_text("2021년 01월 06일") == (2021, 1)
+    assert parse_year_month_from_cell_text("2025-02-11") == (2025, 2)  # 기존 경로 회귀 방지
 
 
 def test_real_kepco_bill_title_recognized_without_slot():

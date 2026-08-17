@@ -177,11 +177,20 @@ def parse_year_month_from_cell_text(text: str) -> tuple[int, int] | None:
 
     db/document_llm_router.py 전용 공개 진입점 — parse_amount_from_cell_text와
     같은 이유(LLM 응답의 값이 아니라 셀 원문을 항상 재파싱).
+
+    실측(2026-08-17, 실제 한전 "전기요금청구 및 영수증"): 이 문서엔 -./로 구분된
+    날짜가 단 한 군데도 없고 전부 "2021년 1월"/"2021년 01월 06일"처럼 년/월(/일)
+    한글 구분자만 쓰였다 — LLM이 정확한 날짜 셀을 가리켜도 재파싱이 실패해 문서
+    전체가 거부됐다. _parse_management_fee_date가 이미 쓰던 2번째 패턴과 동일하게
+    년/월 표기도 시도한다.
     """
     m = re.search(rf"(\d{{4}}){_DATE_SEP}(\d{{2}})(?:{_DATE_SEP}\d{{2}})?", text)
-    if not m:
-        return None
-    return int(m.group(1)), int(m.group(2))
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    m = re.search(r"(\d{4})\s*년\s*(\d{1,2})\s*월", text)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    return None
 
 
 # 알림톡류 문서(한전 사용량 알림 등)는 "예상 전기요금"/"예상 사용량"처럼 실제 라벨과
@@ -290,9 +299,12 @@ def _parse_electric_bill(text: str) -> dict:
     # "2021년 12월분"처럼 청구월이 찍혀 있었다 — 그쪽도 함께 시도한다. "사용기간:
     # 10월22일~12월21일"처럼 청구월과 다른 달에 걸친 사용기간 범위는 있어도 청구월
     # 자체를 명시한 라벨은 없었다.
+    # 실측(2026-08-17, "전기요금청구 및 영수증" 서식): "분" 없이 "OO고객님의 2021년
+    # 1월"처럼만 찍힌 경우도 있었다 — "분"을 필수로 요구하면 이런 서식은 전부 실패
+    # 한다. 선택적으로 바꿔 둘 다 커버한다.
     date_m = re.search(
         rf"{_label_pattern('청구월')}\s*:\s*(\d{{4}}){_DATE_SEP}(\d{{2}})", text
-    ) or re.search(r"(\d{4})년\s*(\d{1,2})월분", text)
+    ) or re.search(r"(\d{4})년\s*(\d{1,2})월분?", text)
     if not date_m:
         raise DocumentParseError("청구월을 찾지 못했어요")
     # 실측: 실제 고지서는 "사용량(kWh)" 라벨을 못 찾을 수 있다(사용전력량이 비교
