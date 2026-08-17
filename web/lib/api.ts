@@ -314,4 +314,11 @@ export function deleteDocument(
   );
 }
 
+// GET /classify/{company_id} — api/queries.py::get_unclassified_count. "데이터 업로드"
+// 탭의 "분류 다시 실행" 버튼을 조건부로(실제 미분류 건이 남아있을 때만) 보여주는 용도라
+// 이 값만 뽑아 쓴다(분류 결과 상세는 SceneClassify.tsx가 자체 타입으로 따로 조회).
+export function getUnclassifiedCount(companyId: number): Promise<{ unclassified_count: number }> {
+  return apiGet<{ unclassified_count: number }>(`/classify/${companyId}`);
+}
+
 export { BASE_URL };

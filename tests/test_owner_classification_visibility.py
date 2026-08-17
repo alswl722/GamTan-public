@@ -26,6 +26,7 @@ from api.queries import (
     get_hitl_pending_count,
     get_hitl_queue,
     get_pending_send_count,
+    get_unclassified_count,
 )
 from db.models import Base, Classification, Company, Voucher
 
@@ -124,6 +125,45 @@ def test_get_pending_send_count_counts_confirmed_unsent_only(db):
     _add_voucher_with_classification(session, cid, 3, "확정만 된 건2", status="confirmed")
 
     assert get_pending_send_count(session, cid) == 2
+
+
+# ── get_unclassified_count — "분류 다시 실행" 버튼 조건부 노출용 ────────────────
+def test_get_unclassified_count_ignores_vouchers_with_any_classification(db):
+    """status와 무관하게 Classification 행이 이미 있으면 미분류로 안 센다 —
+    "분류 다시 실행" 버튼을 실제로 할 일이 있을 때만 보여주기 위한 카운트다."""
+    session, cid = db
+    _add_voucher_with_classification(session, cid, 1, "룰 매칭 확정건", status="auto")
+    _add_voucher_with_classification(session, cid, 2, "검토중건", status="review_required")
+    v = Voucher(
+        company_id=cid, source="hometax", year=YEAR, month=3,
+        supplier_name="테스트", item_description="분류 안 된 건", supply_amount_krw=100000,
+    )
+    session.add(v)
+    session.commit()
+
+    assert get_unclassified_count(session, cid) == 1
+
+
+def test_get_unclassified_count_zero_when_nothing_pending(db):
+    session, cid = db
+    _add_voucher_with_classification(session, cid, 1, "룰 매칭 확정건", status="auto")
+
+    assert get_unclassified_count(session, cid) == 0
+
+
+def test_classify_endpoint_includes_unclassified_count(db, client):
+    session, cid = db
+    _add_voucher_with_classification(session, cid, 1, "룰 매칭 확정건", status="auto")
+    v = Voucher(
+        company_id=cid, source="hometax", year=YEAR, month=2,
+        supplier_name="테스트", item_description="분류 안 된 건", supply_amount_krw=100000,
+    )
+    session.add(v)
+    session.commit()
+
+    res = client.get(f"/classify/{cid}")
+    assert res.status_code == 200
+    assert res.json()["unclassified_count"] == 1
 
 
 # ── API 라우터 ────────────────────────────────────────────────────────────────

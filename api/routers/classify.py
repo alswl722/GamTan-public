@@ -11,7 +11,7 @@ from api.agent import progress
 from api.agent.run_lock import company_run_lock
 from api.agent.tools import classify_vouchers
 from api.db import get_session
-from api.queries import get_classifications, get_hitl_pending_count
+from api.queries import get_classifications, get_hitl_pending_count, get_unclassified_count
 
 router = APIRouter(prefix="/classify", tags=["classify"])
 
@@ -32,6 +32,7 @@ def run_classification(company_id: int, session: Session = Depends(get_session))
         **summary,
         "results": get_classifications(session, company_id),
         "hitl_pending_count": get_hitl_pending_count(session, company_id),
+        "unclassified_count": get_unclassified_count(session, company_id),
     }
 
 
@@ -41,6 +42,7 @@ def list_classifications(company_id: int, session: Session = Depends(get_session
     return {
         "results": get_classifications(session, company_id),
         "hitl_pending_count": get_hitl_pending_count(session, company_id),
+        "unclassified_count": get_unclassified_count(session, company_id),
     }
 
 
