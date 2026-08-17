@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { apiGet, apiPost, getCompanyId } from "@/lib/api";
+import { AnomalyCheckCard } from "@/components/AnomalyCheckCard";
 
 /** 장면 ③ — AI 분류 + 근거 (킬러씬 B). /classify/{id} 실데이터. */
 
@@ -278,6 +279,8 @@ export function SceneClassify({ onNext }: { onNext: () => void }) {
               끝나면 이 화면에 자동으로 반영돼요.
             </div>
           )}
+
+          <AnomalyCheckCard />
 
           {autoRows.length > 0 && (
             <div className={hitlCount > 0 ? "mt-3" : "mt-4"}>

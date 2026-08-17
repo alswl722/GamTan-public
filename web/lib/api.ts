@@ -274,6 +274,30 @@ export function getKTaxonomyLeads(companyId: number): Promise<KTaxonomyLeadsResp
   return apiGet<KTaxonomyLeadsResponse>(`/owner/${companyId}/k-taxonomy-leads`);
 }
 
+// GET /owner/{company_id}/anomaly-checks — api/queries.py::get_pending_anomaly_checks.
+// 이상치 되묻기(docs/tasks.md) — 에이전트가 코드로 판별한 이상치를 사장님에게
+// "맞나요?" 확인받는다. 숫자는 절대 안 받는다 — 예/아니오/모르겠어요만.
+export interface AnomalyCheckItem {
+  voucher_id: number;
+  month: number;
+  fuel: string;
+  ratio: number;
+}
+export function getAnomalyChecks(companyId: number): Promise<AnomalyCheckItem[]> {
+  return apiGet<{ items: AnomalyCheckItem[] }>(`/owner/${companyId}/anomaly-checks`).then((r) => r.items);
+}
+
+export type AnomalyCheckAnswer = "normal" | "disputed" | "unknown";
+
+/** 이상치 확인 답변 — "아니요"·"모르겠어요"는 담당자 우선순위 알림으로 이어진다. */
+export function answerAnomalyCheck(
+  companyId: number,
+  voucherId: number,
+  body: { answer: AnomalyCheckAnswer; reason?: string },
+): Promise<{ voucher_id: number; anomaly_check_status: string; status: string }> {
+  return apiPatch(`/owner/${companyId}/classifications/${voucherId}/anomaly-check`, body);
+}
+
 // GET /owner/{company_id}/documents/grid — db/document_coverage.py::document_upload_grid.
 // "데이터 업로드" 탭의 문서종류 × 월 그리드. status는 db/document_requirements.py
 // ::required_documents가 사장님이 체크한 연료 기준으로 정한 필수/선택/해당없음이다.

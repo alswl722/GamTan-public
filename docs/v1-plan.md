@@ -2,18 +2,19 @@
 
 ```text
 Status: active-plan
-Last updated: 2026-08-17
+Last updated: 2026-08-18
 Scope: 2026년 8월 v1 구현·검증·시연 일정
 ```
 
-> **진행 현황 요약** — 로컬 기준(alembic head `0023`, 공유 DB 적용 완료)
-> `pytest` 362 passed, 3 skipped(회귀 없음). 2주차 Tier 1은 전부 완료됐다.
+> **진행 현황 요약** — 로컬 기준(alembic head `0024`, 공유 DB 적용 완료)
+> `pytest` 392 passed, 3 skipped(회귀 없음). 2주차 Tier 1은 전부 완료됐다.
 > 완료 항목 전체 목록은 §4, 남은 항목은 §5 참고. 각 항목의 구현 상세(왜
 > 그렇게 만들었는지, 어떤 트레이드오프가 있었는지)는 이 문서가 아니라 해당
 > PR 본문·커밋 메시지에 있다 — git 이력이 정본.
-> **작업 중**: "확정 전송 → 사장님 알림"(§6-2, `docs/tasks.md`) — 백엔드
-> (모델·마이그레이션·트리거·API) 완료, 브랜치 `feat/owner-notifications`
-> (PR 아직). 다음은 Figma 배너 디자인 → 프론트 구현.
+> **완료**: "확정 전송 → 사장님 알림"(§6-2, PR #70), "이상치 되묻기"(§6,
+> PR #74) 둘 다 백엔드+프론트 완료. §6은 원래 "물량 직접 입력" 설계였으나
+> 검증 안 된 숫자가 계산에 들어가는 위험 때문에 "예/아니오/모르겠어요
+> 확인" 방식으로 전면 재설계됐다 — 아래 §6 본문이 최신 설계.
 >
 > 기준 브랜치: `dev` · 결선 목표: 2026년 8월 말(1박 2일 결선 해커톤) · 팀: 개발자 2명(A·B) + 회계·도메인 1명
 
@@ -32,7 +33,8 @@ Scope: 2026년 8월 v1 구현·검증·시연 일정
 
 **Tier 1 (필수, 완료)**: 검증 3수치만 회계 몫으로 남음 — 나머지는 §4 참고.
 
-**Tier 2 (여유 되면)**: §5 참고. "되묻는 HITL"만 설계 확정, 나머지는 미착수.
+**Tier 2 (여유 되면)**: §5 참고. 이상치 되묻기·확정 전송 알림 완료(§6, §6-2),
+나머지는 미착수.
 
 **Tier 3 (자를 후보, 비전 슬라이드용)**: 기업대출 금융배출량(귀속계수),
 `business_loans_readiness` 체크리스트, 월간 AI 브리핑·장비개선 시뮬레이터·
@@ -118,6 +120,9 @@ Scope: 2026년 8월 v1 구현·검증·시연 일정
 | 부수 | 업로드 완료 모달 담당자 검토 대기 안내, "그냥 업로드하기" 다중 파일, 검토 대기 안내 타이밍 수정 | A | #66 |
 | 부수 | pre-existing 테스트 실패 3건 정리, Docker 이미지 경량화(412MB→395MB) | B | #30, #28 |
 | 부수 | 우대금리 등급 상승 후보 판정 정식 엔진 정렬, 리포트 화면 UI 다듬기, 하단바 "탄소 리포트" 탭 | A | #40, #43-47 |
+| Tier 2 | 확정 전송 → 사장님 알림 배너 (Figma 선디자인 → 폴링 배너, `OwnerNotification` 모델) | B | #70 |
+| Tier 2 | 이상치 되묻기 — 사장님 확인 절차(예/아니오/모르겠어요, HITL 큐 우선순위 배지) | B | #74 |
+| 부수 | uvicorn `--reload` 감시 범위를 코드 디렉토리로 한정(업로드 중 서버 재시작 방지) | B | #69 |
 
 ---
 
@@ -126,8 +131,6 @@ Scope: 2026년 8월 v1 구현·검증·시연 일정
 | 티어 | 항목 | 담당 | 상태 | 참고 |
 | --- | --- | --- | --- | --- |
 | Tier 1 | 검증 3수치 확정 (분류 정확도, 트랙A MAPE, 트랙B 실물대조 오차) | 회계 | ⬜ 미착수 | 발표·Q&A 근거로 반드시 필요 — 유일하게 남은 Tier 1 |
-| Tier 2 | **되묻는 HITL** (사장님이 물량·연료 정보 직접 보완) | B | ⬜ 설계 완료, 보류 | §6 참고 — 설계는 끝났으나 팀 결정으로 후순위로 미룸 |
-| Tier 2 | **확정 전송 → 사장님 알림** (PCAF 데이터 품질 초안→확정 알림의 축소판) | B | 🔶 백엔드 완료, 프론트 착수 전 | §6-2 참고. 오브젝트 스토리지 전환은 이번 스코프에서 제외(로컬 파일 유지) |
 | Tier 2 | 청중별 통역 / 탄소 신용카드(QR) | 미배정 | ⬜ 미착수 | 상세 스펙 미작성 |
 | Tier 2 | 포트폴리오 뷰 확장 — 히트맵·연동 우선순위 Top10 | 미배정 | ⬜ 미착수 | `docs/owner-admin-flow-spec.md` §5 |
 | Tier 2 | 규제 대응 리포트 (금감원 4단계 구조 자동 섹션) | 미배정 | ⬜ 미착수 | `docs/owner-admin-flow-spec.md` §6 |
@@ -144,72 +147,63 @@ Scope: 2026년 8월 v1 구현·검증·시연 일정
 
 ---
 
-## 6. 되묻는 HITL — 사장님 정보 보완 입력 (설계 확정, 착수 전)
+## 6. 이상치 되묻기 — 사장님 확인 절차 (완료, PR #74)
 
-`docs/hitl-owner-action.md`에서 결정: 사장님이 HITL(검토 대기) 건에 물량·연료
-정보를 보완 입력할 수 있게 한다(옵션 B 채택). 배경·정책은 그 문서가 정본,
-여기는 구현 설계만.
+원래는 "되묻는 HITL"이란 이름으로 사장님이 물량·연료 정보를 **직접 입력**하는
+설계였다(옵션 B, `docs/hitl-owner-action.md`). 구현까지 마쳤으나, 검증 안 된
+사장님의 숫자가 배출량 계산에 그대로 반영되는 위험이 지적되어 전면 재설계됐다
+— 물량 입력 코드는 전부 되돌리고, 아래 방식으로 다시 만들었다.
 
-- **입력값은 최종 판정이 아니다.** `status`는 `review_required`로 유지 —
-  enum에 새 값 추가 안 함. 재계산도 입력 즉시가 아니라 **담당자가 확정할 때**
-  `_recalculate()`가 반영한다.
-- **적용 대상**: `db/calc_engine.py::_QUANTITY_ONLY = ("전기", "도시가스")` —
-  물량 미기재로 review에 빠지는 대표 케이스(1순위). 연료 종류 애매 케이스도
-  동일 원칙.
-- **저장 위치**: `Classification`에 신규 컬럼 — `owner_supplied_quantity`(Float),
-  `owner_supplied_quantity_unit`(String), `owner_supplied_fuel_type`(String),
-  `owner_supplemented_at`(DateTime). alembic `0023`(최신 head는 `0022`).
-- **재계산 반영**: `_build_classification()`(agent/tools.py)과 `_recalculate()`
-  (admin.py) 양쪽에서 "사장님 입력값이 있으면 `voucher.raw_json`보다 우선
-  사용"하도록 quantity 결정 로직 확장.
-- **owner API**: `PATCH /owner/{company_id}/classifications/{voucher_id}/supplement`
-  신규 — 기존 `/owner/{company_id}/...` 패턴, company_id 소유권 검증은 기존
-  DELETE 엔드포인트의 404 패턴 재사용.
-- **HITL 상세 노출**: `GET /classify/{company_id}`가 지금은 건수(`hitl_pending_
-  count`)만 내려주므로, 사장님이 보완 입력할 대상을 특정할 최소 정보(voucher_id,
-  raw, calc_failure_reason)를 내려주는 확장이 필요 — 단 분류 상세(scope·evidence)는
-  계속 숨긴다.
-- **검증 방어**: 사장님이 입력한 값을 그대로 신뢰하지 않는다 — 증빙 문서 첨부를
-  필수로 하고, 담당자가 확정 전에 그 증빙을 직접 확인할 수 있어야 한다(구체적
-  검증 UX는 착수 시 확정).
-- **프론트**: `SceneClassify.tsx` HITL 안내 아래 보완 입력 카드 신설,
-  `HitlWorkspace.tsx`의 `DetailPane`에 "사장님이 입력한 값 + 증빙" 표시 추가.
+- **숫자는 절대 사장님이 안 건드린다.** 에이전트가 코드로 이미 판별한
+  이상치(`_check_anomalies` — 같은 연료 평월 중앙값 대비 N배 급증)에 대해
+  "맞나요?" 확인만 받는다 — **네 / 아니요 / 모르겠어요** + 짧은 사유(선택)만.
+  LLM 산수 금지 원칙과 같은 결로, 사장님 입력도 계산 경로가 되면 안 된다는
+  판단.
+- **LLM 1차 판단도 곧바로 확정하지 않는다.** `_judge_anomaly_with_llm()`이
+  "정상"이라고 판단해도 사람 확인 없이 자동으로 넘기지 않고
+  `anomaly_check_status='pending'`으로 남겨 사장님이 한 번은 보게 한다.
+- **"네"와 "아니요/모르겠어요"의 결과가 갈린다.** "네"는 evidence에 참고
+  정보로만 남지만, "아니요"·"모르겠어요"는 **담당자에게 우선순위 알림으로
+  이어진다** — 이미 `auto`였던 건을 `review_required`로 되돌리고
+  `get_hitl_queue()` 정렬 최상단에 "이상 확인 요청" 배지로 노출한다(새 알림
+  인프라 없이 기존 HITL 큐에 얹음).
+- **저장**: `Classification`에 `anomaly_check_status`(pending|confirmed_normal|
+  disputed|unknown) / `anomaly_check_reason` / `anomaly_ratio` 컬럼. Alembic
+  `0024`, 공유 Supabase DB 적용 완료.
+- **API**: `GET /owner/{company_id}/anomaly-checks`(대기 목록, scope·evidence는
+  안 내려줌), `PATCH /owner/{company_id}/classifications/{voucher_id}/anomaly-check`
+  (답변 — 요청 스키마에 숫자 필드 자체가 없음).
+- **프론트**: `AnomalyCheckCard.tsx`(사장님, `SceneClassify.tsx`에 배치) —
+  "아니요"·"모르겠어요" 선택 시 "은행 담당자에게 확인 요청을 남길게요" 안내
+  문구로 기대치 명시. `HitlWorkspace.tsx`에 목록 배지 + `DetailPane` 참고정보
+  블록(AI 판단근거와 시각적으로 분리).
+- 테스트: `tests/test_anomaly_check.py` 9건 신규 + `test_orchestrator_smoke.py`
+  기존 2건을 새 동작(pending 유지, 트레이스 문구 변경)에 맞게 갱신.
 
 ---
 
-## 6-2. 확정 전송 → 사장님 알림 (백엔드 완료, 프론트 착수 전)
+## 6-2. 확정 전송 → 사장님 알림 (완료, PR #70)
 
-§5 "PCAF 데이터 품질 실시간 지표화(초안→확정 알림)"의 축소판. 상세 계획은
-`docs/tasks.md`가 정본, 여기는 요약만. **되묻는 HITL(§6)과 오브젝트 스토리지
-전환은 이번 스코프에서 제외** — 원본 파일은 계속 로컬(`data/uploads/`)에 저장.
+§5 "PCAF 데이터 품질 실시간 지표화(초안→확정 알림)"의 축소판. **오브젝트
+스토리지 전환은 이번 스코프에서 제외** — 원본 파일은 계속 로컬
+(`data/uploads/`)에 저장.
 
-- **감지 방식**: 폴링(10~15초 간격). Supabase Realtime은 CLAUDE.md상 허용된
+- **감지 방식**: 폴링(12초 간격). Supabase Realtime은 CLAUDE.md상 허용된
   경로지만 `@supabase/*` 패키지가 설치돼 있지 않아 이 프로젝트에서 한 번도
   쓰인 적 없는 새 인프라다. 트레이스 뷰(`SceneTrace.tsx`)가 이미 폴링(800ms)
   으로 검증돼 있어 같은 패턴 재사용.
-- **알림 위치**: 사장님 메인 화면(`/owner`)에 배너로 상시 노출. 클릭 시
-  리포트(`/owner/report`)로 이동. **프론트 UI는 코드 전에 Figma로 먼저 디자인.**
+- **알림 위치**: 사장님 메인 화면(`/owner`)에 배너로 상시 노출(평상시엔
+  렌더링 자체를 안 함). 클릭 시 리포트(`/owner/report`)로 이동 + 읽음 처리.
+  Figma에서 평상시/알림 있을 때 두 상태를 먼저 디자인한 뒤 구현.
 - **저장**: 신규 테이블 `OwnerNotification`(`db/models.py`) — `company_id`,
-  `type`, `message`, `payload`(JSON), `created_at`, `read_at`. 별도 푸시 인프라
-  없이 DB 레코드 하나로 알림을 표현한다. Alembic `0023`, 공유 Supabase DB
-  적용 완료.
+  `type`, `message`, `payload`(JSON), `created_at`, `read_at`. Alembic `0023`,
+  공유 Supabase DB 적용 완료.
 - **생성 트리거**: `api/routers/admin.py::send_classifications_to_owner()`
-  (기존, `POST /admin/companies/{id}/send-classifications`)에서 `sent_count > 0`
-  일 때만 레코드 생성 — 빈 알림으로 배너를 채우지 않는다.
-- **조회·읽음 API**: `GET /owner/{company_id}/notifications?unread=true`(목록,
-  최신순), `PATCH /owner/{company_id}/notifications/{id}/read`(읽음 처리,
-  company_id 소유권 검증·멱등) 신규.
-- 테스트: `tests/test_owner_classification_visibility.py`에 알림 생성 2건
-  (전송 성공 시 생성, 건수 0이면 미생성), `tests/test_owner_notifications.py`
-  신규 5건(정렬·unread 필터·읽음 처리·소유권 검증·멱등). 전체 `pytest`
-  362 passed, 3 skipped(회귀 없음).
-
-### 진행 상태
-
-- [x] `OwnerNotification` 모델 + Alembic `0023`(공유 DB 적용 완료)
-- [x] `send_classifications_to_owner()`에 알림 생성 로직 연결
-- [x] 조회·읽음 API (`GET .../notifications`, `PATCH .../notifications/{id}/read`)
-- [ ] Figma 배너 디자인 → 프론트 폴링·배너 구현 (다음 단계)
+  에서 `sent_count > 0`일 때만 레코드 생성 — 빈 알림으로 배너를 채우지 않는다.
+- **조회·읽음 API**: `GET /owner/{company_id}/notifications?unread=true`,
+  `PATCH /owner/{company_id}/notifications/{id}/read`.
+- 테스트: `tests/test_owner_classification_visibility.py` 알림 생성 2건,
+  `tests/test_owner_notifications.py` 신규 5건.
 
 ---
 
