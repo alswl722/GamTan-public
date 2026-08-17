@@ -60,7 +60,7 @@ def _add_institution_borrower(session, cid, *, consent_status="active"):
     return inst.id
 
 
-def _add_voucher(session, cid, month, item, *, quantity=100, scope=1, status="auto"):
+def _add_voucher(session, cid, month, item, *, quantity=100, scope=1, status="auto", fuel_type="도시가스"):
     v = Voucher(
         company_id=cid, source="hometax", year=YEAR, month=month,
         supplier_name="테스트", item_description=item,
@@ -69,7 +69,7 @@ def _add_voucher(session, cid, month, item, *, quantity=100, scope=1, status="au
     session.add(v)
     session.flush()
     session.add(Classification(
-        voucher_id=v.id, scope=scope, category="고정연소", fuel_type="도시가스",
+        voucher_id=v.id, scope=scope, category="고정연소", fuel_type=fuel_type,
         amount_krw=100000, emission_co2e=500.0, confidence=0.9,
         evidence="테스트", method="rule", status=status,
     ))
@@ -199,7 +199,7 @@ def test_quality_report_benchmark_uses_scope1_plus_scope2_total(api_client):
     _add_institution_borrower(session, cid)
     for m in range(1, 13):
         _add_voucher(session, cid, m, "도시가스", scope=1)
-        _add_voucher(session, cid, m, "전기요금", scope=2)
+        _add_voucher(session, cid, m, "전기요금", scope=2, fuel_type="전기")
 
     res = client.get(f"/owner/{cid}/quality-report?year={YEAR}")
     body = res.json()

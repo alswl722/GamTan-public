@@ -41,7 +41,7 @@ def db(tmp_path):
         yield session, company.id
 
 
-def _add_voucher(session, cid, month, item, *, quantity=None, scope=1, k_taxonomy_lead=False):
+def _add_voucher(session, cid, month, item, *, quantity=None, scope=1, k_taxonomy_lead=False, fuel_type="도시가스"):
     v = Voucher(
         company_id=cid, source="hometax", year=YEAR, month=month,
         supplier_name="테스트", item_description=item,
@@ -55,7 +55,7 @@ def _add_voucher(session, cid, month, item, *, quantity=None, scope=1, k_taxonom
     # "이 회사는 K택소노미 설비 증거가 있다"를 가볍게 재현(이 테스트 파일의 기존
     # 관례처럼 Classification을 직접 구성).
     session.add(Classification(
-        voucher_id=v.id, scope=scope, category="고정연소", fuel_type="도시가스",
+        voucher_id=v.id, scope=scope, category="고정연소", fuel_type=fuel_type,
         amount_krw=100000, emission_co2e=500.0, confidence=0.9,
         evidence="테스트", method="rule", status="auto",
         finance_lead_type="녹색여신 후보" if k_taxonomy_lead else None,
@@ -167,7 +167,7 @@ def test_status_for_company_returns_up_to_two_scopes(db):
     session, cid = db
     for m in range(1, 13):
         _add_voucher(session, cid, m, "도시가스", quantity=100, scope=1)
-        _add_voucher(session, cid, m, "전기요금", quantity=None, scope=2)
+        _add_voucher(session, cid, m, "전기요금", quantity=None, scope=2, fuel_type="전기")
 
     results = rate_product_status_for_company(session, cid, YEAR)
     by_scope = {r["scope_group"]: r for r in results}

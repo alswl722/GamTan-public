@@ -73,7 +73,7 @@ def client(db):
     app.dependency_overrides.clear()
 
 
-def _add_classified_voucher(session, cid, month, item, *, scope, emission, status="auto", quantity=100):
+def _add_classified_voucher(session, cid, month, item, *, scope, emission, status="auto", quantity=100, fuel_type="도시가스"):
     v = Voucher(
         company_id=cid, source="hometax", year=YEAR, month=month,
         supplier_name="테스트", item_description=item,
@@ -83,7 +83,7 @@ def _add_classified_voucher(session, cid, month, item, *, scope, emission, statu
     session.add(v)
     session.flush()
     session.add(Classification(
-        voucher_id=v.id, scope=scope, category="고정연소", fuel_type="도시가스",
+        voucher_id=v.id, scope=scope, category="고정연소", fuel_type=fuel_type,
         amount_krw=100000, emission_co2e=emission, confidence=0.9,
         evidence="테스트", method="rule", status=status,
     ))
@@ -100,8 +100,9 @@ def _make_upgrade_candidate(session, cid, scope_group="scope_1"):
     activity_basis_breakdown이 비고, candidate_score가 4가 아니라 None이 돼버린다."""
     scope = 1 if scope_group == "scope_1" else 2
     item = "도시가스" if scope_group == "scope_1" else "전기요금"
+    fuel_type = "도시가스" if scope_group == "scope_1" else "전기"
     for m in range(1, 13):
-        _add_classified_voucher(session, cid, m, item, scope=scope, emission=100.0, quantity=None)
+        _add_classified_voucher(session, cid, m, item, scope=scope, emission=100.0, quantity=None, fuel_type=fuel_type)
 
 
 # ── db/rate_approvals.py 순수 로직 ───────────────────────────────────────────
@@ -275,7 +276,7 @@ def test_owner_rate_candidate_endpoint_reflects_eligible_status(db, client):
     session, cid = db
     for m in range(1, 13):
         _add_classified_voucher(session, cid, m, "도시가스", scope=1, emission=100.0, quantity=100)
-        _add_classified_voucher(session, cid, m, "전기요금", scope=2, emission=50.0, quantity=100)
+        _add_classified_voucher(session, cid, m, "전기요금", scope=2, emission=50.0, quantity=100, fuel_type="전기")
 
     res = client.get(f"/owner/{cid}/rate-candidate")
     assert res.status_code == 200

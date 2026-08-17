@@ -217,7 +217,7 @@ def assess_inventory_completeness(
     basis_counts: dict[str, int] = {}
     covered_months: set[int] = set()
     for voucher, classification in rows:
-        bucket = _fuel_bucket(voucher.item_description)
+        bucket = _fuel_bucket(classification.fuel_type)
         if bucket not in matrix:
             continue
         matrix[bucket][voucher.month] = True
@@ -273,7 +273,7 @@ def aggregate_scope_emissions(
     total_kg = 0.0
     has_any = False
     for voucher, classification in rows:
-        if _fuel_bucket(voucher.item_description) not in fuels:
+        if _fuel_bucket(classification.fuel_type) not in fuels:
             continue
         has_any = True
         if classification.status == "rejected" or not classification.emission_co2e:
@@ -308,7 +308,7 @@ def scope_emission_detail(
 
     items = []
     for voucher, classification in rows:
-        if _fuel_bucket(voucher.item_description) not in fuels:
+        if _fuel_bucket(classification.fuel_type) not in fuels:
             continue
         if classification.status == "rejected" or not classification.emission_co2e:
             continue
@@ -325,17 +325,29 @@ def scope_emission_detail(
     return items
 
 
-def _fuel_bucket(item: str | None) -> str:
-    """api/queries.py::_fuel_class 와 동일 판정(중복 정의 — db/pcaf.py 계열과
-    독립적으로 유지하기 위해 이 모듈 안에서 완결시킨다)."""
-    t = item or ""
-    if any(k in t for k in ("전기", "전력", "한전", "한국전력", "kWh")):
-        return "전기"
-    if "가스" in t or "LNG" in t:
-        return "가스"
-    if any(k in t for k in ("경유", "유류", "난방유", "휘발유", "지게차", "디젤", "주유")):
-        return "경유/유류"
-    return "기타"
+_FUEL_TYPE_TO_BUCKET = {
+    "전기": "전기",
+    "도시가스": "가스",
+    "경유": "경유/유류",
+    "휘발유": "경유/유류",
+    "LPG": "경유/유류",
+}
+
+
+def _fuel_bucket(fuel_type: str | None) -> str:
+    """분류 엔진이 이미 확정한 Classification.fuel_type → 연료 대분류(db/pcaf.py::
+    _fuel_bucket과 동일 매핑 — db/pcaf.py 계열과 독립적으로 유지하기 위해 이 모듈
+    안에서 완결시킨다).
+
+    2026-08-17 이전엔 Voucher.item_description 원문을 키워드로 다시 재해석했다
+    (전기/전력/한전/한국전력/kWh 등). 문제는 분류 엔진이 이미 scope·fuel_type을
+    확정해뒀는데 그 결과를 무시하고 원문을 다시 파싱한 거라, 원문 표현이 예상 밖
+    이면(letter-spacing 등 실제 문서 특유의 표기 편차 포함) 키워드가 하나도 안
+    걸려 그 전표가 Scope 1·2 어디에도 안 잡히고 조용히 사라졌다 — 월별 추이
+    차트(Classification.scope를 그대로 신뢰하는 db/pcaf.py)엔 뜨는데 이 화면의
+    Scope 카드엔 "활동자료 없음"으로 나오는 불일치로 실측 발견. 분류 엔진의
+    확정값을 그대로 신뢰하도록 바꿔 이 불일치를 없앤다."""
+    return _FUEL_TYPE_TO_BUCKET.get(fuel_type or "", "기타")
 
 
 def _weakest_basis(activity_basis_breakdown: dict[str, int], *, has_gap: bool) -> str:
