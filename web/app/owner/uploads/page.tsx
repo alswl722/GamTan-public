@@ -15,6 +15,7 @@ import {
   getDocumentReviewStatus,
   getDocumentsForCell,
   getReportingYears,
+  getUnclassifiedCount,
   getUploadStreak,
   type DocumentGridResponse,
   type DocumentType,
@@ -128,6 +129,18 @@ function OwnerUploadsPageContent() {
 
   const [classifying, setClassifying] = useState(false);
   const [classifyError, setClassifyError] = useState<string | null>(null);
+  const [unclassifiedCount, setUnclassifiedCount] = useState<number | null>(null);
+
+  /** "분류 다시 실행" 버튼을 실제로 미분류 건이 남아있을 때만 보여주기 위한 조회 —
+   * 부가 정보라 실패해도 조용히 넘어간다(버튼을 못 띄울 뿐, 화면은 계속 진행). */
+  async function refreshUnclassifiedCount(cid: number) {
+    try {
+      const res = await getUnclassifiedCount(cid);
+      setUnclassifiedCount(res.unclassified_count);
+    } catch (err) {
+      console.error("미분류 건수 조회 실패(부가 정보라 화면은 계속 진행):", err);
+    }
+  }
 
   /** 방금 올린 문서들(sourceDocumentIds)에서 담당자 검토 대기 건이 나왔는지 확인해
    * 모달 안내 문구를 만든다 — classifyNewVouchers()가 끝난 뒤에만 의미 있다
@@ -164,12 +177,14 @@ function OwnerUploadsPageContent() {
     try {
       await apiPost(`/classify/${cid}`);
       setClassifyError(null);
+      await refreshUnclassifiedCount(cid);
       return true;
     } catch (err) {
       console.error("업로드 후 자동 분류 실패:", err);
       setClassifyError(
         "방금 올린 자료의 AI 분류에 실패했어요 — 아래 \"분류 다시 실행\"을 눌러 주세요.",
       );
+      await refreshUnclassifiedCount(cid);
       return false;
     }
   }
@@ -177,7 +192,8 @@ function OwnerUploadsPageContent() {
   /** "이미 업로드된 파일입니다"(409)로 전량 실패하면 handleAutoUpload/handleUpload가
    * classifyNewVouchers를 아예 안 부른다(성공 0건이라 재분류 트리거 조건을 못 만족) —
    * 그런데 그 파일들이 과거에 업로드만 되고 분류는 안 된 채 남아있을 수 있다. 이
-   * 버튼은 그 경로와 무관하게 항상 눌러서 미분류 잔여 건을 정리할 수 있게 한다. */
+   * 버튼은 그 업로드 성공/실패 경로와 무관하게 눌러서 미분류 잔여 건을 정리할 수
+   * 있게 한다(노출 여부는 unclassifiedCount로 조건부 — 아래 버튼 렌더링 참고). */
   async function handleRetryClassification() {
     if (companyId === null) return;
     setClassifying(true);
@@ -200,6 +216,7 @@ function OwnerUploadsPageContent() {
       setGrid(res);
       setExpanded(null);
       setCellDocs({});
+      void refreshUnclassifiedCount(cid);
       if (years === null) {
         getReportingYears(cid)
           .then((r) => setYears(r.years))
@@ -382,17 +399,21 @@ function OwnerUploadsPageContent() {
             {streakMonths}개월 연속 업로드 중
           </span>
         )}
-        {/* 업로드는 됐는데 분류만 안 된 채 남는 경우를 위한 항상 열린 탈출구 — 업로드
-         * 실패(중복 등)와 무관하게 언제든 눌러서 밀린 분류를 정리할 수 있다.
-         * classify_vouchers가 미분류 건만 처리하는 멱등 구조라 반복 호출해도 안전. */}
-        <button
-          type="button"
-          onClick={() => void handleRetryClassification()}
-          disabled={classifying || companyId === null}
-          className="ml-auto text-[11.5px] font-semibold text-muted underline decoration-dotted underline-offset-2 hover:text-ink disabled:opacity-50"
-        >
-          {classifying ? "분류 실행 중…" : "분류 다시 실행"}
-        </button>
+        {/* 업로드는 됐는데 분류만 안 된 채 남는 경우를 위한 탈출구 — 업로드 실패
+         * (중복 등)와 무관하게 눌러서 밀린 분류를 정리할 수 있다. classify_vouchers가
+         * 미분류 건만 처리하는 멱등 구조라 반복 호출해도 안전. 실제로 미분류 건이
+         * 남아있을 때만 노출한다(unclassifiedCount > 0) — 그전엔 항상 떠 있어서
+         * 평소 99%는 눌러도 할 일이 없는 버튼이었다(2026-08-17 조건부로 전환). */}
+        {((unclassifiedCount ?? 0) > 0 || classifying) && (
+          <button
+            type="button"
+            onClick={() => void handleRetryClassification()}
+            disabled={classifying || companyId === null}
+            className="ml-auto text-[11.5px] font-semibold text-muted underline decoration-dotted underline-offset-2 hover:text-ink disabled:opacity-50"
+          >
+            {classifying ? "분류 실행 중…" : "분류 다시 실행"}
+          </button>
+        )}
       </div>
 
       {years !== null && years.length > 1 && grid && (

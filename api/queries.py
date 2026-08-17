@@ -170,6 +170,24 @@ def get_classifications(session: Session, company_id: int) -> list[dict]:
     ]
 
 
+def get_unclassified_count(session: Session, company_id: int) -> int:
+    """분류를 아직 한 번도 안 돈 전표(Classification 행 자체가 없는 Voucher) 수.
+
+    api/agent/tools.py::_unclassified_vouchers와 같은 조건(카운트만). "데이터
+    업로드" 탭의 "분류 다시 실행" 버튼을 조건부로 보여줄 때 쓴다 — 예전엔 항상
+    떠 있었는데, "이미 업로드된 파일입니다"(409)로 전량 실패하면 자동 재분류
+    호출 자체가 안 일어나 미분류 잔여 건이 생겨도 아무 안내가 안 뜨는 경우가
+    있어(2026-08-17) 버튼을 늘 노출해 뒀었다. 이제 이 값으로 실제 남은 건이
+    있을 때만 보여준다."""
+    stmt = (
+        select(func.count())
+        .select_from(Voucher)
+        .where(Voucher.company_id == company_id)
+        .where(Voucher.id.notin_(select(Classification.voucher_id)))
+    )
+    return session.execute(stmt).scalar_one()
+
+
 def get_hitl_pending_count(session: Session, company_id: int) -> int:
     """장면③ 상단 안내("N건은 담당자가 검토 중이에요")용 — 검토 대기 + 확정됐지만
     아직 전송 안 한 건을 합쳐서 반환한다(둘 다 사장님에게는 아직 "검토중"으로 보임).
