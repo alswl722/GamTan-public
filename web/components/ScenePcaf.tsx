@@ -272,15 +272,17 @@ function MonthlyTrendChart({ monthly }: { monthly: MonthlyRow[] }) {
             >
               {fuels.map((f) => {
                 const v = m.by_fuel[f] || 0;
-                if (v <= 0) return null;
-                // flex-basis를 auto(기본값)로 두면 빈 div의 콘텐츠 기준 크기 계산에
-                // 기대야 해서 렌더링 환경에 따라 회색 배경(bg-line)이 안 채워지고
-                // 남는 경우가 실측 확인됐다(2026-08-17, 실제 데이터로 검증 — total/
-                // by_fuel 합은 정확히 일치해 데이터 문제가 아니었음) — flex-basis를
-                // 0으로 명시해 flex-grow 비율로만 채워지도록 고정한다(막대 그래프의
-                // 표준 관례).
+                if (v <= 0 || m.total_tco2e <= 0) return null;
+                // flex-grow(비율) 방식은 브라우저 devtools로 직접 재현 확인한 결과
+                // grow 값이 1 미만인 소수(예: 0.41)일 때 "남는 공간을 전부 차지"가
+                // 아니라 그 숫자를 컨테이너 대비 퍼센트처럼 그대로 써버리는 동작이
+                // 나왔다(2026-08-17, 실측 — grow=1/100은 100% 채움, grow=0.41은
+                // 정확히 41%만 채움. 형제 요소 없음도 콘솔로 확인해 다른 원인은
+                // 배제됨). flex-grow 자체를 안 쓰고 이 연료가 그 달 총량에서 차지하는
+                // 비율을 직접 계산해 height(%)로 넣는 방식으로 우회한다.
+                const pct = (v / m.total_tco2e) * 100;
                 return (
-                  <div key={f} className={FUEL_BAR_COLOR[f]} style={{ flex: `${v} 0 0` }} />
+                  <div key={f} className={FUEL_BAR_COLOR[f]} style={{ height: `${pct}%` }} />
                 );
               })}
             </div>
