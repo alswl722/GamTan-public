@@ -23,6 +23,7 @@ PaddleOCR 모델 로딩이 무겁다(수백MB, 초 단위) — 프로세스당 �
 singleton으로 유지한다.
 """
 import io
+import threading
 
 import numpy as np
 from PIL import Image
@@ -30,6 +31,7 @@ from PIL import Image
 from db.document_text_extractor import DocumentParseError, OcrRow
 
 _ocr_engine = None  # lazy singleton — PaddleOCR(lang="korean")
+_ocr_engine_lock = threading.Lock()
 _heif_registered = False
 
 # 같은 행으로 묶을 y중심 거리 허용치 — 박스 높이 대비 비율. 실측 스파이크에서 같은
@@ -54,37 +56,46 @@ class OcrResult:
 
 def _get_ocr_engine():
     global _ocr_engine
-    if _ocr_engine is None:
-        try:
-            from paddleocr import PaddleOCR
-            # use_textline_orientation=False, use_doc_orientation_classify=False —
-            # 실측으로 확인된 두 가지 별도 버그: ① 줄 단위 180도 회전 판별이 관리비
-            # 고지서 사진을, ② 전체 페이지 회전 판별이 항목이 많은(청구내역 표가 긴)
-            # 전기요금 청구서 사진을 각각 똑바로 찍힌 멀쩡한 문서인데도 뒤집힌/회전된
-            # 걸로 오판해 글자를 깨뜨렸다(신뢰도 0.5대, 텍스트가 전부 뒤섞여 나옴).
-            # 둘 다 "정보량이 많거나 서식이 조금만 복잡해도 오탐하는" 같은 패턴이라,
-            # 이 프로젝트 실사용 케이스(사장님이 문서를 대체로 똑바로 찍어 올림)에서는
-            # 두 판별 모두 이득보다 오탐 위험이 크다고 보고 끈다. 문서 펴기
-            # (use_doc_unwarping)는 실측에서 문제를 일으키지 않아 유지(비스듬히
-            # 찍은 실사진의 원근 왜곡 보정용).
-            #
-            # text_detection_model_name/text_recognition_model_name — 실측으로 확인된
-            # 세 번째 버그: lang="korean" 기본 선택값은 문자 감지에 "server" 등급
-            # 모델(PP-OCRv5_server_det)을 쓰는데, 표 테두리가 빽빽한 세금계산서
-            # 사진(품목 표)에서 메모리 부족으로 프로세스가 죽었다(SIGKILL, "Failed to
-            # fetch"/"signal timed out"으로 사용자에게 보임 — 겉으로는 그냥 멈춘 것
-            # 처럼 보이지만 실제로는 OOM). 감지 모델을 "mobile" 등급으로 낮추면 같은
-            # 파일이 30초 이내 정상 완료된다(신뢰도·인식 품질 저하 없음, 실측 확인).
-            # 감지 모델을 직접 지정하면 lang= 자동 선택이 무시되므로 한국어 인식
-            # 모델도 함께 명시해 한국어 정확도를 유지한다.
-            _ocr_engine = PaddleOCR(
-                use_textline_orientation=False,
-                use_doc_orientation_classify=False,
-                text_detection_model_name="PP-OCRv5_mobile_det",
-                text_recognition_model_name="korean_PP-OCRv5_mobile_rec",
-            )
-        except Exception as e:  # noqa: BLE001 — 모델 로드·의존성 문제 등
-            raise OcrEngineError(f"OCR 엔진을 불러오지 못했어요 — {e}") from e
+    # 업로드 라우터가 요청마다 asyncio.to_thread로 별도 스레드를 띄운다(api/routers/
+    # owner.py) — 여러 장을 동시에 올리면 이 함수가 여러 스레드에서 거의 동시에
+    # 불린다. 락 없이 "None이면 만든다"만 하면 전부 None을 보고 각자 무거운
+    # PaddleOCR 인스턴스를 따로 만들어버려(실측 확인 — 로그에 "Creating model"이
+    # 요청 수만큼 반복) 메모리를 짓눌러 컨테이너가 응답 불능(unhealthy)에 빠진다.
+    # 더블체크락으로 실제 생성은 딱 한 번만 일어나게 한다.
+    if _ocr_engine is not None:
+        return _ocr_engine
+    with _ocr_engine_lock:
+        if _ocr_engine is None:
+            try:
+                from paddleocr import PaddleOCR
+                # use_textline_orientation=False, use_doc_orientation_classify=False —
+                # 실측으로 확인된 두 가지 별도 버그: ① 줄 단위 180도 회전 판별이 관리비
+                # 고지서 사진을, ② 전체 페이지 회전 판별이 항목이 많은(청구내역 표가 긴)
+                # 전기요금 청구서 사진을 각각 똑바로 찍힌 멀쩡한 문서인데도 뒤집힌/회전된
+                # 걸로 오판해 글자를 깨뜨렸다(신뢰도 0.5대, 텍스트가 전부 뒤섞여 나옴).
+                # 둘 다 "정보량이 많거나 서식이 조금만 복잡해도 오탐하는" 같은 패턴이라,
+                # 이 프로젝트 실사용 케이스(사장님이 문서를 대체로 똑바로 찍어 올림)에서는
+                # 두 판별 모두 이득보다 오탐 위험이 크다고 보고 끈다. 문서 펴기
+                # (use_doc_unwarping)는 실측에서 문제를 일으키지 않아 유지(비스듬히
+                # 찍은 실사진의 원근 왜곡 보정용).
+                #
+                # text_detection_model_name/text_recognition_model_name — 실측으로 확인된
+                # 세 번째 버그: lang="korean" 기본 선택값은 문자 감지에 "server" 등급
+                # 모델(PP-OCRv5_server_det)을 쓰는데, 표 테두리가 빽빽한 세금계산서
+                # 사진(품목 표)에서 메모리 부족으로 프로세스가 죽었다(SIGKILL, "Failed to
+                # fetch"/"signal timed out"으로 사용자에게 보임 — 겉으로는 그냥 멈춘 것
+                # 처럼 보이지만 실제로는 OOM). 감지 모델을 "mobile" 등급으로 낮추면 같은
+                # 파일이 30초 이내 정상 완료된다(신뢰도·인식 품질 저하 없음, 실측 확인).
+                # 감지 모델을 직접 지정하면 lang= 자동 선택이 무시되므로 한국어 인식
+                # 모델도 함께 명시해 한국어 정확도를 유지한다.
+                _ocr_engine = PaddleOCR(
+                    use_textline_orientation=False,
+                    use_doc_orientation_classify=False,
+                    text_detection_model_name="PP-OCRv5_mobile_det",
+                    text_recognition_model_name="korean_PP-OCRv5_mobile_rec",
+                )
+            except Exception as e:  # noqa: BLE001 — 모델 로드·의존성 문제 등
+                raise OcrEngineError(f"OCR 엔진을 불러오지 못했어요 — {e}") from e
     return _ocr_engine
 
 
@@ -173,10 +184,18 @@ def _cluster_rows(boxes: list[tuple[float, float, float, float, str]]) -> list[O
 
 def _run_ocr_on_image(image: Image.Image) -> tuple[list[OcrRow], list[float]]:
     engine = _get_ocr_engine()
-    try:
-        predictions = engine.predict(np.array(image))
-    except Exception as e:  # noqa: BLE001
-        raise OcrEngineError(f"OCR 인식에 실패했어요 — {e}") from e
+    # _get_ocr_engine()의 락은 "엔진을 한 번만 만드는 것"만 지켜줄 뿐, 만들어진 뒤엔
+    # 모든 스레드가 같은 engine 인스턴스를 공유한다. PaddleOCR의 predict()는 내부
+    # C++ 추론 엔진 상태를 건드리는데 동시 호출에 안전하지 않다 — 실측으로 여러 장을
+    # 동시에 올렸을 때 "double free or corruption"/"corrupted size vs. prev_size in
+    # fastbins"로 프로세스 자체가 죽는 걸 확인했다(엔진 재생성 문제와는 별개 버그).
+    # predict() 호출 자체도 같은 락으로 감싸 전체 프로세스 안에서 OCR 인식이 한
+    # 번에 하나씩만 돌게 강제한다 — 여러 장을 동시에 올려도 인식은 순차 처리된다.
+    with _ocr_engine_lock:
+        try:
+            predictions = engine.predict(np.array(image))
+        except Exception as e:  # noqa: BLE001
+            raise OcrEngineError(f"OCR 인식에 실패했어요 — {e}") from e
 
     boxes: list[tuple[float, float, float, float, str]] = []
     scores: list[float] = []

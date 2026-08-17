@@ -249,14 +249,26 @@ export function SceneUpload({
     }
   }
 
+  /** 슬롯 지정 카드의 "여러 장 한 번에 올리기" — uploadAuto와 같은 이유로 순차 처리.
+   * 각 파일은 독립적인 entryId로 카드에 uploading→done/error 상태가 개별 반영된다. */
+  async function uploadOcrFiles(docType: DocType, files: File[]) {
+    for (let i = 0; i < files.length; i++) {
+      const entryId = `${Date.now()}-${i}-${files[i].name}`;
+      await uploadOcr(docType, files[i], entryId);
+    }
+  }
+
   /** "어떤 문서인지 모르겠다면" 박스 — document_type을 안 보내 OCR이 스스로 종류를
    * 판별한다("그냥 업로드", /owner/uploads 탭의 같은 박스와 동일 계약). 판별된
    * 종류의 카드(entries[docType])에 그대로 꽂아 넣어 그 카드의 뱃지·진행 상태가
    * 자연스럽게 갱신되게 한다 — 위저드 안이라 AI 분류(4단계)를 따로 트리거할
    * 필요는 없다(/owner/uploads처럼 위저드 밖 별도 탭이 아님).
    *
-   * 여러 장을 한 번에 골라도 되도록 파일별로 독립 실행한다(uploadOcr의 병렬 패턴과
-   * 동일) — 한 장이 실패해도 나머지 장은 계속 올라간다. */
+   * 여러 장을 한 번에 골라도 순차로 하나씩 올린다 — 백엔드 OCR(PaddleOCR)이
+   * 프로세스당 한 번에 한 건만 처리하도록 락이 걸려 있어서(db/document_ocr_extractor.py,
+   * 동시 predict() 호출 시 네이티브 엔진이 죽는 버그가 실측 확인됨), 여러 장을
+   * 동시에 쏴봐야 뒤 순번 파일은 앞 파일들의 처리 시간만큼 대기가 쌓여 클라이언트
+   * 타임아웃(60초)을 넘겨버린다. 한 장이 실패해도 나머지 장은 계속 올라간다. */
   async function uploadAuto(file: File) {
     const entryId = `auto-${Date.now()}-${file.name}`;
     setAutoUploading((n) => n + 1);
@@ -287,9 +299,11 @@ export function SceneUpload({
     }
   }
 
-  function uploadAutoFiles(files: File[]) {
+  async function uploadAutoFiles(files: File[]) {
     setAutoUploadErrors([]);
-    files.forEach((f) => void uploadAuto(f));
+    for (const f of files) {
+      await uploadAuto(f);
+    }
   }
 
   async function uploadExcel(file: File) {
@@ -401,10 +415,7 @@ export function SceneUpload({
                 className="hidden"
                 onChange={(e) => {
                   const files = Array.from(e.target.files ?? []);
-                  files.forEach((f, i) => {
-                    const entryId = `${Date.now()}-${i}-${f.name}`;
-                    uploadOcr(docType, f, entryId);
-                  });
+                  if (files.length > 0) void uploadOcrFiles(docType, files);
                   e.target.value = "";
                 }}
               />

@@ -55,6 +55,30 @@ _TITLE_SEARCH_LINES = 5
 _MANAGEMENT_FEE_TITLE_KEYWORD = "관리비"
 
 
+def _strip_ws(s: str) -> str:
+    return re.sub(r"\s+", "", s)
+
+
+def _label_pattern(label: str) -> str:
+    """라벨 리터럴 문자열 → 글자 사이 임의 공백을 허용하는 정규식 조각.
+
+    실측 확인(2026-08-17, 실제 국세청 표준 세금계산서): 제목이 "전 자 세 금 계
+    산 서"처럼 자간이 벌어져 렌더링됐고 OCR도 그대로 재구성했다 — 같은 디자인
+    관례가 다른 라벨(청구월·작성일자 등)에도 쓰일 수 있어, 정규식에 라벨을 그냥
+    박아넣는 모든 곳에 이 헬퍼를 쓴다. 문자 단위로 나눠 사이에 \\s*를 넣으므로
+    괄호 등 정규식 특수문자가 섞인 라벨("사용량(kWh)")도 각 문자가 escape되어
+    안전하게 그대로 쓸 수 있다."""
+    return r"\s*".join(re.escape(ch) for ch in label)
+
+
+# 실측 확인(2026-08-17, 실제 국세청 표준 세금계산서 사진): 제목이 "전 자 세 금 계
+# 산 서"처럼 글자 사이가 벌어져 렌더링되고, OCR도 그 벌어진 간격을 그대로 인식한다
+# (디자인상 자간 강조 — PDF 텍스트 레이어·OCR 둘 다 동일하게 영향받음). 공백을
+# 지우고 비교해야 "전자세금계산서" 같은 공백 없는 키워드와 매칭된다.
+_TITLE_TO_DOCUMENT_TYPE_NO_WS = {_strip_ws(title): doc_type for title, doc_type in _TITLE_TO_DOCUMENT_TYPE.items()}
+_MANAGEMENT_FEE_TITLE_KEYWORD_NO_WS = _strip_ws(_MANAGEMENT_FEE_TITLE_KEYWORD)
+
+
 class DocumentParseError(ValueError):
     """텍스트에서 필요한 정보를 읽어내지 못했을 때 — 값을 지어내지 않고 여기서 멈춘다."""
 
@@ -98,9 +122,9 @@ def detect_document_type(text: str) -> DocumentType | None:
         return None
     lines = stripped.splitlines()[:_TITLE_SEARCH_LINES]
     for line in lines:
-        line = line.strip()
-        for title, doc_type in _TITLE_TO_DOCUMENT_TYPE.items():
-            if title in line:
+        normalized = _strip_ws(line)
+        for title, doc_type in _TITLE_TO_DOCUMENT_TYPE_NO_WS.items():
+            if title in normalized:
                 return doc_type
     return None
 
@@ -116,7 +140,7 @@ def _looks_like_management_fee_bill(text: str) -> bool:
     if not stripped:
         return False
     lines = stripped.splitlines()[:_TITLE_SEARCH_LINES]
-    return any(_MANAGEMENT_FEE_TITLE_KEYWORD in line for line in lines)
+    return any(_MANAGEMENT_FEE_TITLE_KEYWORD_NO_WS in _strip_ws(line) for line in lines)
 
 
 def _parse_amount(raw: str, *, field_label: str) -> int:
@@ -131,6 +155,33 @@ def _parse_amount(raw: str, *, field_label: str) -> int:
     if not digits:
         raise DocumentParseError(f"{field_label} 형식을 인식하지 못했어요: {raw!r}")
     return int(digits)
+
+
+def parse_amount_from_cell_text(text: str) -> int | None:
+    """셀 원문에서 금액만 뽑는다(콤마·공백 편차 무시). 못 찾으면 None(예외 대신).
+
+    db/document_llm_router.py 전용 공개 진입점 — LLM은 "어느 셀이 금액이냐"만
+    가리키고, 실제 숫자는 항상 이 함수로 그 셀의 OCR 원문을 재파싱해서 얻는다
+    (LLM이 반환한 숫자를 직접 신뢰하는 코드는 없다). `_parse_amount()`는 이
+    모듈 밖에서 쓰라고 만든 게 아니라서 얇은 공개 래퍼를 둔다.
+    """
+    try:
+        return _parse_amount(text, field_label="금액")
+    except DocumentParseError:
+        return None
+
+
+def parse_year_month_from_cell_text(text: str) -> tuple[int, int] | None:
+    """셀 원문에서 연/월만 뽑는다(일자는 있어도 무시 — 기존 파서들과 동일하게
+    년/월까지만 쓴다). 구분자 앞뒤 공백은 `_DATE_SEP`과 동일하게 허용.
+
+    db/document_llm_router.py 전용 공개 진입점 — parse_amount_from_cell_text와
+    같은 이유(LLM 응답의 값이 아니라 셀 원문을 항상 재파싱).
+    """
+    m = re.search(rf"(\d{{4}}){_DATE_SEP}(\d{{2}})(?:{_DATE_SEP}\d{{2}})?", text)
+    if not m:
+        return None
+    return int(m.group(1)), int(m.group(2))
 
 
 def _line_value(text: str, label_pattern: str, *, field_label: str) -> str:
@@ -211,7 +262,12 @@ def _parse_with_auto_detect(text: str) -> dict:
 
 
 # 실제 문서는 날짜 구분자가 하이픈만이 아닐 수 있다(점·슬래시) — OCR·실물 서식 편차 허용.
-_DATE_SEP = r"[-./]"
+# 앞뒤 공백 허용 — 실측 확인(2026-08-17, 실제 국세청 표준 세금계산서 사진): 헤더
+# 요약행("작성일자 공급가액 세액 비고" 아래 데이터행)의 날짜 셀이 OCR에서
+# "2025- 02-11"처럼 구분자 뒤에 공백이 섞여 재구성됐다(같은 셀의 "333- 11- 22222"
+# 등록번호, "420, 833" 금액에서도 동일 패턴 확인 — 이 문서 특유의 렌더링 간격).
+# 원래 "[-./]"는 이 경우 매칭 실패.
+_DATE_SEP = r"\s*[-./]\s*"
 
 
 def _parse_electric_bill(text: str) -> dict:
@@ -222,7 +278,7 @@ def _parse_electric_bill(text: str) -> dict:
     # 10월22일~12월21일"처럼 청구월과 다른 달에 걸친 사용기간 범위는 있어도 청구월
     # 자체를 명시한 라벨은 없었다.
     date_m = re.search(
-        rf"청구월\s*:\s*(\d{{4}}){_DATE_SEP}(\d{{2}})", text
+        rf"{_label_pattern('청구월')}\s*:\s*(\d{{4}}){_DATE_SEP}(\d{{2}})", text
     ) or re.search(r"(\d{4})년\s*(\d{1,2})월분", text)
     if not date_m:
         raise DocumentParseError("청구월을 찾지 못했어요")
@@ -233,14 +289,15 @@ def _parse_electric_bill(text: str) -> dict:
     quantity = None
     try:
         quantity = _parse_amount(
-            _line_value(text, r"사용량\(kWh\)", field_label="사용량"), field_label="사용량"
+            _line_value(text, _label_pattern("사용량(kWh)"), field_label="사용량"), field_label="사용량"
         )
     except DocumentParseError:
         pass
     # 실측: "청구금액(원)"이 아니라 "청구금액"(단위 없이) 바로 뒤에 금액이 온다
     # ("청구금액 9,240원") — "(원)"을 선택적으로 바꿔 둘 다 허용.
     amount = _parse_amount(
-        _line_value(text, r"청구금액(?:\(원\))?", field_label="청구금액"), field_label="청구금액"
+        _line_value(text, _label_pattern("청구금액") + f"(?:{_label_pattern('(원)')})?", field_label="청구금액"),
+        field_label="청구금액",
     )
     result = {
         "supplier_name": "한국전력공사",
@@ -256,14 +313,14 @@ def _parse_electric_bill(text: str) -> dict:
 
 
 def _parse_gas_bill(text: str) -> dict:
-    date_m = re.search(rf"사용월\s*:\s*(\d{{4}}){_DATE_SEP}(\d{{2}})", text)
+    date_m = re.search(rf"{_label_pattern('사용월')}\s*:\s*(\d{{4}}){_DATE_SEP}(\d{{2}})", text)
     if not date_m:
         raise DocumentParseError("사용월을 찾지 못했어요")
     quantity = _parse_amount(
-        _line_value(text, r"사용량\(m³\)", field_label="사용량"), field_label="사용량"
+        _line_value(text, _label_pattern("사용량(m³)"), field_label="사용량"), field_label="사용량"
     )
     amount = _parse_amount(
-        _line_value(text, r"청구금액\(원\)", field_label="청구금액"), field_label="청구금액"
+        _line_value(text, _label_pattern("청구금액(원)"), field_label="청구금액"), field_label="청구금액"
     )
     return {
         "supplier_name": "도시가스",
@@ -282,7 +339,7 @@ def find_supplier_name_best_effort(text: str) -> str:
     문서 전체를 실패시키지 않는다. db/document_extraction.py가 날짜를
     parse_tax_invoice_date_table()(좌표 기반)로 찾은 경우에도 이 함수로 공급자를
     같이 채운다."""
-    supplier_m = re.search(r"공급자\s*:\s*(.+)", text)
+    supplier_m = re.search(rf"{_label_pattern('공급자')}\s*:\s*(.+)", text)
     return supplier_m.group(1).strip() if supplier_m else "알 수 없음"
 
 
@@ -291,7 +348,9 @@ def parse_tax_invoice_header(text: str) -> dict:
     표 재구성 경로가 품목행은 좌표 기반 parse_tax_invoice_table_rows()로 따로 뽑고
     날짜·공급자는 이 함수로 공유해서 쓴다)."""
     date_m = re.search(
-        rf"(?:작성일자|발급일자)\s*:\s*(\d{{4}}){_DATE_SEP}(\d{{2}}){_DATE_SEP}(\d{{2}})", text
+        rf"(?:{_label_pattern('작성일자')}|{_label_pattern('발급일자')})"
+        rf"\s*:\s*(\d{{4}}){_DATE_SEP}(\d{{2}}){_DATE_SEP}(\d{{2}})",
+        text,
     )
     if not date_m:
         raise DocumentParseError("작성일자를 찾지 못했어요")
@@ -363,7 +422,11 @@ def parse_tax_invoice_date_table(rows: list[OcrRow]) -> tuple[int, int] | None:
     호출부가 다른 경로를 계속 시도할 수 있게)."""
     for i, row in enumerate(rows):
         date_col = next(
-            ((x0, x1) for x0, x1, text in row if text.strip() in _TABLE_HEADER_DATE_KEYWORDS),
+            (
+                (x0, x1)
+                for x0, x1, text in row
+                if any(kw in _strip_ws(text) for kw in _TABLE_HEADER_DATE_KEYWORDS)
+            ),
             None,
         )
         if date_col is None:
@@ -393,7 +456,7 @@ def parse_tax_invoice_table_rows(rows: list[OcrRow]) -> dict | None:
     for i, row in enumerate(rows):
         found: dict[str, tuple[float, float]] = {}
         for x0, x1, text in row:
-            t = text.strip()
+            t = _strip_ws(text)
             if any(k in t for k in _TABLE_HEADER_ITEM_KEYWORDS):
                 found["item_description"] = (x0, x1)
             elif any(k in t for k in _TABLE_HEADER_AMOUNT_KEYWORDS):
@@ -429,7 +492,7 @@ def parse_tax_invoice_table_rows(rows: list[OcrRow]) -> dict | None:
     return None
 
 
-_MGMT_FEE_ELECTRIC_ITEM_PATTERN = re.compile(r"전기료\s*[:\s]*([\d,]+)\s*원?")
+_MGMT_FEE_ELECTRIC_ITEM_PATTERN = re.compile(rf"{_label_pattern('전기료')}\s*[:\s]*([\d,]+)\s*원?")
 MGMT_FEE_QUALITY_FLAG = "mgmt_fee_estimate"
 _MGMT_FEE_GUIDANCE = (
     "전기료를 관리비 고지서에서 임시로 읽었어요 — 더 정확한 증빙을 원하시면 관리사무소에 "
