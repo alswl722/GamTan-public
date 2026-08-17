@@ -184,12 +184,25 @@ def parse_year_month_from_cell_text(text: str) -> tuple[int, int] | None:
     return int(m.group(1)), int(m.group(2))
 
 
+# 알림톡류 문서(한전 사용량 알림 등)는 "예상 전기요금"/"예상 사용량"처럼 실제 라벨과
+# 겉보기엔 비슷한 문구로 AI 예측치·추정치를 안내한다 — 실측(2026-08-17, 실제 한전
+# 알림톡 캡처 확인). 이런 예측치를 실제 청구금액인 것처럼 계산에 쓰면 CLAUDE.md
+# 원칙1·7(추정치를 실측처럼 합산하지 않는다)을 어기게 되므로, 라벨 바로 앞에 이
+# 접두어가 붙어 있으면 값을 지어내지 않고 명확히 실패시킨다.
+_FORECAST_PREFIX_KEYWORDS = ("예상", "예측", "추정")
+
+
 def _line_value(text: str, label_pattern: str, *, field_label: str) -> str:
     # 라벨과 값 사이 공백은 0개 이상 허용(\s*) — OCR은 "사용량(kWh)1,234"처럼 라벨과
     # 값을 붙여서 인식하는 경우가 실측 스파이크에서 확인됐다(원래 \s+는 이 경우 매칭 실패).
     m = re.search(label_pattern + r"\s*(.+)", text)
     if not m:
         raise DocumentParseError(f"{field_label} 항목을 찾지 못했어요")
+    prefix = text[max(0, m.start() - 10) : m.start()]
+    if any(kw in prefix for kw in _FORECAST_PREFIX_KEYWORDS):
+        raise DocumentParseError(
+            f"실제 {field_label}이 아니라 예상·추정치로 보여요 — 정식 청구서로 다시 올려 주세요"
+        )
     return m.group(1).strip()
 
 

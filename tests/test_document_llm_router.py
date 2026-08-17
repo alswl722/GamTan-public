@@ -206,6 +206,41 @@ def test_route_fields_defaults_item_description_for_gas_bill(monkeypatch):
     assert parsed["item_description"] == "도시가스"
 
 
+# ── 회귀 방지: 알림톡류 "예상" 값을 실제 청구금액처럼 채택하지 않기 ───────────
+# 실측(2026-08-17, 실제 한전 카카오 알림톡 캡처): 정식 고지서가 아니라 "AI가
+# 예측한 한달 전기사용량 376kWh (예상 전기요금 51,260원)" 같은 사용량 알림에는
+# 실제 청구금액이 없고 예측치만 있다. LLM이 이 예측치가 담긴 셀을 amount_cell_id로
+# 잘못 가리켜도, 같은 행에 "예상"이 있으면 그 값을 신뢰하지 않고 실패시켜야 한다
+# (그렇지 않으면 추정치가 실측 청구금액인 것처럼 저장된다 — CLAUDE.md 원칙1·7 위반).
+FORECAST_ROWS = [
+    [(0.0, 60.0, "청구월"), (150.0, 220.0, "2025-01")],
+    [(0.0, 340.0, "AI가 예측한 한달 전기사용량은 376kWh입니다 (예상 전기요금 : 51,260원)")],
+]
+
+
+def _gemini_response_forecast_amount(**overrides) -> dict:
+    base = {
+        "document_type": "electric_bill",
+        "date_cell_id": "1",   # "2025-01"
+        "amount_cell_id": "2",  # 예측치가 섞인 행의 셀
+        "item_cell_id": None,
+        "quantity_cell_id": None,
+        "supplier_cell_id": None,
+        "confidence": 0.9,
+        "evidence": "예상 전기요금 문구 옆 금액을 선택함",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_route_fields_rejects_forecast_labeled_amount_cell(monkeypatch):
+    monkeypatch.setattr(
+        router, "_call_gemini", lambda images, cells, doc_type: _gemini_response_forecast_amount(),
+    )
+    with pytest.raises(DocumentParseError, match="예상"):
+        router.route_fields(_session(), b"fake-bytes-13", FORECAST_ROWS, "electric_bill")
+
+
 def test_route_fields_tax_invoice_without_item_fails_instead_of_null(monkeypatch):
     """세금계산서는 품목이 Scope·연료 분류에 실제로 쓰이는 정보라, 전기·가스처럼
     대충 채우지 않고 명확히 실패한다(값을 지어내지 않는다는 원칙)."""

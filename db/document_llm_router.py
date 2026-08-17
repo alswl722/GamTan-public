@@ -67,14 +67,30 @@ class LlmRouterError(DocumentParseError):
     db/quality_issues.py에 다른 사유로 기록하기 위한 서브클래스."""
 
 
+# 알림톡류 문서(한전 사용량 알림 등)는 "예상 전기요금"/"예상 사용량"처럼 실제 청구
+# 금액·날짜와 겉보기엔 비슷한 문구로 AI 예측치를 안내한다(실측 2026-08-17, 실제
+# 한전 알림톡 캡처 확인 — "10일간 사용량: 182kWh" 옆에 "AI가 예측한 한달 전기사용량
+# 376kWh (예상 전기요금 51,260원)"가 나란히 찍혀 있었음). LLM이 이 예측치가 담긴
+# 셀을 실제 청구금액/청구월로 잘못 가리켜도, 그 값을 그대로 저장하면 CLAUDE.md
+# 원칙1·7(추정치를 실측처럼 쓰지 않는다)을 어기게 된다 — 셀이 속한 행 텍스트에 이
+# 접두어가 있으면 LLM의 선택 자체를 신뢰하지 않고 명확히 실패시킨다.
+_FORECAST_KEYWORDS = ("예상", "예측", "추정")
+
+
 def _flatten_cells(rows: list[OcrRow]) -> list[dict]:
-    """행 단위 OCR 결과 → [{"id": i, "text": ...}] 평탄화. id→텍스트 매핑은 이
-    모듈 안에서만 쓰고 밖으로 안 새어나간다(호출부는 최종 파싱값만 받는다)."""
+    """행 단위 OCR 결과 → [{"id": i, "text": ..., "row_index": ...}] 평탄화.
+    row_index는 예측치 방어(같은 행에 "예상" 등이 있는지 확인)에만 쓰고, id→텍스트
+    매핑 자체는 이 모듈 안에서만 쓰고 밖으로 안 새어나간다(호출부는 최종 파싱값만
+    받는다)."""
     cells = []
-    for row in rows:
+    for row_index, row in enumerate(rows):
         for _x0, _x1, text in row:
-            cells.append({"id": len(cells), "text": text})
+            cells.append({"id": len(cells), "text": text, "row_index": row_index})
     return cells
+
+
+def _row_texts(rows: list[OcrRow]) -> list[str]:
+    return [" ".join(text for _x0, _x1, text in row) for row in rows]
 
 
 def _build_schema(cell_ids: list[int]) -> dict:
@@ -181,44 +197,57 @@ def _resolve_cell_id(raw_id, valid_ids: set) -> int | None:
     return cid if cid in valid_ids else None
 
 
-def _resolve_fields(result: dict, cells: list[dict]) -> dict:
+def _resolve_fields(result: dict, cells: list[dict], row_texts: list[str]) -> dict:
     """LLM이 가리킨 셀 id → 실제 셀 원문 → 기존 결정론적 파서로 값 추출.
 
     result(LLM 응답)에서는 *_cell_id만 읽는다 — 값 자체(금액·날짜 등)를 담는 키가
     스키마에 없으므로 여기서 읽을 수도 없다. 값은 전부 cells(OCR 원문)에서
     parse_amount_from_cell_text/parse_year_month_from_cell_text로 다시 얻는다.
     """
-    by_id = {c["id"]: c["text"] for c in cells}
+    by_id = {c["id"]: c for c in cells}
     valid_ids = set(by_id)
     parsed: dict = {}
 
+    def _is_forecast_cell(cell_id: int) -> bool:
+        row_index = by_id[cell_id]["row_index"]
+        row_text = row_texts[row_index] if 0 <= row_index < len(row_texts) else ""
+        return any(kw in row_text for kw in _FORECAST_KEYWORDS)
+
     date_id = _resolve_cell_id(result.get("date_cell_id"), valid_ids)
     if date_id is not None:
-        ym = parse_year_month_from_cell_text(by_id[date_id])
+        if _is_forecast_cell(date_id):
+            raise DocumentParseError(
+                "실제 청구월이 아니라 예상·추정치로 보여요 — 정식 청구서로 다시 올려 주세요"
+            )
+        ym = parse_year_month_from_cell_text(by_id[date_id]["text"])
         if ym is not None:
             parsed["year"], parsed["month"] = ym
 
     amount_id = _resolve_cell_id(result.get("amount_cell_id"), valid_ids)
     if amount_id is not None:
-        amount = parse_amount_from_cell_text(by_id[amount_id])
+        if _is_forecast_cell(amount_id):
+            raise DocumentParseError(
+                "실제 청구금액이 아니라 예상·추정치로 보여요 — 정식 청구서로 다시 올려 주세요"
+            )
+        amount = parse_amount_from_cell_text(by_id[amount_id]["text"])
         if amount is not None:
             parsed["supply_amount_krw"] = amount
 
     item_id = _resolve_cell_id(result.get("item_cell_id"), valid_ids)
     if item_id is not None:
-        parsed["item_description"] = by_id[item_id].strip()
+        parsed["item_description"] = by_id[item_id]["text"].strip()
 
     # 수량은 세금계산서 등에서 안 찍힌 경우가 흔하다 — 단위까지는 안 뽑고 숫자만
     # 채운다(기존 관례와 동일: quantity_unit 없으면 다운스트림이 금액÷단가로 환산).
     qty_id = _resolve_cell_id(result.get("quantity_cell_id"), valid_ids)
     if qty_id is not None:
-        qty = parse_amount_from_cell_text(by_id[qty_id])
+        qty = parse_amount_from_cell_text(by_id[qty_id]["text"])
         if qty is not None:
             parsed["quantity"] = qty
 
     supplier_id = _resolve_cell_id(result.get("supplier_cell_id"), valid_ids)
     if supplier_id is not None:
-        parsed["supplier_name"] = by_id[supplier_id].strip()
+        parsed["supplier_name"] = by_id[supplier_id]["text"].strip()
 
     return parsed
 
@@ -278,7 +307,7 @@ def route_fields(
     if resolved_type is None:
         raise DocumentParseError("문서 종류를 판별하지 못했어요 — 더 선명한 사진으로 다시 올려 주세요")
 
-    parsed = _resolve_fields(result, cells)
+    parsed = _resolve_fields(result, cells, _row_texts(rows or []))
     if parsed.get("year") is None or parsed.get("month") is None:
         raise DocumentParseError("문서에서 날짜를 읽어내지 못했어요 — 더 선명한 사진으로 다시 올려 주세요")
     if parsed.get("supply_amount_krw") is None:
