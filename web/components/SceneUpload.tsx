@@ -328,7 +328,8 @@ export function SceneUpload({
    * 프로세스당 한 번에 한 건만 처리하도록 락이 걸려 있어서(db/document_ocr_extractor.py,
    * 동시 predict() 호출 시 네이티브 엔진이 죽는 버그가 실측 확인됨), 여러 장을
    * 동시에 쏴봐야 뒤 순번 파일은 앞 파일들의 처리 시간만큼 대기가 쌓여 클라이언트
-   * 타임아웃(60초)을 넘겨버린다. 한 장이 실패해도 나머지 장은 계속 올라간다. */
+   * 타임아웃(DOCUMENT_UPLOAD_TIMEOUT_MS)을 넘겨버린다. 한 장이 실패해도 나머지
+   * 장은 계속 올라간다. */
   async function uploadAuto(file: File) {
     const entryId = `auto-${Date.now()}-${file.name}`;
     setAutoUploading((n) => n + 1);
