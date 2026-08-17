@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from api.agent.tools import classify_vouchers
 from db.excel_loader import load_classification_rules, load_k_taxonomy_mapping
 from db.init_db import seed_emission_factors, seed_industry_distributions, seed_unit_prices
-from db.k_taxonomy import k_taxonomy_fields_for_rule, k_taxonomy_leads, k_taxonomy_leads_for_company
+from db.pcaf_engine.k_taxonomy import k_taxonomy_fields_for_rule, k_taxonomy_leads, k_taxonomy_leads_for_company
 from db.models import Base, Classification, Company, Voucher
 
 RULES = load_classification_rules()

@@ -13,7 +13,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from db.document_coverage import document_pending_review_count, upload_streak
+from db.document.document_coverage import document_pending_review_count, upload_streak
 from db.models import (
     Base,
     Classification,

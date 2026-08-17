@@ -18,9 +18,9 @@ db/pcaf_quality.py의 PCAF Scope별 데이터 품질 평가(assess_borrower_emis
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from db.k_taxonomy import k_taxonomy_leads_for_company
+from db.pcaf_engine.k_taxonomy import k_taxonomy_leads_for_company
 from db.models import RateProduct
-from db.pcaf_quality import (
+from db.pcaf_engine.pcaf_quality import (
     assess_borrower_emission_quality,
     default_reporting_year,
     quality_upgrade_candidate,

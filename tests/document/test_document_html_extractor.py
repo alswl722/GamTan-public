@@ -1,6 +1,6 @@
 """db/document_html_extractor.py — 세금계산서 이메일(HTML) 텍스트 추출 검증."""
-from db.document_html_extractor import extract_html_text, looks_like_html
-from db.document_text_extractor import parse_document_text
+from db.document.document_html_extractor import extract_html_text, looks_like_html
+from db.document.document_text_extractor import parse_document_text
 
 
 def test_looks_like_html_detects_doctype():

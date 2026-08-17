@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from db.document_requirements import DocumentType, FuelTypes, required_documents
+from db.document.document_requirements import DocumentType, FuelTypes, required_documents
 from db.models import Classification, Company, SourceDocument, SourceDocumentAccessLog, Voucher
 
 _DOCUMENT_TYPES: tuple[DocumentType, ...] = ("tax_invoice", "electric_bill", "gas_bill")

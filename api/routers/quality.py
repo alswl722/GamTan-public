@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from api.db import get_session
 from db.models import BorrowerEmissionInventory, Company, OrganizationalBoundary
-from db.pcaf_quality import assess_borrower_emission_quality, save_quality_assessment_version
+from db.pcaf_engine.pcaf_quality import assess_borrower_emission_quality, save_quality_assessment_version
 
 router = APIRouter(prefix="/borrowers", tags=["quality"])
 

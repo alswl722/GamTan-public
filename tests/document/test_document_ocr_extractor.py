@@ -8,9 +8,9 @@ import io
 import pytest
 from PIL import Image
 
-import db.document_ocr_extractor as ocr_mod
-from db.document_text_extractor import DocumentParseError
-from db.document_ocr_extractor import (
+import db.document.document_ocr_extractor as ocr_mod
+from db.document.document_text_extractor import DocumentParseError
+from db.document.document_ocr_extractor import (
     OcrEngineError,
     _cluster_rows,
     _is_heic,

@@ -39,10 +39,10 @@ LLM 필드 라우팅(최후 수단)까지 순서대로 시도.
 """
 from sqlalchemy.orm import Session
 
-from db.document_html_extractor import extract_html_text
-from db.document_llm_router import route_fields
-from db.document_ocr_extractor import ocr_extract
-from db.document_text_extractor import (
+from db.document.document_html_extractor import extract_html_text
+from db.document.document_llm_router import route_fields
+from db.document.document_ocr_extractor import ocr_extract
+from db.document.document_text_extractor import (
     DocumentParseError,
     DocumentTypeMismatchError,
     detect_document_type,  # noqa: F401 — 하위 호환용 재노출(과거 호출부가 여기서 import)
