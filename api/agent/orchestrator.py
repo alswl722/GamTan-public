@@ -260,6 +260,29 @@ def _annotate_classifications(session: Session, company_id: int, month: int, fue
     session.commit()
 
 
+def _mark_anomaly_pending(session: Session, company_id: int, month: int, fuel: str, ratio: float) -> None:
+    """이상치 되묻기(docs/tasks.md) — 해당 월·연료 분류 행 전부를
+    anomaly_check_status='pending'으로 표시해 사장님 확인 대기열에 올린다.
+
+    LLM이 "정상"으로 자동 판단한 케이스도 사람 확인 없이 바로 confirmed로
+    넘기지 않는다 — 에이전트의 1차 판단이지 최종 확인이 아니기 때문에,
+    사장님이 한 번은 "네/아니오/모르겠어요"로 답해야 anomaly_check_status가
+    pending 밖으로 나간다(api/routers/owner.py::supplement_anomaly_check).
+    """
+    from sqlalchemy import select
+
+    rows = session.execute(
+        select(Classification)
+        .join(Voucher, Voucher.id == Classification.voucher_id)
+        .where(Voucher.company_id == company_id, Voucher.month == month,
+               Classification.fuel_type == fuel)
+    ).scalars().all()
+    for c in rows:
+        c.anomaly_check_status = "pending"
+        c.anomaly_ratio = ratio
+    session.commit()
+
+
 # ── 메인 실행 경로: 뻔한 단계는 코드, 이상치 판단만 LLM ──────────────────────
 def _run_agent_core(session: Session, company: Company, sid: str) -> int:
     """전 단계 실행. 반환: LLM 판단 실패 건수(실패 가시성 — mode 산정용)."""
@@ -279,7 +302,11 @@ def _run_agent_core(session: Session, company: Company, sid: str) -> int:
     _run_tool_and_log(session, company, sid, "classify_vouchers", {})
     _run_tool_and_log(session, company, sid, "get_industry_distribution", {"scope": 1})
 
-    # 이상치 자가 검증 — 배수 계산은 코드(_check_anomalies), "정상인지" 판단만 모델
+    # 이상치 자가 검증 — 배수 계산은 코드(_check_anomalies), "정상인지" 판단만 모델.
+    # 이상치 되묻기(docs/tasks.md): 세 경우(판단 실패/정상/비정상) 모두 최종 확인은
+    # 사장님 몫이라 anomaly_check_status='pending'으로 남긴다 — LLM이 "정상"으로
+    # 판단해도 evidence 주석은 참고용일 뿐, 사장님이 "네/아니오/모르겠어요"로
+    # 답하기 전까지는 pending 상태를 유지한다.
     anom = _run_tool_and_log(session, company, sid, "check_anomalies", {})
     for o in anom.get("outliers", [])[:1]:
         insp = _run_tool_and_log(session, company, sid, "inspect_vouchers",
@@ -287,6 +314,7 @@ def _run_agent_core(session: Session, company: Company, sid: str) -> int:
         items = " / ".join(v["item"] for v in insp.get("vouchers", []))
 
         judged = _judge_anomaly_with_llm(items)
+        _mark_anomaly_pending(session, cid, o["month"], o["fuel"], o["ratio"])
         if judged is None:
             # 실패를 숨기지 않는다 — 대체 판정 없이 실패 자체를 기록하고 사람에게
             judge_failures += 1
@@ -297,9 +325,11 @@ def _run_agent_core(session: Session, company: Company, sid: str) -> int:
         elif judged[0]:
             reason = judged[1]
             log_step(session, cid, sid, "관찰",
-                     f"'{items}' 자료를 보니 {reason}. 정상적인 사용이니 걱정 안 하셔도 돼요.")
+                     f"'{items}' 자료를 보니 {reason}. 정상적인 사용 같아 보이는데, 사장님께도 확인 부탁드릴게요.")
             _annotate_classifications(session, cid, o["month"], o["fuel"],
-                                      f"평월 대비 {o['ratio']}배지만 {reason}. 정상 판정.")
+                                      f"평월 대비 {o['ratio']}배지만 {reason}. AI 1차 판정: 정상(사장님 확인 대기).")
+            _run_tool_and_log(session, company, sid, "notify_owner",
+                              {"message": f"{o['month']}월 {o['fuel']} 사용량이 평소보다 {o['ratio']}배 많은데, {reason} 때문인 것 같아요. 맞는지 확인해주시겠어요?"})
         else:
             _run_tool_and_log(session, company, sid, "notify_owner",
                               {"message": f"{o['month']}월 {o['fuel']} 사용량이 평소보다 {o['ratio']}배 많은데, 이유를 특별히 찾지 못했어요. 확인 한번 부탁드려요."})

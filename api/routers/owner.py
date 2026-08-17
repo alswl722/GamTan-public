@@ -11,6 +11,8 @@
 - GET   /owner/{company_id}/rate-candidate      우대금리 상품 자격 상태(이미 대상 | 개선 필요)
 - POST  /owner/{company_id}/rate-requests       우대금리·설비금융 안내 요청 생성 → 관리자 승인요청 큐
 - GET   /owner/{company_id}/k-taxonomy-leads    K택소노미·설비투자 리드(있으면 설비금융 안내 요청 버튼 노출)
+- GET   /owner/{company_id}/anomaly-checks      이상치 되묻기 — 답변 대기 중인 확인 요청 목록
+- PATCH /owner/{company_id}/classifications/{voucher_id}/anomaly-check  이상치 확인 답변(네/아니오/모르겠어요, 숫자 입력 없음)
 
 GET /admin/alerts(은행 담당자용 포트폴리오 전체)와 같은 판정 로직
 (db/alerts.py::detect_alerts)을 재사용하되 자기 기업으로만 필터한다 —
@@ -23,6 +25,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.db import get_session
@@ -32,7 +35,7 @@ from api.document_ingestion import (
     MissingInstitutionAttributionError,
     ingest_uploaded_document,
 )
-from api.queries import get_coverage, get_owner_progress
+from api.queries import get_coverage, get_owner_progress, get_pending_anomaly_checks
 from db.alerts import detect_alerts
 from db.document_coverage import (
     delete_source_document,
@@ -45,7 +48,7 @@ from db.document_requirements import FuelTypes, required_documents
 from db.document_text_extractor import DocumentParseError
 from db.hometax_excel_parser import HometaxExcelFormatError
 from db.k_taxonomy import k_taxonomy_leads_for_company
-from db.models import Company, SourceDocument
+from db.models import Classification, Company, SourceDocument, Voucher
 from db.pcaf_quality import default_reporting_year
 from db.rate_products import rate_product_status_for_company
 from db.quality_issues import record_ingestion_failure
@@ -92,6 +95,59 @@ def update_fuel_types(company_id: int, body: FuelTypesIn, session: Session = Dep
     session.commit()
 
     return {"fuel_types": fuel_types, "required_documents": required_documents(fuel_types)}
+
+
+@router.get("/{company_id}/anomaly-checks")
+def pending_anomaly_checks(company_id: int, session: Session = Depends(get_session)):
+    """이상치 되묻기(docs/tasks.md) — 사장님이 아직 답하지 않은 이상치 확인 요청 목록."""
+    return {"items": get_pending_anomaly_checks(session, company_id)}
+
+
+class AnomalyCheckIn(BaseModel):
+    answer: Literal["normal", "disputed", "unknown"]
+    reason: str | None = None
+
+
+@router.patch("/{company_id}/classifications/{voucher_id}/anomaly-check")
+def supplement_anomaly_check(
+    company_id: int,
+    voucher_id: int,
+    body: AnomalyCheckIn,
+    session: Session = Depends(get_session),
+):
+    """사장님이 이상치 확인 요청에 답한다 — 숫자는 받지 않는다(핵심 원칙,
+    docs/tasks.md). "네, 정상이에요"는 참고정보로만 남지만, "아니요"·
+    "모르겠어요"는 담당자 우선순위 알림으로 이어진다 — 이미 auto(자동확정)
+    였던 건은 review_required로 되돌려 HITL 큐에서 눈에 띄게 한다.
+
+    다른 기업 소유 전표는 404로 막는다(테넌트 경계, CLAUDE.md 원칙9 — 기존
+    documents DELETE 엔드포인트와 같은 패턴).
+    """
+    voucher = session.get(Voucher, voucher_id)
+    if voucher is None or voucher.company_id != company_id:
+        raise HTTPException(status_code=404, detail=f"voucher_id={voucher_id} 없음")
+
+    classification = session.execute(
+        select(Classification).where(Classification.voucher_id == voucher_id)
+    ).scalar_one_or_none()
+    if classification is None or classification.anomaly_check_status != "pending":
+        raise HTTPException(status_code=404, detail="확인 대기 중인 이상치 요청이 아닙니다")
+
+    status_map = {"normal": "confirmed_normal", "disputed": "disputed", "unknown": "unknown"}
+    classification.anomaly_check_status = status_map[body.answer]
+    classification.anomaly_check_reason = body.reason
+
+    if body.answer != "normal" and classification.status == "auto":
+        classification.status = "review_required"
+
+    session.commit()
+
+    return {
+        "voucher_id": voucher_id,
+        "anomaly_check_status": classification.anomaly_check_status,
+        "anomaly_check_reason": classification.anomaly_check_reason,
+        "status": classification.status,
+    }
 
 
 @router.get("/{company_id}/coverage")

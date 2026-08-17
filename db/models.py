@@ -122,9 +122,25 @@ class Classification(Base):
     finance_lead_type = Column(String(50))           # 녹색여신 후보 | 설비금융 후보 | ...
     k_taxonomy_hitl_required = Column(Boolean, default=False)
 
+    # 이상치 되묻기(docs/tasks.md) — 에이전트가 코드로 판별한 이상치(평월 대비
+    # N배 급증)를 사장님에게 "맞나요?" 확인받는다. 사장님은 숫자를 입력하지
+    # 않는다 — LLM 산수 금지 원칙과 같은 결로, 사장님 입력도 계산 경로가 되면
+    # 안 되기 때문에 예/아니오/모르겠어요 + 짧은 사유만 받는다. 1전표당 최신
+    # 상태만 저장(이력 누적 아님). "네"는 참고정보로만 남지만, "아니요"·
+    # "모르겠어요"는 담당자 우선순위 알림(HITL 큐 배지)으로 이어진다 —
+    # api/routers/owner.py의 anomaly-check 엔드포인트가 이 필드를 채운다.
+    anomaly_check_status = Column(String(20))  # pending | confirmed_normal | disputed | unknown
+    anomaly_check_reason = Column(Text)        # 사장님이 남긴 짧은 사유(선택 입력)
+    anomaly_ratio = Column(Float)              # 평월 대비 배수 — 트레이스 값을 영속화
+
     voucher = relationship("Voucher", back_populates="classification")
 
     __table_args__ = (
+        CheckConstraint(
+            "anomaly_check_status IS NULL OR anomaly_check_status IN "
+            "('pending', 'confirmed_normal', 'disputed', 'unknown')",
+            name="ck_classifications_anomaly_check_status"
+        ),
         CheckConstraint(
             "classification_method IS NULL OR classification_method IN ('rule', 'llm', 'manual')",
             name="ck_classifications_classification_method"

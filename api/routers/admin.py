@@ -162,13 +162,24 @@ def confirm_classification(voucher_id: int, session: Session = Depends(get_sessi
 
     분류 내용(scope/category)은 그대로 두고 '사람이 확인했다'만 기록한다.
     AI가 값을 바꾸는 게 아니라 사람이 판정을 마감하는 것(보조수단성).
+
+    edit()과 마찬가지로 _recalculate()를 호출한다 — 이전엔 "수정 없이 확정"
+    경로에서 재계산이 아예 안 됐는데, voucher.raw_json에 물량이 있는 채로
+    review_required에 머물던 건(예: 담당자가 다른 이유로 대기시켰다가 뒤늦게
+    수량이 채워진 경우)을 확정해도 emission_co2e가 0으로 남는 갭이었다.
     """
     obj = _load_reviewable(session, voucher_id)
+    recalculated = _recalculate(session, obj)
     obj.status = "confirmed"
     obj.reviewed_at = datetime.now(timezone.utc)
     _append_evidence(obj, "담당자 확정(수정 없음)")
     session.commit()
-    return {"voucher_id": voucher_id, "status": obj.status}
+    return {
+        "voucher_id": voucher_id,
+        "status": obj.status,
+        "recalculated": recalculated,
+        "emission_co2e": obj.emission_co2e,
+    }
 
 
 def _bulk_apply(session: Session, voucher_ids: list[int], new_status: str, note: str) -> list[dict]:

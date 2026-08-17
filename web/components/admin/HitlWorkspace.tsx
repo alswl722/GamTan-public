@@ -320,6 +320,32 @@ function DetailPane({ item, onDone }: DetailPaneProps) {
                   </p>
                 </div>
               )}
+              {item.anomaly_check_status && item.anomaly_check_status !== "pending" && (
+                <div
+                  className={cn(
+                    "rounded-md border p-4",
+                    item.anomaly_check_status === "confirmed_normal"
+                      ? "border-brand/40 bg-brand-soft/40"
+                      : "border-hitl/60 bg-hitl/10",
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "mb-1.5 block text-[11px] font-semibold",
+                      item.anomaly_check_status === "confirmed_normal" ? "text-brand-ink" : "text-hitl-ink",
+                    )}
+                  >
+                    이상치 확인 — 사장님 답변 (참고용)
+                    {item.anomaly_ratio && ` · 평월 대비 ${item.anomaly_ratio}배`}
+                  </span>
+                  <p className="text-sm leading-relaxed text-ink">
+                    {item.anomaly_check_status === "confirmed_normal" && "네, 정상이에요"}
+                    {item.anomaly_check_status === "disputed" && "아니요, 확인해볼게요"}
+                    {item.anomaly_check_status === "unknown" && "모르겠어요"}
+                    {item.anomaly_check_reason && ` — "${item.anomaly_check_reason}"`}
+                  </p>
+                </div>
+              )}
             </div>
           </section>
 
@@ -976,8 +1002,19 @@ export function HitlWorkspace({
                       onClick={() => setSelectedId(item.voucher_id)}
                       className="flex min-w-0 flex-1 items-center justify-between gap-2 text-left"
                     >
-                      <span className="truncate text-sm font-semibold text-ink">
-                        {item.raw}
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        <span className="truncate text-sm font-semibold text-ink">
+                          {item.raw}
+                        </span>
+                        {(item.anomaly_check_status === "disputed" ||
+                          item.anomaly_check_status === "unknown") && (
+                          <span
+                            className="flex-shrink-0 rounded-full bg-hitl-ink px-1.5 py-0.5 text-[10px] font-bold text-white"
+                            title="사장님이 이상하다고 답함"
+                          >
+                            이상 확인 요청
+                          </span>
+                        )}
                       </span>
                       <span className="flex flex-shrink-0 items-center gap-1.5">
                         <ConfidenceBadge value={item.confidence} />

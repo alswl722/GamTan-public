@@ -78,6 +78,11 @@ export interface HitlItem {
   company_fuel_types: string[] | null;
   /** review_required(검토 대기) | confirmed(검토 완료, 전송 대기) — 확정해도 전송 전까진 큐에 남는다. */
   status: "review_required" | "confirmed";
+  /** 이상치 되묻기(docs/tasks.md) — 사장님 확인 상태. disputed|unknown이면
+   * 사장님이 명시적으로 "이상하다"고 답한 것이라 우선순위를 올려 표시한다. */
+  anomaly_check_status: "pending" | "confirmed_normal" | "disputed" | "unknown" | null;
+  anomaly_check_reason: string | null;
+  anomaly_ratio: number | null;
 }
 
 /** 담당자 교정 입력 — 분류 필드만. */

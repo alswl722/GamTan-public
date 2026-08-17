@@ -187,6 +187,33 @@ def get_pending_send_count(session: Session, company_id: int) -> int:
     return session.execute(stmt).scalar_one()
 
 
+def get_pending_anomaly_checks(session: Session, company_id: int) -> list[dict]:
+    """이상치 되묻기(docs/tasks.md) — 사장님이 아직 답하지 않은 이상치 확인 요청.
+
+    anomaly_check_status가 'pending'인 건만 — 이미 답한 건(confirmed_normal|
+    disputed|unknown)은 이 목록에서 빠진다. 분류 상세(scope·evidence)는
+    노출하지 않는다 — 예/아니오/모르겠어요로만 답하면 되는 질문이라 그 이상의
+    정보는 불필요(사장님 화면 원칙과 동일, get_classifications() 참고).
+    """
+    stmt = (
+        select(Classification, Voucher)
+        .join(Voucher, Classification.voucher_id == Voucher.id)
+        .where(Voucher.company_id == company_id)
+        .where(Classification.anomaly_check_status == "pending")
+        .order_by(Voucher.month, Voucher.issue_date)
+    )
+    rows = session.execute(stmt).all()
+    return [
+        {
+            "voucher_id": v.id,
+            "month": v.month,
+            "fuel": c.fuel_type,
+            "ratio": c.anomaly_ratio,
+        }
+        for c, v in rows
+    ]
+
+
 def _selected_hitl_fuel_labels(fuel_types: dict | None) -> list[str] | None:
     """companies.fuel_types_json → HITL 연료 드롭다운(FUEL_OPTIONS)에 쓸 세부 연료명 목록.
 
@@ -217,7 +244,9 @@ def get_hitl_queue(session: Session) -> list[dict]:
     "전송" 버튼(POST /admin/companies/{id}/send-classifications)을 눌러야
     사장님 화면에 실제로 노출된다. 전송 이후에는 이 큐에서도 사라진다.
     (데모는 시연 기업 1곳이지만 쿼리는 기업 무관 — 결선 포트폴리오로 그대로 확장.)
-    정렬: 기업 → 월 → 발행일.
+    정렬: 사장님이 이상치를 "아니요/모르겠어요"로 답한 건(disputed|unknown)을
+    최우선으로, 그다음 기업 → 월 → 발행일(docs/tasks.md — 사장님이 명시적으로
+    "이상하다"고 답한 건을 그냥 묻히게 두지 않는다).
     """
     stmt = (
         select(Classification, Voucher, Company)
@@ -227,7 +256,10 @@ def get_hitl_queue(session: Session) -> list[dict]:
             (Classification.status == "review_required")
             | ((Classification.status == "confirmed") & Classification.sent_to_owner_at.is_(None))
         )
-        .order_by(Company.id, Voucher.month, Voucher.issue_date)
+        .order_by(
+            Classification.anomaly_check_status.in_(("disputed", "unknown")).desc(),
+            Company.id, Voucher.month, Voucher.issue_date,
+        )
     )
     rows = session.execute(stmt).all()
     return [
@@ -248,6 +280,9 @@ def get_hitl_queue(session: Session) -> list[dict]:
             "source_document_id": c.source_document_id,
             "company_fuel_types": _selected_hitl_fuel_labels(co.fuel_types_json),
             "status": c.status,
+            "anomaly_check_status": c.anomaly_check_status,
+            "anomaly_check_reason": c.anomaly_check_reason,
+            "anomaly_ratio": c.anomaly_ratio,
         }
         for c, v, co in rows
     ]

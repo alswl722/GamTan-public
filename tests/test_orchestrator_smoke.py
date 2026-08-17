@@ -68,7 +68,13 @@ def _messages(session: Session, company_id: int) -> str:
 
 
 def test_demo_scenario_shows_gap_and_self_verification(db, monkeypatch):
-    """demo 시나리오 = 킬러씬 A 전체: 결손 발견 + 7월 경유 이상치 정상 판정."""
+    """demo 시나리오 = 킬러씬 A 전체: 결손 발견 + 7월 경유 이상치 자가검증.
+
+    이상치 되묻기(docs/tasks.md) 도입 이후: LLM이 "정상"으로 1차 판단해도
+    최종 확인은 사장님 몫이라 anomaly_check_status='pending'으로 남는다 —
+    evidence 주석은 참고용이고, 트레이스 문구도 "확인 부탁드릴게요"로 바뀐다
+    (예전처럼 AI가 단독으로 "걱정 안 하셔도 돼요"라고 확정하지 않음).
+    """
     session, cid = db
     monkeypatch.setattr(orch, "_judge_anomaly_with_llm",
                         lambda items: (True, "지게차 2대 증차 문구 확인"))
@@ -79,8 +85,19 @@ def test_demo_scenario_shows_gap_and_self_verification(db, monkeypatch):
     msgs = _messages(session, cid)
     assert "비어있네요" in msgs, f"결손 감지 스텝 없음: {msgs}"
     assert "7월 경유" in msgs and "왜 그런지 다시 확인해볼게요" in msgs, f"이상치 감지 스텝 없음: {msgs}"
-    assert "정상적인 사용이니 걱정 안 하셔도 돼요" in msgs, f"자가검증 정상 판정 스텝 없음: {msgs}"
+    assert "사장님께도 확인 부탁드릴게요" in msgs, f"자가검증 1차판정 스텝 없음: {msgs}"
     assert result["mode"] == "llm"
+
+    from db.models import Classification, Voucher
+    pending = (
+        session.query(Classification)
+        .join(Voucher, Voucher.id == Classification.voucher_id)
+        .filter(Voucher.company_id == cid, Voucher.month == 7, Classification.fuel_type == "경유")
+        .all()
+    )
+    assert pending, "7월 경유 분류 행을 찾지 못함"
+    assert all(c.anomaly_check_status == "pending" for c in pending), \
+        "LLM이 정상 판단해도 사장님 확인 전까지는 pending으로 남아야 함"
 
 
 def test_normal_scenario_has_no_anomaly(db, monkeypatch):
@@ -136,5 +153,5 @@ def test_judge_failure_is_visible_not_hidden(db, monkeypatch):
 
     msgs = _messages(session, cid)
     assert "다시 확인하다가 막혔어요" in msgs, f"판단 실패가 트레이스에 없음: {msgs}"
-    assert "정상적인 사용이니 걱정 안 하셔도 돼요" not in msgs  # 판단한 척하지 않는다
+    assert "사장님께도 확인 부탁드릴게요" not in msgs  # 판단한 척하지 않는다
     assert result["mode"] == "judge_failed"
