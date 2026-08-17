@@ -128,8 +128,9 @@ def get_classifications(session: Session, company_id: int) -> list[dict]:
     정렬: 월·발행일순.
     """
     stmt = (
-        select(Classification, Voucher)
+        select(Classification, Voucher, SourceDocument)
         .join(Voucher, Classification.voucher_id == Voucher.id)
+        .outerjoin(SourceDocument, Voucher.source_document_id == SourceDocument.id)
         .where(Voucher.company_id == company_id)
         .where(Classification.scope.in_((1, 2)))
         .where(
@@ -145,16 +146,27 @@ def get_classifications(session: Session, company_id: int) -> list[dict]:
     return [
         {
             "voucher_id": v.id,
-            "raw": v.item_description,
+            # 세금계산서 원문("지게차 경유 외 1종")은 분류 판단의 실제 근거라
+            # evidence로서 의미가 있지만, 전기/가스고지서는 문서종류만으로
+            # Scope가 정해져 판단 근거가 아니다. 값도 결정론적 파서/LLM 라우터가
+            # 실제로 못 읽으면 고정 문구("전기요금 (산업용 을)" 등)로 채워지는
+            # 자리표시자라 "읽어온 값"처럼 보이면 오해의 소지가 있다 — 세금계산서
+            # 건에서만 노출한다.
+            "raw": v.item_description if sd is not None and sd.document_type == "tax_invoice" else None,
             "scope": c.scope,
             "category": c.category,
             "fuel": c.fuel_type,
             "amount_krw": int(c.amount_krw) if c.amount_krw is not None else None,
+            # 탄소량은 이 값(사용량) × 배출계수로 계산된다(db/calc_engine.py::
+            # compute_emission) — amount_krw(청구금액)는 계산에 안 쓰이는 참고
+            # 정보일 뿐이라, 실제 근거인 사용량을 화면에 같이 보여준다.
+            "activity_amount": c.activity_amount,
+            "activity_unit": c.activity_unit,
             "confidence": c.confidence,
             "evidence": c.evidence,
             "method": c.method,
         }
-        for c, v in rows
+        for c, v, sd in rows
     ]
 
 
