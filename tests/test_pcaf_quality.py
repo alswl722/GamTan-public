@@ -62,7 +62,7 @@ def db(tmp_path):
         yield session, company.id
 
 
-def _add_voucher(session, cid, month, item, *, quantity=None, scope=1, status="auto"):
+def _add_voucher(session, cid, month, item, *, quantity=None, scope=1, status="auto", fuel_type="도시가스"):
     v = Voucher(
         company_id=cid, source="hometax", year=YEAR, month=month,
         supplier_name="테스트", item_description=item,
@@ -72,7 +72,7 @@ def _add_voucher(session, cid, month, item, *, quantity=None, scope=1, status="a
     session.add(v)
     session.flush()
     session.add(Classification(
-        voucher_id=v.id, scope=scope, category="고정연소", fuel_type="도시가스",
+        voucher_id=v.id, scope=scope, category="고정연소", fuel_type=fuel_type,
         amount_krw=100000, emission_co2e=500.0, confidence=0.9,
         evidence="테스트", method="rule", status=status,
     ))
@@ -176,11 +176,32 @@ def test_other_bucket_vouchers_excluded_from_both_completeness_and_basis(db):
     양쪽에서 동일하게 제외된다 — 리포트에 안 보이는 전표가 옵션 코드 선택에는 영향을
     주는 근거-결과 불일치를 막는다(PR #25 리뷰)."""
     session, cid = db
-    _add_voucher(session, cid, 1, "사무용품비", quantity=100)  # 어느 버킷에도 안 잡힘
+    _add_voucher(session, cid, 1, "사무용품비", quantity=100, fuel_type="사무용품")  # 어느 버킷에도 안 잡힘
 
     completeness = assess_inventory_completeness(session, cid, YEAR, "scope_1")
     assert completeness.months_covered == 0
     assert not completeness.activity_basis_breakdown
+
+
+def test_fuel_bucket_uses_classification_fuel_type_not_item_description_text(db):
+    """실측(2026-08-17, 사장님 탄소리포트) — 전기요금 이메일 청구서 업로드 건이
+    월별 추이 차트(db/pcaf.py, Classification.scope를 신뢰)엔 뜨는데 이 화면의
+    Scope 카드엔 "활동자료 없음"으로 나오는 불일치가 발견됐다. 원인은 이 모듈이
+    분류 엔진이 이미 확정한 Classification.fuel_type을 무시하고 Voucher.
+    item_description 원문을 키워드로 재해석했던 것 — 원문 표현이 예상 밖이면
+    (letter-spacing 등) 키워드가 하나도 안 걸려 조용히 "기타"로 빠졌다.
+    item_description에 "전기" 관련 키워드가 전혀 없어도(letter-spacing 재현:
+    "전 기 요 금"), Classification.fuel_type="전기"만 정확하면 scope_2로
+    잡혀야 한다."""
+    session, cid = db
+    _add_voucher(session, cid, 7, "전 기 요 금 (산업용 을)", scope=2, fuel_type="전기")
+
+    completeness = assess_inventory_completeness(session, cid, YEAR, "scope_2")
+    assert completeness.months_covered == 1
+    assert completeness.activity_basis_breakdown
+
+    emissions = aggregate_scope_emissions(session, cid, YEAR, "scope_2")
+    assert emissions["emission_tco2e"] is not None and emissions["emission_tco2e"] > 0
 
 
 # ── assess_borrower_emission_quality — 활동자료 근거별 옵션 매칭 ─────────────
@@ -195,7 +216,7 @@ def test_energy_consumption_data_scores_higher_than_revenue_estimate(db):
     session.add(company2)
     session.commit()
     for m in range(1, 13):
-        _add_voucher(session, company2.id, m, "유류대금")
+        _add_voucher(session, company2.id, m, "유류대금", fuel_type="경유")
     revenue_result = assess_borrower_emission_quality(session, company2.id, YEAR, "scope_1")
 
     assert energy_result["candidate_score"] < revenue_result["candidate_score"]
@@ -241,7 +262,7 @@ def test_scope1_basis_not_polluted_by_scope2_data(db):
     for m in range(1, 13):
         _add_voucher(session, cid, m, "도시가스", quantity=100)  # Scope 1: energy_consumption
     for m in range(1, 13):
-        _add_voucher(session, cid, m, "전기요금")  # Scope 2: revenue(수량 없음)
+        _add_voucher(session, cid, m, "전기요금", scope=2, fuel_type="전기")  # Scope 2: revenue(수량 없음)
 
     scope1 = assess_borrower_emission_quality(session, cid, YEAR, "scope_1")
     scope2 = assess_borrower_emission_quality(session, cid, YEAR, "scope_2")
@@ -338,8 +359,8 @@ def test_aggregate_scope_emissions_scope1_and_scope2_are_independent(db):
     """Scope 1(가스)과 Scope 2(전기)는 서로 다른 값으로 독립 집계된다."""
     session, cid = db
     _add_voucher(session, cid, 1, "도시가스", quantity=100, scope=1)
-    _add_voucher(session, cid, 1, "전기요금", scope=2)
-    _add_voucher(session, cid, 2, "전기요금", scope=2)
+    _add_voucher(session, cid, 1, "전기요금", scope=2, fuel_type="전기")
+    _add_voucher(session, cid, 2, "전기요금", scope=2, fuel_type="전기")
 
     scope1 = aggregate_scope_emissions(session, cid, YEAR, "scope_1")
     scope2 = aggregate_scope_emissions(session, cid, YEAR, "scope_2")
@@ -395,7 +416,7 @@ def test_scope_emission_detail_excludes_rejected(db):
 def test_scope_emission_detail_scope1_and_scope2_are_independent(db):
     session, cid = db
     _add_voucher(session, cid, 1, "도시가스", quantity=100, scope=1)
-    _add_voucher(session, cid, 1, "전기요금", scope=2)
+    _add_voucher(session, cid, 1, "전기요금", scope=2, fuel_type="전기")
 
     scope1 = scope_emission_detail(session, cid, YEAR, "scope_1")
     scope2 = scope_emission_detail(session, cid, YEAR, "scope_2")

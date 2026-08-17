@@ -58,14 +58,16 @@ def get_industry_distribution(
     return get_distribution(session, industry_code, scope, employee_count)
 
 
-def calculate_pcaf(session: Session, company_id: int) -> dict:
+def calculate_pcaf(session: Session, company_id: int, year: int | None = None) -> dict:
     """도구③ 후반부 — 저장된 분류 결과를 집계해 PCAF Before/After·벤치마킹 반환.
 
     아이템별 결정론 계산(금액→물량→탄소량)은 classify_vouchers 가 이미
     compute_emission 으로 수행해 Classification 에 저장해 둔다. 이 함수는
     그 저장분을 읽어 등급으로 집계만 한다(읽기 전용).
+
+    year는 after.monthly(월별 추이)에만 적용된다(db/pcaf.py::_after_measured 참고).
     """
-    return company_pcaf_summary(session, company_id)
+    return company_pcaf_summary(session, company_id, year=year)
 
 
 def _unclassified_vouchers(session: Session, company_id: int) -> list[Voucher]:

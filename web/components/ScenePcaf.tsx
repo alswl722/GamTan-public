@@ -222,22 +222,30 @@ const FUEL_BAR_COLOR: Record<string, string> = {
 const FUEL_ORDER = ["전기", "가스", "경유/유류", "기타"];
 const CHART_HEIGHT_PX = 96;
 
-// 점들을 부드러운 곡선으로 잇는 SVG path — 각 구간을 다음 점과의 중점까지
-// 2차 베지어(Q)로 그리고, 마지막만 실제 마지막 점까지 부드럽게 이어지도록(T)
-// 마무리한다. 외부 차트 라이브러리 없이 표준적인 "점 중점 스무딩" 기법.
+// 점들을 부드러운 곡선으로 잇는 SVG path — Catmull-Rom 스플라인을 3차 베지어로
+// 변환해서 그린다. 예전엔 "다음 점과의 중점까지만" 잇는 근사 기법(2차 베지어)을
+// 썼는데, 이러면 한 달만 튀고 양옆이 0인 경우(실측 사례) 곡선 봉우리가 실제
+// 막대 꼭대기까지 안 닿고 중간에서 눌려 보였다(2026-08-17, 막대 색이 꽉 차게
+// 고쳐지면서 이 어긋남이 눈에 띄게 드러나 발견 — "선 그래프랑 다르잖아"). 이
+// 방식은 모든 데이터 점을 정확히 지나가므로 막대 꼭대기와 곡선이 항상 일치한다.
 function smoothLinePath(pts: { x: number; y: number }[]): string {
   if (pts.length === 0) return "";
   if (pts.length === 1) return `M ${pts[0].x},${pts[0].y} L ${pts[0].x},${pts[0].y}`;
+  if (pts.length === 2) return `M ${pts[0].x},${pts[0].y} L ${pts[1].x},${pts[1].y}`;
+
+  const at = (i: number) => pts[Math.max(0, Math.min(pts.length - 1, i))];
   let d = `M ${pts[0].x},${pts[0].y}`;
   for (let i = 0; i < pts.length - 1; i++) {
-    const curr = pts[i];
-    const next = pts[i + 1];
-    const midX = (curr.x + next.x) / 2;
-    const midY = (curr.y + next.y) / 2;
-    d += ` Q ${curr.x},${curr.y} ${midX},${midY}`;
+    const p0 = at(i - 1);
+    const p1 = at(i);
+    const p2 = at(i + 1);
+    const p3 = at(i + 2);
+    const cp1x = p1.x + (p2.x - p0.x) / 6;
+    const cp1y = p1.y + (p2.y - p0.y) / 6;
+    const cp2x = p2.x - (p3.x - p1.x) / 6;
+    const cp2y = p2.y - (p3.y - p1.y) / 6;
+    d += ` C ${cp1x},${cp1y} ${cp2x},${cp2y} ${p2.x},${p2.y}`;
   }
-  const last = pts[pts.length - 1];
-  d += ` T ${last.x},${last.y}`;
   return d;
 }
 
@@ -272,15 +280,17 @@ function MonthlyTrendChart({ monthly }: { monthly: MonthlyRow[] }) {
             >
               {fuels.map((f) => {
                 const v = m.by_fuel[f] || 0;
-                if (v <= 0) return null;
-                // flex-basis를 auto(기본값)로 두면 빈 div의 콘텐츠 기준 크기 계산에
-                // 기대야 해서 렌더링 환경에 따라 회색 배경(bg-line)이 안 채워지고
-                // 남는 경우가 실측 확인됐다(2026-08-17, 실제 데이터로 검증 — total/
-                // by_fuel 합은 정확히 일치해 데이터 문제가 아니었음) — flex-basis를
-                // 0으로 명시해 flex-grow 비율로만 채워지도록 고정한다(막대 그래프의
-                // 표준 관례).
+                if (v <= 0 || m.total_tco2e <= 0) return null;
+                // flex-grow(비율) 방식은 브라우저 devtools로 직접 재현 확인한 결과
+                // grow 값이 1 미만인 소수(예: 0.41)일 때 "남는 공간을 전부 차지"가
+                // 아니라 그 숫자를 컨테이너 대비 퍼센트처럼 그대로 써버리는 동작이
+                // 나왔다(2026-08-17, 실측 — grow=1/100은 100% 채움, grow=0.41은
+                // 정확히 41%만 채움. 형제 요소 없음도 콘솔로 확인해 다른 원인은
+                // 배제됨). flex-grow 자체를 안 쓰고 이 연료가 그 달 총량에서 차지하는
+                // 비율을 직접 계산해 height(%)로 넣는 방식으로 우회한다.
+                const pct = (v / m.total_tco2e) * 100;
                 return (
-                  <div key={f} className={FUEL_BAR_COLOR[f]} style={{ flex: `${v} 0 0` }} />
+                  <div key={f} className={FUEL_BAR_COLOR[f]} style={{ height: `${pct}%` }} />
                 );
               })}
             </div>
@@ -532,16 +542,21 @@ export function ScenePcaf({ showHeading = true }: { showHeading?: boolean } = {}
       // 우대금리 카드는 이제 메인 화면(web/components/RateProductCard.tsx)이 조회한다.
       // K택소노미 리드 카드도 마찬가지로 메인 화면(web/components/KTaxonomyCard.tsx)이 조회한다.
       // 월별 배출 추이만 구 엔진에서 재사용(파일 상단 주석 참고) — 부가 정보라
-      // 실패해도 리포트 본문(Scope 품질 후보)은 그대로 보여준다. 구 엔진은 연도
-      // 필터가 없어 선택한 연도와 무관하게 항상 전체 전표 기준으로 나온다(기존 한계).
-      apiGet<LegacyPcafResponse>(`/pcaf/${cid}`)
+      // 실패해도 리포트 본문(Scope 품질 후보)은 그대로 보여준다. year를 명시적으로
+      // 안 주면(undefined) 이 함수 인자와 무관하게 res.reporting_year(quality-report가
+      // 실제로 확정한 연도, db/pcaf_quality.py::default_reporting_year)를 그대로
+      // 넘긴다 — 실측(2026-08-17) 연도 선택기를 바꿔도 이 차트만 항상 똑같이
+      // 보이던 문제 발견, db/pcaf.py::_monthly_by_fuel에 연도 필터를 추가하며 같이 고침.
+      apiGet<LegacyPcafResponse>(`/pcaf/${cid}?year=${res.reporting_year}`)
         .then((r) => setMonthly(r.after?.monthly ?? null))
         .catch((err) => console.error("월별 추이 조회 실패(부가 정보라 화면은 계속 진행):", err));
-      if (years === null) {
-        getReportingYears(cid)
-          .then((r) => setYears(r.years))
-          .catch((err) => console.error("연도 목록 조회 실패(부가 정보라 화면은 계속 진행):", err));
-      }
+      // 연도 목록은 매번 다시 조회한다 — 캐시해서 최초 1회만 부르면, 그 해의 마지막
+      // 자료를 다른 탭(데이터 업로드)에서 삭제한 뒤 돌아와도 이미 사라진 연도가
+      // 선택기에 그대로 남을 수 있다(web/app/owner/uploads/page.tsx와 동일한 이유로
+      // 2026-08-17 같이 수정).
+      getReportingYears(cid)
+        .then((r) => setYears(r.years))
+        .catch((err) => console.error("연도 목록 조회 실패(부가 정보라 화면은 계속 진행):", err));
     } catch (err) {
       // 목업으로 위장하지 않는다 — 실패는 실패로 표시
       console.error("PCAF 품질 조회 실패:", err);

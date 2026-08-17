@@ -177,11 +177,20 @@ def parse_year_month_from_cell_text(text: str) -> tuple[int, int] | None:
 
     db/document_llm_router.py 전용 공개 진입점 — parse_amount_from_cell_text와
     같은 이유(LLM 응답의 값이 아니라 셀 원문을 항상 재파싱).
+
+    실측(2026-08-17, 실제 한전 "전기요금청구 및 영수증"): 이 문서엔 -./로 구분된
+    날짜가 단 한 군데도 없고 전부 "2021년 1월"/"2021년 01월 06일"처럼 년/월(/일)
+    한글 구분자만 쓰였다 — LLM이 정확한 날짜 셀을 가리켜도 재파싱이 실패해 문서
+    전체가 거부됐다. _parse_management_fee_date가 이미 쓰던 2번째 패턴과 동일하게
+    년/월 표기도 시도한다.
     """
     m = re.search(rf"(\d{{4}}){_DATE_SEP}(\d{{2}})(?:{_DATE_SEP}\d{{2}})?", text)
-    if not m:
-        return None
-    return int(m.group(1)), int(m.group(2))
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    m = re.search(r"(\d{4})\s*년\s*(\d{1,2})\s*월", text)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    return None
 
 
 # 알림톡류 문서(한전 사용량 알림 등)는 "예상 전기요금"/"예상 사용량"처럼 실제 라벨과
@@ -290,9 +299,12 @@ def _parse_electric_bill(text: str) -> dict:
     # "2021년 12월분"처럼 청구월이 찍혀 있었다 — 그쪽도 함께 시도한다. "사용기간:
     # 10월22일~12월21일"처럼 청구월과 다른 달에 걸친 사용기간 범위는 있어도 청구월
     # 자체를 명시한 라벨은 없었다.
+    # 실측(2026-08-17, "전기요금청구 및 영수증" 서식): "분" 없이 "OO고객님의 2021년
+    # 1월"처럼만 찍힌 경우도 있었다 — "분"을 필수로 요구하면 이런 서식은 전부 실패
+    # 한다. 선택적으로 바꿔 둘 다 커버한다.
     date_m = re.search(
         rf"{_label_pattern('청구월')}\s*:\s*(\d{{4}}){_DATE_SEP}(\d{{2}})", text
-    ) or re.search(r"(\d{4})년\s*(\d{1,2})월분", text)
+    ) or re.search(r"(\d{4})년\s*(\d{1,2})월분?", text)
     if not date_m:
         raise DocumentParseError("청구월을 찾지 못했어요")
     # 실측: 실제 고지서는 "사용량(kWh)" 라벨을 못 찾을 수 있다(사용전력량이 비교
@@ -326,24 +338,41 @@ def _parse_electric_bill(text: str) -> dict:
 
 
 def _parse_gas_bill(text: str) -> dict:
-    date_m = re.search(rf"{_label_pattern('사용월')}\s*:\s*(\d{{4}}){_DATE_SEP}(\d{{2}})", text)
+    # 전기요금 고지서에서 실측으로 확인된 것과 같은 종류의 편차를 도시가스 고지서도
+    # 겪을 가능성이 높다고 보고 선제 적용한다(도시가스 실물 샘플은 아직 미확보 —
+    # docs/document-ocr-taxonomy.md 참고, 그래서 세 군데 모두 "선택"처럼 완화하되
+    # 기존 라벨 매칭도 그대로 유지해 실측 전 추측으로 기존 동작을 깨지 않는다).
+    date_m = re.search(
+        rf"{_label_pattern('사용월')}\s*:\s*(\d{{4}}){_DATE_SEP}(\d{{2}})", text
+    ) or re.search(r"(\d{4})년\s*(\d{1,2})월분?", text)
     if not date_m:
         raise DocumentParseError("사용월을 찾지 못했어요")
-    quantity = _parse_amount(
-        _line_value(text, _label_pattern("사용량(m³)"), field_label="사용량"), field_label="사용량"
-    )
+    # 전기요금과 같은 원칙 — 사용량 라벨을 못 찾아도 물량 없이 파싱 자체는 성공시킨다
+    # (계산 엔진이 어차피 전기·도시가스는 수량 없으면 금액 역산 대신 사람검토로
+    # 보낸다 — db/calc_engine.py::_QUANTITY_ONLY). 못 찾았다고 문서 전체를 거부하면
+    # 날짜·금액은 멀쩡히 읽었는데도 재업로드를 요구하게 된다.
+    quantity = None
+    try:
+        quantity = _parse_amount(
+            _line_value(text, _label_pattern("사용량(m³)"), field_label="사용량"), field_label="사용량"
+        )
+    except DocumentParseError:
+        pass
     amount = _parse_amount(
-        _line_value(text, _label_pattern("청구금액(원)"), field_label="청구금액"), field_label="청구금액"
+        _line_value(text, _label_pattern("청구금액") + f"(?:{_label_pattern('(원)')})?", field_label="청구금액"),
+        field_label="청구금액",
     )
-    return {
+    result = {
         "supplier_name": "도시가스",
         "item_description": "도시가스",
         "supply_amount_krw": amount,
-        "quantity": quantity,
-        "quantity_unit": "m3",
         "year": int(date_m.group(1)),
         "month": int(date_m.group(2)),
     }
+    if quantity is not None:
+        result["quantity"] = quantity
+        result["quantity_unit"] = "m3"
+    return result
 
 
 def find_supplier_name_best_effort(text: str) -> str:
@@ -374,22 +403,39 @@ def parse_tax_invoice_header(text: str) -> dict:
     }
 
 
+# 규격(2번째 컬럼) 자리에 한글 음절이 있으면 실제 규격값이 아니라 품목명이 공백
+# 때문에 잘못 잘려 들어온 것으로 본다 — 실제 규격은 "-"·빈값·영문 단위 코드가
+# 대부분이라("EA", 모델코드 등) 완성형 한글 단어가 나오는 경우는 거의 없다.
+_HANGUL_SYLLABLE = re.compile(r"[가-힣]")
+
+
 def _parse_tax_invoice_item_row(text: str) -> dict:
     # 품목 행: "경유 L 301L 1,400 420,833" — 품목명, 규격, 수량+단위(예: "301L"), 단가(원),
     # 공급가액(원). 마지막 두 컬럼만 순수 숫자/콤마라 이 패턴으로 헤더 행("품목명 규격 ...
-    # 공급가액(원)")과 구분된다(헤더는 괄호·한글이 섞여 있어 [\d,]+로 안 끝남). 한 줄
+    # 공급가액(원)")과 구분된다(헤더는 괄호·한글이 섞여 있어 [\d,]+로 안 끝난다). 한 줄
     # 문자열에 의존하는 방식이라 OCR 표 사진에는 안 통할 수 있다 — 그 경우
     # parse_tax_invoice_table_rows()(좌표 기반)를 대신 쓴다.
-    row_m = re.search(r"^(\S+)\s+\S+\s+(\S+)\s+[\d,]+\s+([\d,]+)\s*$", text, re.MULTILINE)
+    #
+    # 실측(2026-08-17, 기존 테스트 픽스처로 재현): 품목명이 "유류대금 외1종"처럼
+    # 공백을 포함하면 이 정규식은 공백 앞까지만("유류대금") 캡처하고 나머지("외1종")를
+    # 규격 컬럼으로 흘려보낸다 — 에러 없이 조용히 성공해서 발견이 늦었다. "동절기
+    # 난방유"였다면 실제 연료 키워드("난방유")가 통째로 사라져 분류 오류로 이어질
+    # 수 있었다. 정규식만으로는 공백이 품목명 내부 띄어쓰기인지 컬럼 구분인지 구별할
+    # 수 없어(좌표 정보가 없는 텍스트 레이어 경로 특유의 한계) 확실히 못 나눌 바엔
+    # 명확히 실패시켜 OCR 좌표매칭·LLM 라우터(둘 다 셀 단위라 이 모호함이 없음)로
+    # 넘긴다 — 틀린 값을 조용히 저장하는 것보다 실패 가시성이 우선.
+    row_m = re.search(r"^(\S+)\s+(\S+)\s+(\S+)\s+[\d,]+\s+([\d,]+)\s*$", text, re.MULTILINE)
     if not row_m:
         raise DocumentParseError("품목·공급가액 행을 찾지 못했어요")
+    if _HANGUL_SYLLABLE.search(row_m.group(2)):
+        raise DocumentParseError("품목명에 공백이 있어 한 줄로는 정확히 못 나눴어요")
     result = {
         "item_description": row_m.group(1).strip(),
-        "supply_amount_krw": _parse_amount(row_m.group(3), field_label="공급가액"),
+        "supply_amount_krw": _parse_amount(row_m.group(4), field_label="공급가액"),
     }
     # 세금계산서는 물량이 안 찍힌 경우("-" 등)가 더 흔하다 — 이때는 quantity 필드
     # 자체를 안 넣어 기존 금액÷단가 환산 경로를 그대로 탄다.
-    qty_m = re.match(r"^([\d,]+)(\D+)$", row_m.group(2))
+    qty_m = re.match(r"^([\d,]+)(\D+)$", row_m.group(3))
     if qty_m:
         result["quantity"] = _parse_amount(qty_m.group(1), field_label="수량")
         result["quantity_unit"] = qty_m.group(2).strip()

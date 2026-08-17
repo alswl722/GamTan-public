@@ -13,9 +13,13 @@ router = APIRouter(prefix="/pcaf", tags=["pcaf"])
 
 
 @router.get("/{company_id}")
-def pcaf(company_id: int, session: Session = Depends(get_session)):
-    """기업의 PCAF Before/After 등급·배출량·동종 벤치마킹."""
+def pcaf(company_id: int, year: int | None = None, session: Session = Depends(get_session)):
+    """기업의 PCAF Before/After 등급·배출량·동종 벤치마킹.
+
+    year는 after.monthly(월별 추이 차트)에만 적용된다 — 생략하면 이 구 엔진의
+    기존 동작(전체 연도 합산)을 그대로 유지한다(db/pcaf.py::_after_measured 참고).
+    """
     try:
-        return calculate_pcaf(session, company_id)
+        return calculate_pcaf(session, company_id, year=year)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))

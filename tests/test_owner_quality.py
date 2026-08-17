@@ -60,7 +60,7 @@ def _add_institution_borrower(session, cid, *, consent_status="active"):
     return inst.id
 
 
-def _add_voucher(session, cid, month, item, *, quantity=100, scope=1, status="auto"):
+def _add_voucher(session, cid, month, item, *, quantity=100, scope=1, status="auto", fuel_type="도시가스"):
     v = Voucher(
         company_id=cid, source="hometax", year=YEAR, month=month,
         supplier_name="테스트", item_description=item,
@@ -69,7 +69,7 @@ def _add_voucher(session, cid, month, item, *, quantity=100, scope=1, status="au
     session.add(v)
     session.flush()
     session.add(Classification(
-        voucher_id=v.id, scope=scope, category="고정연소", fuel_type="도시가스",
+        voucher_id=v.id, scope=scope, category="고정연소", fuel_type=fuel_type,
         amount_krw=100000, emission_co2e=500.0, confidence=0.9,
         evidence="테스트", method="rule", status=status,
     ))
@@ -180,8 +180,12 @@ def test_quality_report_defaults_to_latest_year_with_data_not_calendar_year(api_
     assert body["scope_1"]["emission_tco2e"] is not None
 
 
-def test_quality_report_reuses_saved_version_on_repeat_calls(api_client):
-    """재조회는 저장된 최신 버전을 그대로 반환한다 — 조회할 때마다 새 버전을 안 만든다."""
+def test_quality_report_recomputes_draft_on_repeat_calls(api_client):
+    """draft(이 라우터가 만드는 값은 항상 draft)는 재조회마다 다시 계산해 새
+    버전을 만든다 — "저장된 값 그대로 반환"이 아니다. 실측(2026-08-17): 분류
+    로직을 고쳐도 예전에 한 번 조회돼 저장된 잘못된 draft가 계속 재사용되던
+    사고의 회귀 테스트 — draft는 확정이 아니라 마지막 조회 시점 스냅숏일 뿐이라
+    최신 로직으로 다시 계산돼야 한다."""
     client, session, cid = api_client
     _add_institution_borrower(session, cid)
     for m in range(1, 13):
@@ -191,7 +195,28 @@ def test_quality_report_reuses_saved_version_on_repeat_calls(api_client):
     res2 = client.get(f"/owner/{cid}/quality-report?year={YEAR}")
 
     assert res1.json()["scope_1"]["version"] == 1
-    assert res2.json()["scope_1"]["version"] == 1
+    assert res2.json()["scope_1"]["version"] == 2
+    assert res1.json()["scope_1"]["status"] == "draft"
+
+
+def test_quality_report_reuses_approved_version_on_repeat_calls(api_client):
+    """approved(은행 담당자 승인)는 CLAUDE.md 원칙대로 덮어쓰지 않고 그대로 재사용한다."""
+    client, session, cid = api_client
+    _add_institution_borrower(session, cid)
+    for m in range(1, 13):
+        _add_voucher(session, cid, m, "도시가스")
+
+    client.get(f"/owner/{cid}/quality-report?year={YEAR}")
+    from db.models import BorrowerEmissionInventory
+    inv = session.query(BorrowerEmissionInventory).filter_by(
+        company_id=cid, reporting_year=YEAR, scope_group="scope_1",
+    ).one()
+    inv.status = "approved"
+    session.commit()
+
+    res = client.get(f"/owner/{cid}/quality-report?year={YEAR}")
+    assert res.json()["scope_1"]["version"] == 1
+    assert res.json()["scope_1"]["status"] == "approved"
 
 
 def test_quality_report_benchmark_uses_scope1_plus_scope2_total(api_client):
@@ -199,7 +224,7 @@ def test_quality_report_benchmark_uses_scope1_plus_scope2_total(api_client):
     _add_institution_borrower(session, cid)
     for m in range(1, 13):
         _add_voucher(session, cid, m, "도시가스", scope=1)
-        _add_voucher(session, cid, m, "전기요금", scope=2)
+        _add_voucher(session, cid, m, "전기요금", scope=2, fuel_type="전기")
 
     res = client.get(f"/owner/{cid}/quality-report?year={YEAR}")
     body = res.json()
