@@ -24,6 +24,7 @@
 | 백엔드 | FastAPI (Python), SQLAlchemy ORM, **Alembic**(스키마 마이그레이션 — `alembic/versions/`, `Base.metadata.create_all`이나 수동 `ALTER TABLE` 직접 사용 금지) |
 | 프론트 | Next.js, 라우트 2개: `/owner`(사장님 앱 — 기업 선택기 있는 메인 화면, 위저드 본체는 `/owner/measure`) `/admin`(관리자) |
 | DB | **Supabase (PostgreSQL)**, 팀 공유 개발 DB — SQLAlchemy로 직접 접속. Supabase Auth/Storage/자동 REST **사용 금지** (예외: 트레이스 뷰 Realtime 구독만 선택 허용, 안 되면 2초 폴링) |
+| 벡터 검색 | 정부 지원사업 매칭(§7 하이브리드 데이터 입력 이후 안내 레이어, `docs/gov-support-matching-plan.md`)의 임베딩 유사도 계산용. 임베딩은 `JSON`(float 리스트)으로 공유 Postgres에 저장하고, 코사인 유사도는 Python으로 계산(`pgvector` Postgres 익스텐션·SQLAlchemy `Vector` 타입은 안 씀 — 이 프로젝트 테스트가 SQLite로 도는데 `Vector` 타입이 Postgres 전용이라 충돌, 2026-08-18 확인). FAISS 등 로컬 인덱스 파일 방식도 안 씀(공유 DB 원칙과 충돌 — 위 DB 행 참고). 임베딩은 google-genai 임베딩 API로 생성 |
 | LLM | 전표 분류(도구②): **Gemini API**(google-genai, gemini-3.5-flash, structured output JSON). 에이전트 오케스트레이터: **코드 우선** — 결정론적 단계 진행 + 이상치 판단만 Gemini(google-genai, 동일 모델) 호출 |
 | 구조 | 모노레포, Docker Compose (앱만 — DB 컨테이너 없음). `docker compose up` — api는 호스트 8010→컨테이너 8000, web은 호스트 3010→컨테이너 3000(다른 프로젝트 포트 충돌 방지) |
 

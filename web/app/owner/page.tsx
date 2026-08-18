@@ -19,7 +19,7 @@ import OwnerNotificationBanner from "@/components/OwnerNotificationBanner";
  * getCompanyId()로 그 값을 그대로 읽는다(web/lib/api.ts).
  *
  * 레이아웃은 상단 배너(측정 진행도) + 2×2 기능 카드 그리드로 구성한다 — 하단바
- * (홈/데이터 업로드/탄소 리포트/혜택)의 목적지를 홈에서도 카드로
+ * (홈/데이터 업로드/탄소 리포트/맞춤 혜택)의 목적지를 홈에서도 카드로
  * 미리 보여주는 런처 형태(사용자 제공 레퍼런스 참고, 색상·카드 스타일은 이 앱의
  * 기존 규칙(bg-surface + shadow-card)을 그대로 따른다 — 새 디자인 시스템 도입 아님). */
 
@@ -50,8 +50,8 @@ const FEATURE_CARDS = [
   },
   {
     href: "/owner/benefits",
-    caption: "우대금리",
-    title: "우대금리 확인하기",
+    caption: "맞춤 혜택",
+    title: "맞춤 혜택 확인하기",
     image: "/rate_check.png",
     width: 624,
     height: 335,
