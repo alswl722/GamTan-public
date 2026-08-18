@@ -197,6 +197,25 @@ def _split_keywords(s) -> list[str]:
     return [kw.strip() for kw in str(s).split(",") if kw.strip()]
 
 
+def _split_keyword_groups(s) -> list[list[str]]:
+    """'포함 키워드' 셀 → AND-그룹 리스트(그룹 간 AND, 그룹 내부 OR).
+
+    `;`로 그룹을 나누고 그룹 내부는 기존처럼 `,`로 OR 나열한다.
+    예: "납품차,화물차;경유,주유" -> [["납품차","화물차"], ["경유","주유"]]
+        (납품차 또는 화물차) AND (경유 또는 주유) — 둘 다 있어야 매치.
+    `;`가 없으면 그룹 1개짜리 리스트를 반환 — 기존 flat OR 리스트와 매치 결과가
+    동일하다(하위호환. `api/agent/rules.py::_rule_matches()`가 소비).
+    """
+    if s is None:
+        return []
+    groups = str(s).split(";")
+    out = [
+        [kw.strip() for kw in group.split(",") if kw.strip()]
+        for group in groups
+    ]
+    return [g for g in out if g]
+
+
 def load_classification_rules(path: str = DEFAULT_XLSX) -> list[dict]:
     """`분류_기준표_확장` 시트 → 룰 엔진 입력 (50개 키워드 매칭 규칙).
 
@@ -213,7 +232,7 @@ def load_classification_rules(path: str = DEFAULT_XLSX) -> list[dict]:
             dict(
                 rule_id=str(rule_id).strip(),
                 priority=int(r.get("우선순위")) if r.get("우선순위") is not None else 9,
-                include_keywords=_split_keywords(r.get("포함 키워드")),
+                include_keywords=_split_keyword_groups(r.get("포함 키워드")),
                 exclude_keywords=_split_keywords(r.get("제외/주의 키워드")),
                 scope=_scope_int(r.get("정답Scope")),
                 category=r.get("세부분류"),
