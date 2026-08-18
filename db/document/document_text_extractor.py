@@ -40,6 +40,10 @@ DOCUMENT_TYPE_LABEL = {
 
 _TITLE_TO_DOCUMENT_TYPE = {
     "전자세금계산서": "tax_invoice",
+    # 실측(2026-08-18, data/fixtures/tax_invoices — 별지 제11호 국세청 표준 수기
+    # 세금계산서): 제목이 "전자" 없이 "세 금 계 산 서"로만 찍힌다. "전자세금계산서"는
+    # 이미 이 문자열을 포함하므로 아래 항목 하나로 두 서식 모두 커버된다.
+    "세금계산서": "tax_invoice",
     "전기요금 고지서": "electric_bill",
     # 실측(2026-08-15, 실제 한전 고지서 사진 확인): "OO월분 전기요금 청구서" /
     # "OO월분 전기요금 청구 및 영수증(고지서)" — "전기요금 고지서"라는 정확한
@@ -394,12 +398,27 @@ def parse_tax_invoice_header(text: str) -> dict:
         rf"\s*:\s*(\d{{4}}){_DATE_SEP}(\d{{2}}){_DATE_SEP}(\d{{2}})",
         text,
     )
-    if not date_m:
-        raise DocumentParseError("작성일자를 찾지 못했어요")
+    if date_m:
+        year, month = int(date_m.group(1)), int(date_m.group(2))
+    else:
+        # 실측(2026-08-18, data/fixtures/tax_invoices — 별지 제11호 국세청 표준
+        # 수기 세금계산서): "작성일자:" 콜론이 아니라 "작성" 헤더 행 아래 데이터행에
+        # 연(2자리)·월·일이 공백으로 구분돼 찍힌다("작 성 공급가액 세액 비고" 다음
+        # 줄 "25 1 8 백 십 억 ..."). 뒤따르는 자릿값 라벨("백"·"십"...)은 금액
+        # 자릿수에 따라 위치가 달라져(실측 확인) 앵커로 못 쓰므로, 다음 줄 맨 앞
+        # 숫자 3개(연·월·일)만 읽는다.
+        table_date_m = re.search(
+            rf"{_label_pattern('작성')}[^\n]*\n\s*(\d{{1,2}})\s+(\d{{1,2}})\s+(\d{{1,2}})\b",
+            text,
+        )
+        if not table_date_m:
+            raise DocumentParseError("작성일자를 찾지 못했어요")
+        year = 2000 + int(table_date_m.group(1))
+        month = int(table_date_m.group(2))
     return {
         "supplier_name": find_supplier_name_best_effort(text),
-        "year": int(date_m.group(1)),
-        "month": int(date_m.group(2)),
+        "year": year,
+        "month": month,
     }
 
 
@@ -409,7 +428,39 @@ def parse_tax_invoice_header(text: str) -> dict:
 _HANGUL_SYLLABLE = re.compile(r"[가-힣]")
 
 
+# 실측(2026-08-18, data/fixtures/tax_invoices — 별지 제11호 국세청 표준 수기
+# 세금계산서): 품목행이 "월 일 품목 규격 수량 단가 공급가액 세액 [비고]" 9칼럼이다
+# (예: "1 8 경유 지게차용 100 1,421 142,100 14,210 지게차 연료"). 규격에 "지게차용"
+# 처럼 정상적인 한글 단어가 들어가므로 아래 구형 5토큰 포맷 전용 _HANGUL_SYLLABLE
+# 방어 로직은 적용하지 않는다 — 대신 앞뒤 숫자 앵커(월·일·수량·단가·공급가액·세액)
+# 로 칼럼 위치가 이미 확정되어 모호함이 없다. 토큰 구분에 \s+ 대신 [ \t]+를 써서
+# 줄바꿈을 건너뛰어 다른 행과 잘못 이어붙는 걸 막는다.
+_OFFICIAL_FORM_ITEM_ROW_RE = re.compile(
+    r"^\d{1,2}[ \t]+\d{1,2}[ \t]+(\S+)[ \t]+(\S+)[ \t]+([\d,]+|-)[ \t]+(?:[\d,]+|-)[ \t]+([\d,]+)[ \t]+[\d,]+(?:[ \t]+.*)?$",
+    re.MULTILINE,
+)
+
+
 def _parse_tax_invoice_item_row(text: str) -> dict:
+    """품목행 파싱 — 두 서식을 순서대로 시도한다.
+
+    1) 별지 제11호 서식(위 _OFFICIAL_FORM_ITEM_ROW_RE, 지금의 기준 fixture).
+       수량에 단위(L 등)가 안 찍혀 있어 quantity만 채우고 quantity_unit은
+       비워 둔다 — db/calc_engine.py::compute_emission의
+       `item.quantity_unit or factor["unit"]`가 배출계수 테이블 단위로 자동
+       보완하므로 여기서 단위를 지어낼 필요가 없다(CLAUDE.md 원칙1).
+    2) 구형 5토큰 한 줄 포맷(scripts/generate_upload_docs.py 등, 아래 기존 로직).
+    """
+    official_m = _OFFICIAL_FORM_ITEM_ROW_RE.search(text)
+    if official_m:
+        result = {
+            "item_description": official_m.group(1).strip(),
+            "supply_amount_krw": _parse_amount(official_m.group(4), field_label="공급가액"),
+        }
+        if official_m.group(3) != "-":
+            result["quantity"] = _parse_amount(official_m.group(3), field_label="수량")
+        return result
+
     # 품목 행: "경유 L 301L 1,400 420,833" — 품목명, 규격, 수량+단위(예: "301L"), 단가(원),
     # 공급가액(원). 마지막 두 컬럼만 순수 숫자/콤마라 이 패턴으로 헤더 행("품목명 규격 ...
     # 공급가액(원)")과 구분된다(헤더는 괄호·한글이 섞여 있어 [\d,]+로 안 끝난다). 한 줄
@@ -452,7 +503,9 @@ _TABLE_HEADER_ITEM_KEYWORDS = ("품목명", "품목")
 _TABLE_HEADER_AMOUNT_KEYWORDS = ("공급가액",)
 _TABLE_HEADER_SPEC_KEYWORDS = ("규격",)
 _TABLE_HEADER_QTY_KEYWORDS = ("수량", "물량")
-_TABLE_HEADER_DATE_KEYWORDS = ("작성일자", "발급일자")
+# "작성"만: 별지 제11호 서식은 헤더 셀이 "작성일자"가 아니라 "작성" 2글자뿐이다
+# (실측 2026-08-18, data/fixtures/tax_invoices) — 안전망으로 추가.
+_TABLE_HEADER_DATE_KEYWORDS = ("작성일자", "발급일자", "작성")
 _TABLE_COLUMN_MATCH_TOLERANCE = 10  # px, 컬럼 중심 좌표 매칭 여유
 
 
