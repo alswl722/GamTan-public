@@ -2,12 +2,12 @@
 
 ```text
 Status: active-plan
-Last updated: 2026-08-18
+Last updated: 2026-08-17
 Scope: 2026년 8월 v1 구현·검증·시연 일정
 ```
 
 > **진행 현황 요약** — 로컬 기준(alembic head `0024`, 공유 DB 적용 완료)
-> `pytest` 392 passed, 3 skipped(회귀 없음). 2주차 Tier 1은 전부 완료됐다.
+> `pytest` 408 passed, 3 skipped(회귀 없음). 2주차 Tier 1은 전부 완료됐다.
 > 완료 항목 전체 목록은 §4, 남은 항목은 §5 참고. 각 항목의 구현 상세(왜
 > 그렇게 만들었는지, 어떤 트레이드오프가 있었는지)는 이 문서가 아니라 해당
 > PR 본문·커밋 메시지에 있다 — git 이력이 정본.
@@ -123,6 +123,7 @@ Scope: 2026년 8월 v1 구현·검증·시연 일정
 | Tier 2 | 확정 전송 → 사장님 알림 배너 (Figma 선디자인 → 폴링 배너, `OwnerNotification` 모델) | B | #70 |
 | Tier 2 | 이상치 되묻기 — 사장님 확인 절차(예/아니오/모르겠어요, HITL 큐 우선순위 배지) | B | #74 |
 | 부수 | uvicorn `--reload` 감시 범위를 코드 디렉토리로 한정(업로드 중 서버 재시작 방지) | B | #69 |
+| 부수 | 결손·완전성 검사·데이터 공백 알림이 오늘 날짜를 모르고 항상 12월까지 훑어 아직 안 온 달까지 결손·공백으로 잘못 잡던 버그 3곳 수정(`get_coverage`/`assess_inventory_completeness`/`db/alerts.py::_gap_signal`), 리포트·업로드 기본 연도를 "최신 전표 연도"가 아니라 달력상 올해로 변경(`default_reporting_year`) | — | #81 |
 
 ---
 
