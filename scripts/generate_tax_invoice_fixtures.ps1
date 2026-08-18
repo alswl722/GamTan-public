@@ -402,7 +402,184 @@ $Invoices = @(
        BuyerName="㈜○○정밀"; BuyerBizNo="220-81-45671"; BuyerOwner="이정밀";
        BuyerAddr="경북 구미시 공단로 88"; BuyerType="제조업"; BuyerItem="구조용 금속제품 제조";
        ItemName="경유"; Spec="지게차용"; Qty=200; UnitPrice=1500; SupplyAmount=300000; VatAmount=30000;
-       Memo="연말 지게차·난방 병행 사용"; SerialNo="GB-2025-1222-1" }
+       Memo="연말 지게차·난방 병행 사용"; SerialNo="GB-2025-1222-1" },
+
+    # ── 2026년 1~8월: 2025년 7월 증차 이후 상승한 사용량이 새 기준선으로 정착(추가 급증 없음) ──
+    @{ Id="MAIN_2026-01_tax_invoice_diesel_01"; Year=2026; Month=1; Day=5;
+       SupplierName="구미석유"; SupplierBizNo="105-25-77213"; SupplierOwner="정유민";
+       SupplierAddr="경북 구미시 산동읍 임천로 210"; SupplierType="도소매"; SupplierItem="석유판매업";
+       BuyerName="㈜○○정밀"; BuyerBizNo="220-81-45671"; BuyerOwner="이정밀";
+       BuyerAddr="경북 구미시 공단로 88"; BuyerType="제조업"; BuyerItem="구조용 금속제품 제조";
+       ItemName="경유"; Spec="지게차용"; Qty=210; UnitPrice=1421; SupplyAmount=298410; VatAmount=29841;
+       Memo="지게차 연료"; SerialNo="GB-2026-0105-1" },
+    @{ Id="MAIN_2026-01_tax_invoice_diesel_02"; Year=2026; Month=1; Day=15;
+       SupplierName="왕산주유소"; SupplierBizNo="611-08-93042"; SupplierOwner="최왕산";
+       SupplierAddr="경북 구미시 왕산로 45"; SupplierType="도소매"; SupplierItem="석유판매업";
+       BuyerName="㈜○○정밀"; BuyerBizNo="220-81-45671"; BuyerOwner="이정밀";
+       BuyerAddr="경북 구미시 공단로 88"; BuyerType="제조업"; BuyerItem="구조용 금속제품 제조";
+       ItemName="경유"; Spec="배송차량용"; Qty=68; UnitPrice=1421; SupplyAmount=96628; VatAmount=9663;
+       Memo="배송차량 주유"; SerialNo="GB-2026-0115-1" },
+    @{ Id="MAIN_2026-01_tax_invoice_diesel_03"; Year=2026; Month=1; Day=24;
+       SupplierName="구미석유"; SupplierBizNo="105-25-77213"; SupplierOwner="정유민";
+       SupplierAddr="경북 구미시 산동읍 임천로 210"; SupplierType="도소매"; SupplierItem="석유판매업";
+       BuyerName="㈜○○정밀"; BuyerBizNo="220-81-45671"; BuyerOwner="이정밀";
+       BuyerAddr="경북 구미시 공단로 88"; BuyerType="제조업"; BuyerItem="구조용 금속제품 제조";
+       ItemName="경유"; Spec="지게차용"; Qty=205; UnitPrice=1421; SupplyAmount=291305; VatAmount=29131;
+       Memo="지게차 연료"; SerialNo="GB-2026-0124-1" },
+
+    @{ Id="MAIN_2026-02_tax_invoice_diesel_01"; Year=2026; Month=2; Day=4;
+       SupplierName="구미석유"; SupplierBizNo="105-25-77213"; SupplierOwner="정유민";
+       SupplierAddr="경북 구미시 산동읍 임천로 210"; SupplierType="도소매"; SupplierItem="석유판매업";
+       BuyerName="㈜○○정밀"; BuyerBizNo="220-81-45671"; BuyerOwner="이정밀";
+       BuyerAddr="경북 구미시 공단로 88"; BuyerType="제조업"; BuyerItem="구조용 금속제품 제조";
+       ItemName="경유"; Spec="지게차용"; Qty=200; UnitPrice=1449; SupplyAmount=289800; VatAmount=28980;
+       Memo="지게차 연료"; SerialNo="GB-2026-0204-1" },
+    @{ Id="MAIN_2026-02_tax_invoice_diesel_02"; Year=2026; Month=2; Day=14;
+       SupplierName="왕산주유소"; SupplierBizNo="611-08-93042"; SupplierOwner="최왕산";
+       SupplierAddr="경북 구미시 왕산로 45"; SupplierType="도소매"; SupplierItem="석유판매업";
+       BuyerName="㈜○○정밀"; BuyerBizNo="220-81-45671"; BuyerOwner="이정밀";
+       BuyerAddr="경북 구미시 공단로 88"; BuyerType="제조업"; BuyerItem="구조용 금속제품 제조";
+       ItemName="경유"; Spec="배송차량용"; Qty=66; UnitPrice=1449; SupplyAmount=95634; VatAmount=9563;
+       Memo="배송차량 주유"; SerialNo="GB-2026-0214-1" },
+    @{ Id="MAIN_2026-02_tax_invoice_diesel_03"; Year=2026; Month=2; Day=23;
+       SupplierName="구미석유"; SupplierBizNo="105-25-77213"; SupplierOwner="정유민";
+       SupplierAddr="경북 구미시 산동읍 임천로 210"; SupplierType="도소매"; SupplierItem="석유판매업";
+       BuyerName="㈜○○정밀"; BuyerBizNo="220-81-45671"; BuyerOwner="이정밀";
+       BuyerAddr="경북 구미시 공단로 88"; BuyerType="제조업"; BuyerItem="구조용 금속제품 제조";
+       ItemName="경유"; Spec="지게차용"; Qty=198; UnitPrice=1449; SupplyAmount=286902; VatAmount=28690;
+       Memo="지게차 연료"; SerialNo="GB-2026-0223-1" },
+
+    @{ Id="MAIN_2026-03_tax_invoice_diesel_01"; Year=2026; Month=3; Day=5;
+       SupplierName="구미석유"; SupplierBizNo="105-25-77213"; SupplierOwner="정유민";
+       SupplierAddr="경북 구미시 산동읍 임천로 210"; SupplierType="도소매"; SupplierItem="석유판매업";
+       BuyerName="㈜○○정밀"; BuyerBizNo="220-81-45671"; BuyerOwner="이정밀";
+       BuyerAddr="경북 구미시 공단로 88"; BuyerType="제조업"; BuyerItem="구조용 금속제품 제조";
+       ItemName="경유"; Spec="지게차용"; Qty=215; UnitPrice=1414; SupplyAmount=304010; VatAmount=30401;
+       Memo="지게차 연료"; SerialNo="GB-2026-0305-1" },
+    @{ Id="MAIN_2026-03_tax_invoice_diesel_02"; Year=2026; Month=3; Day=16;
+       SupplierName="경일주유소"; SupplierBizNo="402-19-58831"; SupplierOwner="한경일";
+       SupplierAddr="경북 구미시 산동읍 강동로 77"; SupplierType="도소매"; SupplierItem="석유판매업";
+       BuyerName="㈜○○정밀"; BuyerBizNo="220-81-45671"; BuyerOwner="이정밀";
+       BuyerAddr="경북 구미시 공단로 88"; BuyerType="제조업"; BuyerItem="구조용 금속제품 제조";
+       ItemName="경유"; Spec="배송차량용"; Qty=70; UnitPrice=1414; SupplyAmount=98980; VatAmount=9898;
+       Memo="배송차량 주유"; SerialNo="GB-2026-0316-1" },
+    @{ Id="MAIN_2026-03_tax_invoice_diesel_03"; Year=2026; Month=3; Day=25;
+       SupplierName="구미석유"; SupplierBizNo="105-25-77213"; SupplierOwner="정유민";
+       SupplierAddr="경북 구미시 산동읍 임천로 210"; SupplierType="도소매"; SupplierItem="석유판매업";
+       BuyerName="㈜○○정밀"; BuyerBizNo="220-81-45671"; BuyerOwner="이정밀";
+       BuyerAddr="경북 구미시 공단로 88"; BuyerType="제조업"; BuyerItem="구조용 금속제품 제조";
+       ItemName="경유"; Spec="지게차용"; Qty=208; UnitPrice=1414; SupplyAmount=294112; VatAmount=29411;
+       Memo="지게차 연료"; SerialNo="GB-2026-0325-1" },
+
+    @{ Id="MAIN_2026-04_tax_invoice_diesel_01"; Year=2026; Month=4; Day=6;
+       SupplierName="구미석유"; SupplierBizNo="105-25-77213"; SupplierOwner="정유민";
+       SupplierAddr="경북 구미시 산동읍 임천로 210"; SupplierType="도소매"; SupplierItem="석유판매업";
+       BuyerName="㈜○○정밀"; BuyerBizNo="220-81-45671"; BuyerOwner="이정밀";
+       BuyerAddr="경북 구미시 공단로 88"; BuyerType="제조업"; BuyerItem="구조용 금속제품 제조";
+       ItemName="경유"; Spec="지게차용"; Qty=220; UnitPrice=1376; SupplyAmount=302720; VatAmount=30272;
+       Memo="지게차 연료"; SerialNo="GB-2026-0406-1" },
+    @{ Id="MAIN_2026-04_tax_invoice_diesel_02"; Year=2026; Month=4; Day=15;
+       SupplierName="왕산주유소"; SupplierBizNo="611-08-93042"; SupplierOwner="최왕산";
+       SupplierAddr="경북 구미시 왕산로 45"; SupplierType="도소매"; SupplierItem="석유판매업";
+       BuyerName="㈜○○정밀"; BuyerBizNo="220-81-45671"; BuyerOwner="이정밀";
+       BuyerAddr="경북 구미시 공단로 88"; BuyerType="제조업"; BuyerItem="구조용 금속제품 제조";
+       ItemName="경유"; Spec="배송차량용"; Qty=72; UnitPrice=1376; SupplyAmount=99072; VatAmount=9907;
+       Memo="배송차량 주유"; SerialNo="GB-2026-0415-1" },
+    @{ Id="MAIN_2026-04_tax_invoice_diesel_03"; Year=2026; Month=4; Day=24;
+       SupplierName="구미석유"; SupplierBizNo="105-25-77213"; SupplierOwner="정유민";
+       SupplierAddr="경북 구미시 산동읍 임천로 210"; SupplierType="도소매"; SupplierItem="석유판매업";
+       BuyerName="㈜○○정밀"; BuyerBizNo="220-81-45671"; BuyerOwner="이정밀";
+       BuyerAddr="경북 구미시 공단로 88"; BuyerType="제조업"; BuyerItem="구조용 금속제품 제조";
+       ItemName="경유"; Spec="지게차용"; Qty=215; UnitPrice=1376; SupplyAmount=295840; VatAmount=29584;
+       Memo="지게차 연료"; SerialNo="GB-2026-0424-1" },
+
+    @{ Id="MAIN_2026-05_tax_invoice_diesel_01"; Year=2026; Month=5; Day=5;
+       SupplierName="구미석유"; SupplierBizNo="105-25-77213"; SupplierOwner="정유민";
+       SupplierAddr="경북 구미시 산동읍 임천로 210"; SupplierType="도소매"; SupplierItem="석유판매업";
+       BuyerName="㈜○○정밀"; BuyerBizNo="220-81-45671"; BuyerOwner="이정밀";
+       BuyerAddr="경북 구미시 공단로 88"; BuyerType="제조업"; BuyerItem="구조용 금속제품 제조";
+       ItemName="경유"; Spec="지게차용"; Qty=225; UnitPrice=1366; SupplyAmount=307350; VatAmount=30735;
+       Memo="지게차 연료"; SerialNo="GB-2026-0505-1" },
+    @{ Id="MAIN_2026-05_tax_invoice_diesel_02"; Year=2026; Month=5; Day=16;
+       SupplierName="왕산주유소"; SupplierBizNo="611-08-93042"; SupplierOwner="최왕산";
+       SupplierAddr="경북 구미시 왕산로 45"; SupplierType="도소매"; SupplierItem="석유판매업";
+       BuyerName="㈜○○정밀"; BuyerBizNo="220-81-45671"; BuyerOwner="이정밀";
+       BuyerAddr="경북 구미시 공단로 88"; BuyerType="제조업"; BuyerItem="구조용 금속제품 제조";
+       ItemName="경유"; Spec="배송차량용"; Qty=74; UnitPrice=1366; SupplyAmount=101084; VatAmount=10108;
+       Memo="배송차량 주유"; SerialNo="GB-2026-0516-1" },
+    @{ Id="MAIN_2026-05_tax_invoice_diesel_03"; Year=2026; Month=5; Day=26;
+       SupplierName="구미석유"; SupplierBizNo="105-25-77213"; SupplierOwner="정유민";
+       SupplierAddr="경북 구미시 산동읍 임천로 210"; SupplierType="도소매"; SupplierItem="석유판매업";
+       BuyerName="㈜○○정밀"; BuyerBizNo="220-81-45671"; BuyerOwner="이정밀";
+       BuyerAddr="경북 구미시 공단로 88"; BuyerType="제조업"; BuyerItem="구조용 금속제품 제조";
+       ItemName="경유"; Spec="지게차용"; Qty=218; UnitPrice=1366; SupplyAmount=297788; VatAmount=29779;
+       Memo="지게차 연료"; SerialNo="GB-2026-0526-1" },
+
+    @{ Id="MAIN_2026-06_tax_invoice_diesel_01"; Year=2026; Month=6; Day=4;
+       SupplierName="구미석유"; SupplierBizNo="105-25-77213"; SupplierOwner="정유민";
+       SupplierAddr="경북 구미시 산동읍 임천로 210"; SupplierType="도소매"; SupplierItem="석유판매업";
+       BuyerName="㈜○○정밀"; BuyerBizNo="220-81-45671"; BuyerOwner="이정밀";
+       BuyerAddr="경북 구미시 공단로 88"; BuyerType="제조업"; BuyerItem="구조용 금속제품 제조";
+       ItemName="경유"; Spec="지게차용"; Qty=230; UnitPrice=1369; SupplyAmount=314870; VatAmount=31487;
+       Memo="지게차 연료"; SerialNo="GB-2026-0604-1" },
+    @{ Id="MAIN_2026-06_tax_invoice_diesel_02"; Year=2026; Month=6; Day=14;
+       SupplierName="경일주유소"; SupplierBizNo="402-19-58831"; SupplierOwner="한경일";
+       SupplierAddr="경북 구미시 산동읍 강동로 77"; SupplierType="도소매"; SupplierItem="석유판매업";
+       BuyerName="㈜○○정밀"; BuyerBizNo="220-81-45671"; BuyerOwner="이정밀";
+       BuyerAddr="경북 구미시 공단로 88"; BuyerType="제조업"; BuyerItem="구조용 금속제품 제조";
+       ItemName="경유"; Spec="배송차량용"; Qty=76; UnitPrice=1369; SupplyAmount=104044; VatAmount=10404;
+       Memo="배송차량 주유"; SerialNo="GB-2026-0614-1" },
+    @{ Id="MAIN_2026-06_tax_invoice_diesel_03"; Year=2026; Month=6; Day=24;
+       SupplierName="구미석유"; SupplierBizNo="105-25-77213"; SupplierOwner="정유민";
+       SupplierAddr="경북 구미시 산동읍 임천로 210"; SupplierType="도소매"; SupplierItem="석유판매업";
+       BuyerName="㈜○○정밀"; BuyerBizNo="220-81-45671"; BuyerOwner="이정밀";
+       BuyerAddr="경북 구미시 공단로 88"; BuyerType="제조업"; BuyerItem="구조용 금속제품 제조";
+       ItemName="경유"; Spec="지게차용"; Qty=222; UnitPrice=1369; SupplyAmount=303918; VatAmount=30392;
+       Memo="지게차 연료"; SerialNo="GB-2026-0624-1" },
+
+    @{ Id="MAIN_2026-07_tax_invoice_diesel_01"; Year=2026; Month=7; Day=5;
+       SupplierName="구미석유"; SupplierBizNo="105-25-77213"; SupplierOwner="정유민";
+       SupplierAddr="경북 구미시 산동읍 임천로 210"; SupplierType="도소매"; SupplierItem="석유판매업";
+       BuyerName="㈜○○정밀"; BuyerBizNo="220-81-45671"; BuyerOwner="이정밀";
+       BuyerAddr="경북 구미시 공단로 88"; BuyerType="제조업"; BuyerItem="구조용 금속제품 제조";
+       ItemName="경유"; Spec="지게차용"; Qty=235; UnitPrice=1392; SupplyAmount=327120; VatAmount=32712;
+       Memo="지게차 연료"; SerialNo="GB-2026-0705-1" },
+    @{ Id="MAIN_2026-07_tax_invoice_diesel_02"; Year=2026; Month=7; Day=15;
+       SupplierName="왕산주유소"; SupplierBizNo="611-08-93042"; SupplierOwner="최왕산";
+       SupplierAddr="경북 구미시 왕산로 45"; SupplierType="도소매"; SupplierItem="석유판매업";
+       BuyerName="㈜○○정밀"; BuyerBizNo="220-81-45671"; BuyerOwner="이정밀";
+       BuyerAddr="경북 구미시 공단로 88"; BuyerType="제조업"; BuyerItem="구조용 금속제품 제조";
+       ItemName="경유"; Spec="배송차량용"; Qty=78; UnitPrice=1392; SupplyAmount=108576; VatAmount=10858;
+       Memo="배송차량 주유"; SerialNo="GB-2026-0715-1" },
+    @{ Id="MAIN_2026-07_tax_invoice_diesel_03"; Year=2026; Month=7; Day=25;
+       SupplierName="구미석유"; SupplierBizNo="105-25-77213"; SupplierOwner="정유민";
+       SupplierAddr="경북 구미시 산동읍 임천로 210"; SupplierType="도소매"; SupplierItem="석유판매업";
+       BuyerName="㈜○○정밀"; BuyerBizNo="220-81-45671"; BuyerOwner="이정밀";
+       BuyerAddr="경북 구미시 공단로 88"; BuyerType="제조업"; BuyerItem="구조용 금속제품 제조";
+       ItemName="경유"; Spec="지게차용"; Qty=228; UnitPrice=1392; SupplyAmount=317376; VatAmount=31738;
+       Memo="증차 1주년, 사용량 안정적으로 유지"; SerialNo="GB-2026-0725-1" },
+
+    @{ Id="MAIN_2026-08_tax_invoice_diesel_01"; Year=2026; Month=8; Day=4;
+       SupplierName="구미석유"; SupplierBizNo="105-25-77213"; SupplierOwner="정유민";
+       SupplierAddr="경북 구미시 산동읍 임천로 210"; SupplierType="도소매"; SupplierItem="석유판매업";
+       BuyerName="㈜○○정밀"; BuyerBizNo="220-81-45671"; BuyerOwner="이정밀";
+       BuyerAddr="경북 구미시 공단로 88"; BuyerType="제조업"; BuyerItem="구조용 금속제품 제조";
+       ItemName="경유"; Spec="지게차용"; Qty=232; UnitPrice=1396; SupplyAmount=323872; VatAmount=32387;
+       Memo="지게차 연료"; SerialNo="GB-2026-0804-1" },
+    @{ Id="MAIN_2026-08_tax_invoice_diesel_02"; Year=2026; Month=8; Day=14;
+       SupplierName="왕산주유소"; SupplierBizNo="611-08-93042"; SupplierOwner="최왕산";
+       SupplierAddr="경북 구미시 왕산로 45"; SupplierType="도소매"; SupplierItem="석유판매업";
+       BuyerName="㈜○○정밀"; BuyerBizNo="220-81-45671"; BuyerOwner="이정밀";
+       BuyerAddr="경북 구미시 공단로 88"; BuyerType="제조업"; BuyerItem="구조용 금속제품 제조";
+       ItemName="경유"; Spec="배송차량용"; Qty=77; UnitPrice=1396; SupplyAmount=107492; VatAmount=10749;
+       Memo="배송차량 주유"; SerialNo="GB-2026-0814-1" },
+    @{ Id="MAIN_2026-08_tax_invoice_diesel_03"; Year=2026; Month=8; Day=24;
+       SupplierName="구미석유"; SupplierBizNo="105-25-77213"; SupplierOwner="정유민";
+       SupplierAddr="경북 구미시 산동읍 임천로 210"; SupplierType="도소매"; SupplierItem="석유판매업";
+       BuyerName="㈜○○정밀"; BuyerBizNo="220-81-45671"; BuyerOwner="이정밀";
+       BuyerAddr="경북 구미시 공단로 88"; BuyerType="제조업"; BuyerItem="구조용 금속제품 제조";
+       ItemName="경유"; Spec="지게차용"; Qty=225; UnitPrice=1396; SupplyAmount=314100; VatAmount=31410;
+       Memo="지게차 연료"; SerialNo="GB-2026-0824-1" }
 )
 
 $manifest = New-Object System.Collections.Generic.List[string]

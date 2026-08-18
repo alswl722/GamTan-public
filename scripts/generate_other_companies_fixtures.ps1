@@ -291,14 +291,19 @@ $FormatCycle = @("pdf","jpg","png")
 function New-Manifest { param([string]$header) $m = New-Object System.Collections.Generic.List[string]; $m.Add($header); return ,$m }
 
 # ── 세금계산서 일괄 생성 ──
+# MonthPlan 키: 기존 호환용 bare int(1~12, 2025년 취급) 또는 "YYYY-MM" 문자열(연도 지정) 둘 다 지원.
+# DieselPrice/GasolinePrice는 월(1~12) 인덱스라 연도가 달라도 같은 월 단가표를 재사용한다(신규
+# 연도용 실측 단가가 없으므로 최근 단가를 그대로 적용 — 데모용 근사치).
 function Build-TaxInvoices {
-    param($CompanyId, $CompanyNameKo, $BuyerBizNo, $BuyerAddr, $BuyerType, $BuyerItem, $Suppliers, $MonthPlan, $OutDir)
+    param($CompanyId, $CompanyNameKo, $BuyerBizNo, $BuyerAddr, $BuyerType, $BuyerItem, $Suppliers, $MonthPlan, $OutDir, [int]$Year = 2025)
     New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
     $manifest = New-Manifest "record_id,company_id,issue_date,supplier_name,item_name,spec,qty,unit,unit_price_krw,supply_amount_krw,vat_krw,total_krw,memo,file_format,file_name"
     $days2 = @(8,22); $days3 = @(6,16,26)
     $idx = 0
-    foreach ($m in ($MonthPlan.Keys | Sort-Object)) {
-        $plan = $MonthPlan[$m]  # array of hashtables: @{Liters=..; Fuel="경유"|"휘발유"; Spec=..}
+    foreach ($key in ($MonthPlan.Keys | Sort-Object)) {
+        if ($key -is [string] -and $key -match '^(\d{4})-(\d{2})$') { $y = [int]$Matches[1]; $m = [int]$Matches[2] }
+        else { $y = $Year; $m = [int]$key }
+        $plan = $MonthPlan[$key]  # array of hashtables: @{Liters=..; Fuel="경유"|"휘발유"; Spec=..}
         $n = $plan.Count
         $days = if ($n -ge 3) { $days3 } else { $days2 }
         for ($i = 0; $i -lt $n; $i++) {
@@ -309,39 +314,57 @@ function Build-TaxInvoices {
             $supply = [long]($qty * $price)
             $vat = [long][math]::Round($supply * 0.1)
             $inv = @{
-                Year=2025; Month=$m; Day=$days[$i]
+                Year=$y; Month=$m; Day=$days[$i]
                 SupplierName=$sup.Name; SupplierBizNo=$sup.BizNo; SupplierOwner=$sup.Owner; SupplierAddr=$sup.Addr
                 SupplierType="도소매"; SupplierItem="석유판매업"
                 BuyerName=$CompanyNameKo; BuyerBizNo=$BuyerBizNo; BuyerOwner=$p.BuyerOwner
                 BuyerAddr=$BuyerAddr; BuyerType=$BuyerType; BuyerItem=$BuyerItem
                 ItemName=$p.Fuel; Spec=$p.Spec; Qty=$qty; UnitPrice=$price; SupplyAmount=$supply; VatAmount=$vat
-                Memo=$p.Memo; SerialNo="$CompanyId-$('{0:D2}' -f $m)-$($i+1)"
+                Memo=$p.Memo; SerialNo="$CompanyId-$y$('{0:D2}' -f $m)-$($i+1)"
             }
             $html = New-InvoiceHtml -Inv $inv
-            $issueDate = "2025-{0:D2}-{1:D2}" -f $m, $days[$i]
+            $issueDate = "{0:D4}-{1:D2}-{2:D2}" -f $y, $m, $days[$i]
             $baseName = "${CompanyNameKo}_${issueDate}_세금계산서_$($p.Fuel)"
             $format = $FormatCycle[$idx % 3]
             $finalName = "$baseName.$format"
             $finalPath = Join-Path $OutDir $finalName
-            Render-ToFile -Html $html -FinalPath $finalPath -Format $format -SafeKey "$CompanyId$m$i"
+            Render-ToFile -Html $html -FinalPath $finalPath -Format $format -SafeKey "$CompanyId$y$m$i"
             $total = $supply + $vat
             $manifest.Add("$baseName,$CompanyId,$issueDate,$($sup.Name),$($p.Fuel),$($p.Spec),$qty,L,$price,$supply,$vat,$total,$($p.Memo),$format,$finalName")
             Write-Host "생성됨: $finalName"
             $idx++
         }
     }
-    Set-Content -Path (Join-Path $OutDir "_manifest.csv") -Value ($manifest -join "`n") -Encoding utf8
+    Save-Manifest -OutDir $OutDir -Manifest $manifest
+}
+
+# 기존 _manifest.csv가 있으면(다른 연도 배치를 이미 생성해둔 경우) 헤더 유지한 채 새 행만 append,
+# 없으면 새로 만든다 — 같은 회사·같은 문서종류를 연도별로 나눠 여러 번 호출해도 앞선 배치가
+# 지워지지 않는다.
+function Save-Manifest {
+    param([string]$OutDir, $Manifest)
+    $manifestPath = Join-Path $OutDir "_manifest.csv"
+    if (Test-Path $manifestPath) {
+        $existing = Get-Content -Path $manifestPath -Encoding UTF8
+        $combined = @($existing[0]) + @($existing[1..($existing.Count-1)]) + @($Manifest[1..($Manifest.Count-1)])
+        Set-Content -Path $manifestPath -Value ($combined -join "`n") -Encoding utf8
+    } else {
+        Set-Content -Path $manifestPath -Value ($Manifest -join "`n") -Encoding utf8
+    }
 }
 
 # ── 전기요금고지서 일괄 생성 ──
+# MonthPlan 키: Build-TaxInvoices와 동일하게 bare int(2025년) 또는 "YYYY-MM" 문자열 지원.
 function Build-ElectricityBills {
-    param($CompanyId, $CompanyNameKo, $CustomerNumber, $SiteAddr, $ContractType, $ContractPower, $MonthPlan, $OutDir)
+    param($CompanyId, $CompanyNameKo, $CustomerNumber, $SiteAddr, $ContractType, $ContractPower, $MonthPlan, $OutDir, [int]$Year = 2025)
     New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
     $manifest = New-Manifest "record_id,company_id,billing_month,usage_kwh,prev_usage_kwh,billed_amount_krw,is_estimated,due_date,file_format,file_name"
     $idx = 0
-    $months = $MonthPlan.Keys | Sort-Object
-    foreach ($m in $months) {
-        $p = $MonthPlan[$m]  # @{Kwh=n or $null; PrevKwh=n; BilledAmount=n}
+    $keys = $MonthPlan.Keys | Sort-Object
+    foreach ($key in $keys) {
+        if ($key -is [string] -and $key -match '^(\d{4})-(\d{2})$') { $y = [int]$Matches[1]; $m = [int]$Matches[2] }
+        else { $y = $Year; $m = [int]$key }
+        $p = $MonthPlan[$key]  # @{Kwh=n or $null; PrevKwh=n; BilledAmount=n}
         $baseFee = 300000
         if ($p.Kwh -ne $null) {
             $energyFee = [long]($p.Kwh * 89.5)
@@ -349,17 +372,19 @@ function Build-ElectricityBills {
             $energyFee = [long]($p.PrevKwh * 89.5)  # 추정: 전월 실적 기준
         }
         $tax = $p.BilledAmount - $baseFee - $energyFee
-        $billingMonth = "2025-{0:D2}" -f $m
-        $nextMonth = if ($m -eq 12) { "2026-01" } else { "2025-{0:D2}" -f ($m+1) }
+        $billingMonth = "{0:D4}-{1:D2}" -f $y, $m
+        $nextY = if ($m -eq 12) { $y + 1 } else { $y }
+        $nextM = if ($m -eq 12) { 1 } else { $m + 1 }
+        $nextMonth = "{0:D4}-{1:D2}" -f $nextY, $nextM
         $lastDay = 31
         if ($m -in @(4,6,9,11)) { $lastDay = 30 } elseif ($m -eq 2) { $lastDay = 28 }
         $inv = @{
-            Year=2025; Month=$m; CompanyName=$CompanyNameKo; CustomerNumber=$CustomerNumber
+            Year=$y; Month=$m; CompanyName=$CompanyNameKo; CustomerNumber=$CustomerNumber
             SiteAddr=$SiteAddr; ContractType=$ContractType; ContractPower=$ContractPower
             UsageKwh=$p.Kwh; PrevUsageKwh=$p.PrevKwh; BaseFee=$baseFee; EnergyFee=$energyFee; Tax=$tax
             BilledAmount=$p.BilledAmount
-            PeriodStart="2025-{0:D2}-01" -f $m; PeriodEnd="2025-{0:D2}-{1}" -f $m,$lastDay
-            MeterDate="2025-{0:D2}-{1}" -f $m,$lastDay
+            PeriodStart="{0:D4}-{1:D2}-01" -f $y,$m; PeriodEnd="{0:D4}-{1:D2}-{2}" -f $y,$m,$lastDay
+            MeterDate="{0:D4}-{1:D2}-{2}" -f $y,$m,$lastDay
             DueDate="$nextMonth-25"; IssueDate="$nextMonth-05"
         }
         $html = New-BillHtml -Inv $inv
@@ -367,13 +392,13 @@ function Build-ElectricityBills {
         $format = $FormatCycle[$idx % 3]
         $finalName = "$baseName.$format"
         $finalPath = Join-Path $OutDir $finalName
-        Render-ToFile -Html $html -FinalPath $finalPath -Format $format -SafeKey "eb$CompanyId$m" -W 900 -H 720
+        Render-ToFile -Html $html -FinalPath $finalPath -Format $format -SafeKey "eb$CompanyId$y$m" -W 900 -H 720
         $kwhCol = if ($p.Kwh -ne $null) { $p.Kwh } else { "" }
         $manifest.Add("$baseName,$CompanyId,$billingMonth,$kwhCol,$($p.PrevKwh),$($p.BilledAmount),$($p.Kwh -eq $null),$($inv.DueDate),$format,$finalName")
         Write-Host "생성됨: $finalName"
         $idx++
     }
-    Set-Content -Path (Join-Path $OutDir "_manifest.csv") -Value ($manifest -join "`n") -Encoding utf8
+    Save-Manifest -OutDir $OutDir -Manifest $manifest
 }
 
 # ── 무관 파일(카페 영수증) 생성 ──
@@ -393,7 +418,7 @@ function Build-IrrelevantFiles {
         Write-Host "생성됨: $finalName"
         $idx++
     }
-    Set-Content -Path (Join-Path $OutDir "_manifest.csv") -Value ($manifest -join "`n") -Encoding utf8
+    Save-Manifest -OutDir $OutDir -Manifest $manifest
 }
 
 Write-Host "함수 정의 완료 — 회사별 실행은 run_companies.ps1에서"
