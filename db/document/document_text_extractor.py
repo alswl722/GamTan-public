@@ -321,7 +321,16 @@ def _parse_electric_bill(text: str) -> dict:
             _line_value(text, _label_pattern("사용량(kWh)"), field_label="사용량"), field_label="사용량"
         )
     except DocumentParseError:
-        pass
+        # 실측: "사용량(kWh)" 인라인 라벨 대신 "당월 사용량 | 전월 사용량 | 전월 대비 |
+        # 계약전력" 표 헤더 뒤에 값 행("2,450 kWh | 2,400 kWh | ...")이 따로 오는
+        # 서식도 있다(한전 고지서 "사용량 내역" 표 — 라벨과 값이 같은 줄에 붙어있지
+        # 않음). "당월 사용량" 헤더 뒤 첫 "숫자 kWh" 토큰을 값으로 삼는다 — 헤더 행
+        # 자체엔 숫자가 없으므로 값 행의 첫 kWh 수치까지 건너뛰게 된다.
+        table_m = re.search(
+            _label_pattern("당월 사용량") + r"[\s\S]{0,200}?(\d[\d,]*)\s*kWh", text
+        )
+        if table_m:
+            quantity = _parse_amount(table_m.group(1), field_label="사용량")
     # 실측: "청구금액(원)"이 아니라 "청구금액"(단위 없이) 바로 뒤에 금액이 온다
     # ("청구금액 9,240원") — "(원)"을 선택적으로 바꿔 둘 다 허용.
     amount = _parse_amount(
@@ -338,6 +347,16 @@ def _parse_electric_bill(text: str) -> dict:
     if quantity is not None:
         result["quantity"] = quantity
         result["quantity_unit"] = "kWh"
+    elif "kWh" in text:
+        # "사용량 자체가 없는 서식"과 "있는데 정규식이 못 읽은 경우"는 그대로 두면
+        # 둘 다 quantity=None으로 똑같이 보여 구분이 안 된다 — 후자는 파서 결함이지
+        # 진짜 데이터 갭이 아니므로, 텍스트에 kWh 흔적이 있는데도 못 뽑았으면 다르게
+        # 표시한다(관리비 고지서 quality_flag와 같은 결). calc_engine의 HITL "계산
+        # 실패 사유"는 순수 함수 경계상 문서 원문을 모르므로 그대로 두고, 대신
+        # source_documents.verification_status·업로드 응답 guidance_message로
+        # "이건 데이터 갭이 아니라 파서 버그일 수 있다"는 감사 흔적을 남긴다.
+        result["quality_flag"] = USAGE_UNRECOGNIZED_QUALITY_FLAG
+        result["guidance_message"] = _USAGE_UNRECOGNIZED_GUIDANCE
     return result
 
 
@@ -603,6 +622,12 @@ def parse_tax_invoice_table_rows(rows: list[OcrRow]) -> dict | None:
         return result  # 첫 데이터 행만 사용 — _parse_tax_invoice_item_row()와 동일 정책
     return None
 
+
+USAGE_UNRECOGNIZED_QUALITY_FLAG = "usage_unrecognized"
+_USAGE_UNRECOGNIZED_GUIDANCE = (
+    "고지서에 사용량(kWh) 표시가 있는 것 같은데 자동으로 읽지 못했어요 — "
+    "개발팀이 서식을 확인해야 해요."
+)
 
 _MGMT_FEE_ELECTRIC_ITEM_PATTERN = re.compile(rf"{_label_pattern('전기료')}\s*[:\s]*([\d,]+)\s*원?")
 MGMT_FEE_QUALITY_FLAG = "mgmt_fee_estimate"

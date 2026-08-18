@@ -13,6 +13,7 @@ from reportlab.pdfgen import canvas
 
 from api.document_ingestion import REPO_ROOT
 from db.document.document_text_extractor import (
+    USAGE_UNRECOGNIZED_QUALITY_FLAG,
     DocumentParseError,
     DocumentTypeMismatchError,
     detect_document_type,
@@ -81,6 +82,42 @@ def test_electric_bill_rejects_forecast_labeled_amount():
     ]))
     with pytest.raises(DocumentParseError, match="예상"):
         parse_document_text(text, "electric_bill")
+
+
+def test_electric_bill_table_layout_usage_extracts_header_row_value():
+    """실측: 한전 고지서 중엔 "사용량(kWh)" 인라인 라벨이 아니라 "당월 사용량 |
+    전월 사용량 | 전월 대비 | 계약전력" 헤더 행과 "2,450 kWh | 2,400 kWh | +50 kWh |
+    75 kW" 값 행이 따로 렌더링되는 표 서식이 있다(합성 전표 생성기가 만드는
+    실제 서식). 헤더 뒤 첫 kWh 값(당월 사용량)을 잡아야지, 옆 칸의 계약전력
+    (kW, kWh 아님)과 헷갈리면 안 된다."""
+    text = extract_pdf_text(_pdf([
+        "전기요금 고지서",
+        "청구월: 2025-01 계약종별: 산업용(을) 고압A",
+        "당월 사용량 전월 사용량 전월 대비 계약전력",
+        "2,450 kWh 2,400 kWh +50 kWh 75 kW",
+        "청구금액(원) 5,491,807",
+    ]))
+    result = parse_document_text(text, "electric_bill")
+    assert result["quantity"] == 2450
+    assert result["quantity_unit"] == "kWh"
+    assert "quality_flag" not in result
+
+
+def test_electric_bill_kwh_present_but_unrecognized_sets_quality_flag():
+    """사용량 텍스트가 있는 것 같은데(kWh 흔적) 알려진 두 패턴(인라인 라벨·표
+    헤더) 어느 쪽에도 안 걸리면, 원래 사용량이 없는 서식과 똑같이 quantity=None
+    으로 조용히 넘기지 않고 quality_flag로 구분해 둔다 — 파서 결함과 진짜 데이터
+    갭을 구분해야 HITL에 조용히 묻히지 않는다."""
+    text = extract_pdf_text(_pdf([
+        "전기요금 고지서",
+        "청구월: 2025-01 계약종별: 산업용(을) 고압A",
+        "이번 달 검침 기준 사용전력량은 kWh 단위로 뒷면 그래프를 참고하세요",
+        "청구금액(원) 5,491,807",
+    ]))
+    result = parse_document_text(text, "electric_bill")
+    assert "quantity" not in result
+    assert result["quality_flag"] == USAGE_UNRECOGNIZED_QUALITY_FLAG
+    assert "guidance_message" in result
 
 
 def test_parse_document_text_without_expected_type_auto_detects():
