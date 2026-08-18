@@ -199,8 +199,8 @@ def test_ocr_pdf_with_unrecognized_format_and_failed_ocr_returns_422(db, client,
     """PDF는 맞지만 알려진 서식이 아니면(제목 줄 불일치 등) OCR 폴백을 타는데,
     그마저 실패하면 값을 지어내지 않고 422로 실패한다 — 예전엔 year/month가
     있으면 합성값으로 통과했었다. OCR 호출은 monkeypatch로 대체해 실 모델 로딩을 안 쓴다."""
-    import db.document_extraction as document_extraction
-    from db.document_text_extractor import DocumentParseError
+    import db.document.document_extraction as document_extraction
+    from db.document.document_text_extractor import DocumentParseError
 
     def _ocr_fails(file_bytes):
         raise DocumentParseError("문서를 정확히 읽지 못했어요 — 더 선명한 사진으로 다시 올려 주세요")
@@ -221,8 +221,8 @@ def test_ocr_image_upload_succeeds_via_ocr_fallback(db, client, monkeypatch):
     폴백을 탄다 — 프론트가 이미 `accept="image/*,.pdf"`로 사진 업로드를 받고 있던
     것과 백엔드가 이제 맞아떨어진다. 실 모델 로딩 없이 OCR 재구성 텍스트만
     monkeypatch로 고정하고, 구조화(정규식 파싱)는 실제 경로를 그대로 탄다."""
-    import db.document_extraction as document_extraction
-    from db.document_ocr_extractor import OcrResult
+    import db.document.document_extraction as document_extraction
+    from db.document.document_ocr_extractor import OcrResult
 
     monkeypatch.setattr(
         document_extraction, "ocr_extract",

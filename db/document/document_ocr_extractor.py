@@ -28,7 +28,7 @@ import threading
 import numpy as np
 from PIL import Image
 
-from db.document_text_extractor import DocumentParseError, OcrRow
+from db.document.document_text_extractor import DocumentParseError, OcrRow
 
 _ocr_engine = None  # lazy singleton — PaddleOCR(lang="korean")
 _ocr_engine_lock = threading.Lock()

@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from db.document_requirements import required_documents
+from db.document.document_requirements import required_documents
 from db.models import (
     Classification,
     Company,

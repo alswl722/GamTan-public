@@ -25,7 +25,7 @@ from db.init_db import (
     seed_unit_prices,
 )
 from db.models import Base, Classification, Company, FinancialInstitution, SourceDocument, Voucher
-from db.rate_approvals import (
+from db.pcaf_engine.rate_approvals import (
     AlreadyProcessedError,
     CompanyNotFoundError,
     InvalidScopeError,

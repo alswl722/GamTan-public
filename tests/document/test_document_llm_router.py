@@ -12,8 +12,8 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-import db.document_llm_router as router
-from db.document_text_extractor import DocumentParseError, DocumentTypeMismatchError
+import db.document.document_llm_router as router
+from db.document.document_text_extractor import DocumentParseError, DocumentTypeMismatchError
 from db.models import Base
 
 

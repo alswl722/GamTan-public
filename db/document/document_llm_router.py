@@ -26,8 +26,8 @@ from google.genai import types
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from db.document_ocr_extractor import rasterize_to_images
-from db.document_text_extractor import (
+from db.document.document_ocr_extractor import rasterize_to_images
+from db.document.document_text_extractor import (
     DOCUMENT_TYPE_LABEL,
     DocumentParseError,
     DocumentTypeMismatchError,

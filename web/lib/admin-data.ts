@@ -5,6 +5,7 @@ import { apiGet, apiPatch, apiPost, BASE_URL } from "@/lib/api";
 import type {
   BulkActionResult,
   ClassificationEdit,
+  ClimateRiskReport,
   CompanyOverview,
   DocumentAccessLogEntry,
   HitlItem,
@@ -113,4 +114,15 @@ export function auditPackageCsvUrl(companyId: number, year: number): string {
 export function auditPackagePdfUrl(companyId: number, year: number): string {
   const base = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
   return `${base}/admin/audit-package?company_id=${companyId}&year=${year}&format=pdf`;
+}
+
+/** 기후리스크 리포트 — portfolio_summary()를 금감원 4단계 구조로 재배열(재계산 없음). */
+export function getClimateRiskReport(): Promise<ClimateRiskReport> {
+  return apiGet("/admin/climate-risk-report");
+}
+
+/** 기후리스크 리포트 PDF 내보내기 URL — 다운로드 링크로 그대로 사용. */
+export function climateRiskReportPdfUrl(): string {
+  const base = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+  return `${base}/admin/climate-risk-report?format=pdf`;
 }

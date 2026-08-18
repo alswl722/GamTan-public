@@ -30,9 +30,9 @@ from db.calc_engine import (
     index_emission_factors,
     index_unit_prices,
 )
-from db.k_taxonomy import k_taxonomy_fields_for_rule
+from db.pcaf_engine.k_taxonomy import k_taxonomy_fields_for_rule
 from db.models import Classification, Voucher
-from db.pcaf import company_pcaf_summary
+from db.pcaf_engine.pcaf import company_pcaf_summary
 
 # LLM confidence 임계값 — 미달 시 HITL(review_required)로 이관 (CLAUDE.md §5-3)
 CONFIDENCE_THRESHOLD = 0.7

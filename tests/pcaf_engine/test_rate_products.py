@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from db.init_db import seed_pcaf_quality_rules, seed_rate_products
 from db.models import Base, Classification, Company, RateProduct, Voucher
-from db.rate_products import rate_product_status_for_company, rate_product_status_for_scope
+from db.pcaf_engine.rate_products import rate_product_status_for_company, rate_product_status_for_scope
 
 YEAR = 2026
 

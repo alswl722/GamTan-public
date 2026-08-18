@@ -30,7 +30,7 @@ from db.models import (
     OrganizationalBoundary,
     Voucher,
 )
-from db.pcaf_quality import (
+from db.pcaf_engine.pcaf_quality import (
     aggregate_scope_emissions,
     assess_borrower_emission_quality,
     assess_inventory_completeness,

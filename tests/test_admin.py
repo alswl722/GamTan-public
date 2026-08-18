@@ -20,7 +20,7 @@ from db.init_db import (
     seed_unit_prices,
 )
 from db.models import Base, Classification, Company, TraceLog, Voucher
-from db.pcaf import company_pcaf_summary, portfolio_summary
+from db.pcaf_engine.pcaf import company_pcaf_summary, portfolio_summary
 
 
 @pytest.fixture()

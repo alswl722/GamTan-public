@@ -36,7 +36,7 @@ _BRAND = colors.HexColor("#00c7a9")
 _BRAND_INK = colors.HexColor("#00967f")
 _BRAND_SOFT = colors.HexColor("#e3faf5")
 
-_LOGO_PATH = Path(__file__).resolve().parent / "assets" / "im-symbol.png"
+_LOGO_PATH = Path(__file__).resolve().parent.parent / "assets" / "im-symbol.png"
 _LOGO_ASPECT = 96 / 183  # im-symbol.png 원본 183x96
 
 _SCOPE_LABEL = {"scope_1": "Scope 1 (직접배출)", "scope_2": "Scope 2 (전력 간접배출)"}

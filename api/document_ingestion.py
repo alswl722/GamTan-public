@@ -13,8 +13,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from api.queries import resolve_institution_borrower
-from db.document_extraction import extract_document
-from db.document_text_extractor import DocumentParseError
+from db.document.document_extraction import extract_document
+from db.document.document_text_extractor import DocumentParseError
 from db.hometax_excel_parser import parse_hometax_excel
 from db.models import SourceDocument, Voucher
 
