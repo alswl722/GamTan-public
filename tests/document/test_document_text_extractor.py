@@ -1,12 +1,17 @@
 """db/document_text_extractor.py — PDF 텍스트에서 문서종류·날짜·금액·수량을
 정규식으로 파싱하는 실 추출기 검증. 값을 지어내지 않는지가 핵심축."""
+import csv
+import glob
 import io
+import os
+import unicodedata
 
 import pytest
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfgen import canvas
 
+from api.document_ingestion import REPO_ROOT
 from db.document.document_text_extractor import (
     DocumentParseError,
     DocumentTypeMismatchError,
@@ -578,3 +583,113 @@ def test_parse_tax_invoice_date_table_header_without_value_returns_none():
         [(0.0, 90.0, "판독불가"), (150.0, 220.0, "460,617")],
     ]
     assert parse_tax_invoice_date_table(rows) is None
+
+
+# ── 별지 제11호 국세청 표준 수기 세금계산서(실측 2026-08-18, data/fixtures/
+#    tax_invoices) — "작성일자:" 콜론도 "작성일자" 헤더 셀도 아니라 "작성" 2글자
+#    라벨 + 2자리 연도, 품목행은 월/일/세액/비고까지 포함한 9칼럼이다. ──────────
+
+def test_detect_document_type_recognizes_title_without_jeonja_prefix():
+    assert detect_document_type("세 금 계 산 서 책 번 호") == "tax_invoice"
+
+
+def test_parse_tax_invoice_header_reads_official_form_date_row():
+    """"작성일자:" 콜론이 없고 "작성" 헤더 다음 줄에 연(2자리)·월·일이 공백으로만
+    구분돼 있다. 뒤따르는 자릿값 라벨("백"·"십"...)은 금액 자릿수에 따라 위치가
+    달라지므로(실측 확인) 앵커로 쓰지 않고 다음 줄 맨 앞 숫자 3개만 읽는다."""
+    text = extract_pdf_text(_pdf([
+        "세 금 계 산 서 책 번 호",
+        "작 성 공 급 가 액 세 액 비 고",
+        "25 1 8 백 십 억 천 백 1 4 2 1 0 0 십 억 천 백 십 1 4 2 1 0",
+        "월 일 품 목 규격 수량 단가 공급가액 세액 비고",
+        "1 8 경유 지게차용 100 1,421 142,100 14,210 지게차 연료",
+    ]))
+    result = parse_document_text(text, "tax_invoice")
+    assert result["year"] == 2025 and result["month"] == 1
+
+
+def test_parse_tax_invoice_item_row_reads_official_form_row_with_memo():
+    """규격 칼럼에 "지게차용"처럼 정상적인 한글 단어가 들어가도(구형 포맷 전용
+    _HANGUL_SYLLABLE 방어 로직 미적용) 실패하지 않아야 하고, 비고(메모)에 공백이
+    섞여도(예: "지게차 연료") 끝까지 흡수해 공급가액을 오염시키지 않아야 한다.
+    수량에 단위가 안 찍혀 있으므로 quantity_unit은 채우지 않는다(db/calc_engine.py
+    가 배출계수 단위로 자동 보완 — CLAUDE.md 원칙1, LLM/파서가 값을 지어내지 않음)."""
+    text = extract_pdf_text(_pdf([
+        "세 금 계 산 서 책 번 호",
+        "작 성 공 급 가 액 세 액 비 고",
+        "25 1 8 백 십 억 천 백 1 4 2 1 0 0 십 억 천 백 십 1 4 2 1 0",
+        "월 일 품 목 규격 수량 단가 공급가액 세액 비고",
+        "1 8 경유 지게차용 100 1,421 142,100 14,210 지게차 연료",
+    ]))
+    result = parse_document_text(text, "tax_invoice")
+    assert result["item_description"] == "경유"
+    assert result["supply_amount_krw"] == 142_100
+    assert result["quantity"] == 100
+    assert "quantity_unit" not in result
+
+
+def test_parse_tax_invoice_item_row_official_form_tolerates_missing_quantity():
+    """수량이 "-"(미기재)면 quantity 필드 자체를 안 넣어 금액÷단가 환산 경로로
+    넘어가게 한다 — 구형 포맷과 같은 원칙."""
+    text = extract_pdf_text(_pdf([
+        "세 금 계 산 서 책 번 호",
+        "작 성 공 급 가 액 세 액 비 고",
+        "25 3 5 백 십 억 천 백 1 4 2 1 0 0 십 억 천 백 십 1 4 2 1 0",
+        "월 일 품 목 규격 수량 단가 공급가액 세액 비고",
+        "3 5 경유 - - - 142,100 14,210",
+    ]))
+    result = parse_document_text(text, "tax_invoice")
+    assert result["supply_amount_krw"] == 142_100
+    assert "quantity" not in result
+
+
+# ── data/fixtures/tax_invoices 실 fixture 회귀 테스트 ────────────────────────
+
+_TAX_INVOICE_FIXTURES_DIR = os.path.join(REPO_ROOT, "data", "fixtures", "tax_invoices")
+# C006에는 스키마가 다른(카페영수증 반려 시나리오용) 별도 manifest가 섞여 있어
+# 정답 대조 대상에서 제외 — 파싱 자체가 성공하는지는 아래 별도 테스트로 확인한다.
+_MANIFEST_COMPANIES = ["MAIN", "C001", "C002", "C004", "C005"]
+
+
+def _load_manifest(company: str) -> dict[str, dict]:
+    path = os.path.join(_TAX_INVOICE_FIXTURES_DIR, company, "_manifest.csv")
+    with open(path, encoding="utf-8-sig") as f:
+        return {unicodedata.normalize("NFC", r["file_name"]): r for r in csv.DictReader(f)}
+
+
+def _fixture_pdfs(company: str) -> list[str]:
+    return sorted(glob.glob(os.path.join(_TAX_INVOICE_FIXTURES_DIR, company, "*.pdf")))
+
+
+@pytest.mark.parametrize("company", _MANIFEST_COMPANIES)
+def test_official_form_fixtures_match_manifest_ground_truth(company):
+    """data/fixtures/tax_invoices/{company}의 모든 PDF가 텍스트 레이어 경로만으로
+    (OCR 없이) 파싱되고, 결과가 같은 폴더 _manifest.csv의 정답과 일치하는지 확인 —
+    이 fixture가 지금부터 파싱 로직의 기준 데이터다."""
+    manifest = _load_manifest(company)
+    pdfs = _fixture_pdfs(company)
+    assert pdfs, f"{company}에 PDF fixture가 없음"
+    for pdf_path in pdfs:
+        fname = unicodedata.normalize("NFC", os.path.basename(pdf_path))
+        expected = manifest[fname]
+        with open(pdf_path, "rb") as f:
+            text = extract_pdf_text(f.read())
+        result = parse_document_text(text, "tax_invoice")
+        exp_year, exp_month = expected["issue_date"].split("-")[:2]
+        assert result["year"] == int(exp_year), pdf_path
+        assert result["month"] == int(exp_month), pdf_path
+        assert result["item_description"] == expected["item_name"], pdf_path
+        assert result["supply_amount_krw"] == int(expected["supply_amount_krw"]), pdf_path
+
+
+def test_official_form_fixtures_c006_all_parse_without_manifest_check():
+    """C006는 manifest 스키마가 달라(카페영수증 반려 케이스 포함) 값 대조는
+    못 하지만, 세금계산서 PDF는 여전히 전부 파싱 성공해야 한다."""
+    pdfs = [p for p in _fixture_pdfs("C006") if "세금계산서" in os.path.basename(p)]
+    assert pdfs
+    for pdf_path in pdfs:
+        with open(pdf_path, "rb") as f:
+            text = extract_pdf_text(f.read())
+        result = parse_document_text(text, "tax_invoice")
+        assert result["item_description"] == "경유", pdf_path
+        assert result["supply_amount_krw"] > 0, pdf_path
