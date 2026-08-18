@@ -6,13 +6,17 @@ import { useEffect, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import {
   getCompanies,
+  getCompanyGoal,
   getCompanyId,
   getOwnerProgress,
   setCompanyId,
+  type CompanyGoal,
   type CompanyListItem,
   type OwnerProgress,
 } from "@/lib/api";
 import OwnerNotificationBanner from "@/components/OwnerNotificationBanner";
+import { GoalBox } from "@/components/GoalCard";
+import { GoalSheet } from "@/components/GoalSheet";
 
 /** 사장님 앱 메인 화면 — 계정(로그인) 개념이 없어 기업을 직접 골라야 한다.
  * 고른 기업은 setCompanyId()로 저장되고, 이후 /owner/measure의 모든 단계가
@@ -76,6 +80,8 @@ export default function OwnerHomePage() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<OwnerProgress | null>(null);
+  const [goal, setGoal] = useState<CompanyGoal | null | undefined>(undefined); // undefined = 아직 조회 전
+  const [goalSheetOpen, setGoalSheetOpen] = useState(false);
 
   useEffect(() => {
     Promise.all([getCompanies(), getCompanyId()])
@@ -104,6 +110,28 @@ export default function OwnerHomePage() {
       cancelled = true;
     };
   }, [selectedId]);
+
+  useEffect(() => {
+    // 5단계가 전부 끝난 뒤에만 목표 조회 — 그 전엔 홈 박스가 여전히 측정 유도 카드다.
+    if (selectedId === null || !progress) {
+      setGoal(undefined);
+      return;
+    }
+    const doneCount = Object.values(progress.steps).filter(Boolean).length;
+    if (doneCount < MEASURE_STAGES.length) {
+      setGoal(undefined);
+      return;
+    }
+    let cancelled = false;
+    getCompanyGoal(selectedId)
+      .then((r) => {
+        if (!cancelled) setGoal(r.goal);
+      })
+      .catch((err) => console.error("목표 조회 실패:", err));
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId, progress]);
 
   function choose(id: number) {
     setCompanyId(id);
@@ -155,45 +183,60 @@ export default function OwnerHomePage() {
         </div>
       )}
 
-      {/* 프로모 카드 — Figma 시안: 캐릭터를 흐름 안에 크게 두면 행 높이가 캐릭터 키만큼
-          늘어나고, 텍스트·화살표는 그 안에서 자동으로 세로 중앙 정렬된다(절대배치 불필요,
-          진행바와 겹칠 일도 없음). */}
-      <Link
-        href="/owner/measure"
-        className="btn-cta group mt-5 block rounded-3xl bg-surface px-5 py-5 shadow-card transition-transform"
-      >
-        <span className="flex items-end justify-between gap-2">
-          <span className="mb-2 max-w-[58%]">
-            <span className="block text-[12px] font-bold text-brand-ink">탄소 측정</span>
-            <span className="text-[19px] font-extrabold leading-snug text-ink">
-              우리 기업 탄소 배출량을
-              <br />
-              확인해보세요
+      {/* 5단계가 전부 끝나기 전엔 측정 유도 카드, 끝나면 목표 박스로 자리를 대신한다 —
+          Figma 시안: 캐릭터를 흐름 안에 크게 두면 행 높이가 캐릭터 키만큼 늘어나고,
+          텍스트·화살표는 그 안에서 자동으로 세로 중앙 정렬된다(절대배치 불필요). */}
+      {doneCount < MEASURE_STAGES.length ? (
+        <Link
+          href="/owner/measure"
+          className="btn-cta group mt-5 block rounded-3xl bg-surface px-5 py-5 shadow-card transition-transform"
+        >
+          <span className="flex items-end justify-between gap-2">
+            <span className="mb-2 max-w-[58%]">
+              <span className="block text-[12px] font-bold text-brand-ink">탄소 측정</span>
+              <span className="text-[19px] font-extrabold leading-snug text-ink">
+                우리 기업 탄소 배출량을
+                <br />
+                확인해보세요
+              </span>
+            </span>
+            <span className="flex shrink-0 items-end gap-1">
+              <Image src="/dandi_ddockdi.png" alt="" width={447} height={183} className="h-16 w-auto shrink-0" />
+              <ChevronRight size={16} className="mb-1 shrink-0 text-faint" />
             </span>
           </span>
-          <span className="flex shrink-0 items-end gap-1">
-            <Image src="/dandi_ddockdi.png" alt="" width={447} height={183} className="h-16 w-auto shrink-0" />
-            <ChevronRight size={16} className="mb-1 shrink-0 text-faint" />
-          </span>
-        </span>
 
-        <span className="mt-0 block h-1 overflow-hidden rounded-full bg-line">
-          <span
-            className="block h-full rounded-full bg-brand transition-all duration-300"
-            style={{ width: `${(doneCount / MEASURE_STAGES.length) * 100}%` }}
-          />
-        </span>
-        <span className="mt-2 flex items-center justify-between">
-          {MEASURE_STAGES.map((stage, i) => (
+          <span className="mt-0 block h-1 overflow-hidden rounded-full bg-line">
             <span
-              key={stage}
-              className={`text-[10.5px] font-semibold ${i < doneCount ? "text-ink" : "text-faint"}`}
-            >
-              {stage}
-            </span>
-          ))}
-        </span>
-      </Link>
+              className="block h-full rounded-full bg-brand transition-all duration-300"
+              style={{ width: `${(doneCount / MEASURE_STAGES.length) * 100}%` }}
+            />
+          </span>
+          <span className="mt-2 flex items-center justify-between">
+            {MEASURE_STAGES.map((stage, i) => (
+              <span
+                key={stage}
+                className={`text-[10.5px] font-semibold ${i < doneCount ? "text-ink" : "text-faint"}`}
+              >
+                {stage}
+              </span>
+            ))}
+          </span>
+        </Link>
+      ) : selectedId !== null ? (
+        <GoalBox goal={goal ?? null} companyId={selectedId} onOpenSheet={() => setGoalSheetOpen(true)} />
+      ) : null}
+
+      {selectedId !== null && goalSheetOpen && (
+        <GoalSheet
+          companyId={selectedId}
+          onClose={() => setGoalSheetOpen(false)}
+          onSaved={(g) => {
+            setGoal(g);
+            setGoalSheetOpen(false);
+          }}
+        />
+      )}
 
       {selectedId !== null && <OwnerNotificationBanner companyId={selectedId} />}
 

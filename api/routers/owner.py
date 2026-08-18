@@ -16,6 +16,9 @@
 - PATCH /owner/{company_id}/classifications/{voucher_id}/anomaly-check  이상치 확인 답변(네/아니오/모르겠어요, 숫자 입력 없음)
 - GET   /owner/{company_id}/notifications       확정 전송 알림 목록(메인 화면 배너, 폴링 조회, ?unread=true)
 - PATCH /owner/{company_id}/notifications/{id}/read  알림 읽음 처리(배너 클릭 시)
+- GET   /owner/{company_id}/goal                홈 화면 목표 카드 — 활성 목표 + 재계산된 진행률·체크리스트
+- POST  /owner/{company_id}/goal                목표 확정(배출량 감축 | 등급·혜택 상승) — 기존 활성 목표는 superseded
+- POST  /owner/{company_id}/goal/{goal_id}/cancel  목표 취소
 
 GET /admin/alerts(은행 담당자용 포트폴리오 전체)와 같은 판정 로직
 (db/alerts.py::detect_alerts)을 재사용하되 자기 기업으로만 필터한다 —
@@ -69,6 +72,17 @@ from db.pcaf_engine.rate_approvals import (
     InvalidScopeError,
     NoUpgradeCandidateError,
     create_rate_request,
+)
+from db.pcaf_engine.company_goals import (
+    CompanyNotFoundError as GoalCompanyNotFoundError,
+    GoalNotFoundError,
+    InvalidTargetGradeError,
+    NoActivityDataError,
+    NoEmissionDataError,
+    cancel_goal,
+    create_emission_reduction_goal,
+    create_grade_upgrade_goal,
+    get_active_goal_progress,
 )
 
 router = APIRouter(prefix="/owner", tags=["owner"])
@@ -472,3 +486,63 @@ def mark_notification_read(
         session.commit()
 
     return {"id": notification.id, "read_at": notification.read_at}
+
+
+class GoalIn(BaseModel):
+    goal_type: Literal["emission_reduction", "grade_upgrade"]
+    # emission_reduction 전용
+    target_reduction_pct: float | None = None
+    # grade_upgrade 전용 — scope_group 필수, target_grade 생략 시 추천 목표(다음 도달
+    # 가능 등급)를 그대로 쓴다.
+    scope_group: Literal["scope_1", "scope_2"] | None = None
+    target_grade: int | None = None
+
+
+@router.get("/{company_id}/goal")
+def owner_goal(company_id: int, session: Session = Depends(get_session)):
+    """홈 화면 목표 카드 — 활성 목표가 없으면 goal: null. 진행률·체크리스트는 저장값이
+    아니라 조회할 때마다 다시 계산한다(db/pcaf_engine/company_goals.py)."""
+    if session.get(Company, company_id) is None:
+        raise HTTPException(status_code=404, detail=f"company_id={company_id} 없음")
+    return {"goal": get_active_goal_progress(session, company_id)}
+
+
+@router.post("/{company_id}/goal")
+def create_goal(company_id: int, body: GoalIn, session: Session = Depends(get_session)):
+    """새 목표 확정 — 기존 활성 목표는 덮어쓰지 않고 superseded로 전환한다(CLAUDE.md 원칙8).
+
+    goal_type="grade_upgrade"는 등급 상승과 우대금리 상품 조건 충족을 한 흐름으로
+    다룬다(같은 엔진 재사용, DISCLAIMER_TEXT가 응답에 항상 동봉됨 — 원칙10).
+    """
+    try:
+        if body.goal_type == "emission_reduction":
+            if body.target_reduction_pct is None:
+                raise HTTPException(status_code=422, detail="target_reduction_pct required")
+            create_emission_reduction_goal(
+                session, company_id, target_reduction_pct=body.target_reduction_pct
+            )
+        else:
+            if body.scope_group is None:
+                raise HTTPException(status_code=422, detail="scope_group required")
+            create_grade_upgrade_goal(
+                session, company_id, scope_group=body.scope_group, target_grade=body.target_grade
+            )
+    except GoalCompanyNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except (NoEmissionDataError, NoActivityDataError, InvalidTargetGradeError, ValueError) as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    return {"goal": get_active_goal_progress(session, company_id)}
+
+
+@router.post("/{company_id}/goal/{goal_id}/cancel")
+def cancel_goal_endpoint(company_id: int, goal_id: int, session: Session = Depends(get_session)):
+    """목표 취소 — 다른 기업 소유 목표는 404로 막는다(테넌트 경계, 기존 documents/notifications
+    엔드포인트와 같은 패턴)."""
+    try:
+        cancel_goal(session, company_id, goal_id)
+    except GoalNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return {"cancelled": True, "goal_id": goal_id}

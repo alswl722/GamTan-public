@@ -407,4 +407,62 @@ export function getUnclassifiedCount(companyId: number): Promise<{ unclassified_
   return apiGet<{ unclassified_count: number }>(`/classify/${companyId}`);
 }
 
+// GET/POST /owner/{company_id}/goal, POST /owner/{company_id}/goal/{id}/cancel —
+// db/pcaf_engine/company_goals.py. 5단계 위저드 완료 후 홈 화면 박스가 목표 카드로
+// 바뀔 때 쓰는 API. 진행률·체크리스트는 저장값이 아니라 조회할 때마다 다시 계산된다.
+export type GoalType = "emission_reduction" | "grade_upgrade";
+export interface MonthlyEmissionPoint {
+  month: number;
+  emission_tco2e: number;
+}
+export interface MonthlyCoveragePoint {
+  month: number;
+  covered: boolean;
+}
+export interface CompanyGoal {
+  id: number;
+  goal_type: GoalType;
+  scope_group: "scope_1" | "scope_2" | null;
+  baseline_reporting_year: number;
+  baseline_value: number;
+  target_value: number;
+  target_reduction_pct: number | null;
+  target_product_name: string | null;
+  status: "active" | "achieved" | "cancelled" | "superseded";
+  created_at: string | null;
+  achieved: boolean;
+  measured: boolean;
+  current_value: number | null;
+  progress_pct: number;
+  missing_items?: RateMissingItem[];
+  disclaimer_text?: string;
+  monthly_emission?: MonthlyEmissionPoint[]; // emission_reduction 전용 — 이번 해(또는 비교연도) 월별 배출량
+  monthly_coverage?: MonthlyCoveragePoint[]; // grade_upgrade 전용 — 월별 데이터 완전성(링·막대 공용)
+}
+
+export function getCompanyGoal(companyId: number): Promise<{ goal: CompanyGoal | null }> {
+  return apiGet(`/owner/${companyId}/goal`);
+}
+
+export interface CreateGoalInput {
+  goal_type: GoalType;
+  target_reduction_pct?: number; // emission_reduction 필수
+  scope_group?: "scope_1" | "scope_2"; // grade_upgrade 필수
+  target_grade?: number; // grade_upgrade 선택(생략 시 추천 목표)
+}
+
+export function createCompanyGoal(
+  companyId: number,
+  body: CreateGoalInput,
+): Promise<{ goal: CompanyGoal }> {
+  return apiPost(`/owner/${companyId}/goal`, body);
+}
+
+export function cancelCompanyGoal(
+  companyId: number,
+  goalId: number,
+): Promise<{ cancelled: boolean; goal_id: number }> {
+  return apiPost(`/owner/${companyId}/goal/${goalId}/cancel`);
+}
+
 export { BASE_URL };
