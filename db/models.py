@@ -552,6 +552,54 @@ class RateProduct(Base):
     )
 
 
+class CompanyGoal(Base):
+    """사장님 목표 설정 — 5단계 위저드가 끝나면 홈 화면 박스가 목표 카드로 바뀔 때
+    쓰는 스냅숏.
+
+    goal_type 2종:
+      - emission_reduction: 배출량 N% 감축. baseline/target_value는 tCO2e(Scope1+2 합산,
+        null Scope는 제외 — 원칙7).
+      - grade_upgrade: PCAF 데이터 품질 등급 상승. baseline/target_value는 등급(1~5,
+        작을수록 우수). 내부적으로 우대금리 상품 매칭과 완전히 같은 엔진
+        (db/pcaf_engine/rate_products.py::rate_product_status_for_scope)을 써서, 목표
+        등급이 실제 상품 조건과 맞아떨어지면 target_product_name에 남는다 — 등급 상승과
+        "혜택 조건 채우기"를 한 화면·한 흐름으로 다루기로 한 기획 결정(등급 탭과 혜택 탭을
+        분리하지 않음).
+
+    기업당 활성(status='active') 목표는 항상 최대 1개다 — 새 목표를 만들면 기존 활성
+    목표는 덮어쓰지 않고 superseded로 전환한다(원칙8과 같은 결). 진행률·체크리스트는
+    여기 저장하지 않고 조회할 때마다 다시 계산한다(quality-report·progress 엔드포인트와
+    같은 이 프로젝트의 관례) — 이 테이블은 "무엇을 목표로 했는지"의 스냅숏만 갖는다.
+    """
+    __tablename__ = "company_goals"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    goal_type = Column(String(30), nullable=False)  # emission_reduction | grade_upgrade
+    scope_group = Column(String(10))  # grade_upgrade 필수(scope_1|scope_2), emission_reduction은 null(총량)
+    baseline_reporting_year = Column(Integer, nullable=False)
+    baseline_value = Column(Float, nullable=False)   # 감축: tCO2e 총량 / 등급: 시작 등급
+    target_value = Column(Float, nullable=False)     # 감축: 목표 tCO2e / 등급: 목표 등급
+    target_reduction_pct = Column(Float)              # emission_reduction 전용 — 사용자가 고른 원래 %
+    target_product_name = Column(String(200))         # grade_upgrade 전용 — 매칭 상품명(없을 수 있음)
+    status = Column(String(20), nullable=False, default="active")  # active|achieved|cancelled|superseded
+    achieved_at = Column(DateTime(timezone=True))
+    superseded_by_goal_id = Column(Integer, ForeignKey("company_goals.id"))
+    created_at = Column(DateTime(timezone=True), default=now)
+
+    __table_args__ = (
+        CheckConstraint(
+            "goal_type IN ('emission_reduction', 'grade_upgrade')",
+            name="ck_company_goals_goal_type",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'achieved', 'cancelled', 'superseded')",
+            name="ck_company_goals_status",
+        ),
+        Index("ix_company_goals_company_status", "company_id", "status"),
+    )
+
+
 class PcafQualityRule(Base):
     """PCAF Business Loans and Unlisted Equity 데이터 품질표 (§7.7)
 
