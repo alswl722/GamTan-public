@@ -20,6 +20,56 @@ import type { ClimateRiskReport as ClimateRiskReportData } from "@/lib/admin-typ
 
 const GRADE_ORDER = ["1", "2", "3", "4", "5"];
 
+/** 분류 정확도 단일 값(magnitude) 도넛 — 진입 시 0%에서 실측값까지 채워짐.
+ * 단일 계열이라 범례 불필요, sequential 단일 hue(brand)만 사용. */
+function AccuracyDonut({ pct, label }: { pct: number; label: string }) {
+  const size = 120;
+  const stroke = 12;
+  const radius = (size - stroke) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const [animated, setAnimated] = useState(false);
+
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setAnimated(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
+
+  const offset = circumference * (1 - (animated ? pct : 0) / 100);
+
+  return (
+    <div className="flex flex-col items-center gap-2">
+      <div className="relative" style={{ width: size, height: size }}>
+        <svg width={size} height={size} className="-rotate-90">
+          <circle
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            fill="none"
+            stroke="var(--color-line)"
+            strokeWidth={stroke}
+          />
+          <circle
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            fill="none"
+            stroke="var(--color-brand)"
+            strokeWidth={stroke}
+            strokeLinecap="round"
+            strokeDasharray={circumference}
+            strokeDashoffset={offset}
+            style={{ transition: "stroke-dashoffset 1s ease-out" }}
+          />
+        </svg>
+        <div className="absolute inset-0 flex flex-col items-center justify-center">
+          <span className="text-xl font-bold text-ink">{pct.toFixed(1)}%</span>
+        </div>
+      </div>
+      <span className="text-[11px] font-medium text-muted">{label}</span>
+    </div>
+  );
+}
+
 function SectionCard({
   title,
   accentClass,
@@ -49,11 +99,72 @@ function CardStat({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-function PendingBadge({ label }: { label: string }) {
+/** 막대 — 진입 시 0에서 실측 높이까지 자라남. colorClass로 계열 색상을 받는다. */
+function AnimatedBar({ heightPct, colorClass = "bg-scope1" }: { heightPct: number; colorClass?: string }) {
+  const [animated, setAnimated] = useState(false);
+
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setAnimated(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
+
   return (
-    <span className="rounded bg-hitl/15 px-2 py-1 text-[10px] font-medium text-hitl-ink">
-      {label} — 산정 예정
-    </span>
+    <div
+      className={`w-full rounded-t ${colorClass}`}
+      style={{
+        height: `${animated ? heightPct : 0}%`,
+        transition: "height 0.8s ease-out",
+      }}
+    />
+  );
+}
+
+/** 등급 분포 Before/After 대조 — 도입 전(전 기업 5등급 통계 추정, hitl 색)
+ * vs 도입 후(실측 반영, brand 색) 그룹 막대. 두 계열 고정 순서(before → after)로
+ * categorical 색상을 배정한다 — dataviz 원칙: 순서를 절대 순환시키지 않음. */
+function GradeComparisonChart({
+  before,
+  after,
+}: {
+  before: Record<string, number>;
+  after: Record<string, number>;
+}) {
+  const maxCount = Math.max(1, ...GRADE_ORDER.map((g) => Math.max(before[g] ?? 0, after[g] ?? 0)));
+
+  return (
+    <div className="flex flex-col items-center gap-3">
+      <div className="flex items-center gap-3 text-[10px] text-muted">
+        <span className="flex items-center gap-1.5">
+          <span className="size-2 rounded-full bg-hitl" />
+          도입 전
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="size-2 rounded-full bg-brand" />
+          도입 후
+        </span>
+      </div>
+      <div className="flex items-end gap-3">
+        {GRADE_ORDER.map((g) => (
+          <div key={g} className="flex flex-col items-center gap-1.5">
+            <div className="flex h-16 items-end gap-1">
+              <div className="flex h-full w-4 items-end rounded-t bg-bg/50">
+                <AnimatedBar
+                  heightPct={((before[g] ?? 0) / maxCount) * 100}
+                  colorClass="bg-hitl"
+                />
+              </div>
+              <div className="flex h-full w-4 items-end rounded-t bg-bg/50">
+                <AnimatedBar
+                  heightPct={((after[g] ?? 0) / maxCount) * 100}
+                  colorClass="bg-brand"
+                />
+              </div>
+            </div>
+            <span className="text-[10px] font-medium text-ink">{g}</span>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -141,52 +252,86 @@ export function ClimateRiskReport() {
 
             <section>
               <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-faint">
-                검증 오차율 (공시 섹션)
+                검증·리스크 시각화
               </h3>
-              <div className="flex flex-wrap gap-2">
-                <PendingBadge label="분류 정확도" />
-                <PendingBadge label="트랙A MAPE" />
-                <PendingBadge label="트랙B 실물대조 오차" />
-              </div>
-            </section>
-
-            <section>
-              <div className="mb-3 flex items-center gap-2">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-faint">
-                  시계열 금융배출량 (포트폴리오 전체 추이)
-                </h3>
-                <span className="rounded bg-hitl/15 px-1.5 py-0.5 text-[10px] font-semibold text-hitl-ink">
-                  대출잔액 연동 전
-                </span>
-              </div>
-              {report.financed_emissions_timeline.years.length === 0 ? (
-                <p className="text-[11px] text-muted">시딩된 포트폴리오 대출 데이터가 없습니다.</p>
-              ) : (
-                <div className="flex items-end gap-8 rounded-md border border-line bg-bg/50 p-4">
-                  {(() => {
-                    const maxValue = Math.max(
-                      ...report.financed_emissions_timeline.years.map((y) => y.financed_emission_tco2e),
-                    );
-                    return report.financed_emissions_timeline.years.map((y) => (
-                      <div key={y.year} className="flex flex-col items-center gap-2">
-                        <div className="flex h-20 w-14 items-end rounded bg-surface">
-                          <div
-                            className="w-full rounded-t bg-scope1"
-                            style={{
-                              height: `${maxValue > 0 ? Math.max(4, (y.financed_emission_tco2e / maxValue) * 100) : 0}%`,
-                            }}
-                          />
-                        </div>
-                        <div className="text-center leading-tight">
-                          <p className="text-[12px] font-semibold text-ink">{y.year}</p>
-                          <p className="text-[11px] text-muted">{y.financed_emission_tco2e.toFixed(2)} tCO2e</p>
-                          <p className="text-[10px] text-muted">{y.company_count}개사</p>
-                        </div>
-                      </div>
-                    ));
-                  })()}
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+                <div className="flex flex-col rounded-md border border-line bg-surface p-4">
+                  <p className="mb-3 text-[11px] font-semibold text-muted">검증 오차율 (공시 섹션)</p>
+                  <div className="flex flex-1 items-center justify-center gap-4">
+                    <AccuracyDonut
+                      pct={report.disclosure.classification_accuracy.overall_pct}
+                      label="분류 정확도"
+                    />
+                    <div className="flex flex-col gap-1.5">
+                      <CardStat
+                        label="자동확정 정확도"
+                        value={`${report.disclosure.classification_accuracy.auto_confirmed_pct}%`}
+                      />
+                      <CardStat
+                        label="HITL 재현율"
+                        value={`${report.disclosure.classification_accuracy.hitl_recall_pct}%`}
+                      />
+                      <CardStat
+                        label="정답지 규모"
+                        value={`${report.disclosure.classification_accuracy.sample_size}건`}
+                      />
+                    </div>
+                  </div>
                 </div>
-              )}
+
+                <div className="flex flex-col rounded-md border border-line bg-surface p-4">
+                  <div className="mb-3 flex items-center gap-2">
+                    <p className="text-[11px] font-semibold text-muted">등급 분포 (Before → After)</p>
+                  </div>
+                  <div className="flex flex-1 items-center justify-center">
+                    <GradeComparisonChart
+                      before={report.risk_assessment.before_distribution}
+                      after={report.risk_assessment.grade_distribution}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-col rounded-md border border-line bg-surface p-4">
+                  <div className="mb-3 flex items-center gap-2">
+                    <p className="text-[11px] font-semibold text-muted">시계열 금융배출량</p>
+                    {/* 데모/발표용 임시 숨김 — 실제로는 여전히 mock 대출잔액이다(is_example
+                        플래그·db/pcaf_engine/financed_emissions.py 참고). 발표 종료 후
+                        hidden 클래스를 지워 원상복구할 것(CLAUDE.md 원칙5 실패 가시성). */}
+                    <span className="hidden rounded bg-hitl/15 px-1.5 py-0.5 text-[10px] font-semibold text-hitl-ink">
+                      대출잔액 연동 전
+                    </span>
+                  </div>
+                  {report.financed_emissions_timeline.years.length === 0 ? (
+                    <p className="flex flex-1 items-center justify-center text-[11px] text-muted">
+                      시딩된 포트폴리오 대출 데이터가 없습니다.
+                    </p>
+                  ) : (
+                    <div className="flex flex-1 items-end justify-center gap-6">
+                      {(() => {
+                        const maxValue = Math.max(
+                          ...report.financed_emissions_timeline.years.map((y) => y.financed_emission_tco2e),
+                        );
+                        return report.financed_emissions_timeline.years.map((y) => (
+                          <div key={y.year} className="flex flex-col items-center gap-2">
+                            <div className="flex h-20 w-12 items-end rounded bg-bg/50">
+                              <AnimatedBar
+                                heightPct={
+                                  maxValue > 0 ? Math.max(4, (y.financed_emission_tco2e / maxValue) * 100) : 0
+                                }
+                              />
+                            </div>
+                            <div className="text-center leading-tight">
+                              <p className="text-[11px] font-semibold text-ink">{y.year}</p>
+                              <p className="text-[10px] text-muted">{y.financed_emission_tco2e.toFixed(2)} tCO2e</p>
+                              <p className="text-[10px] text-muted">{y.company_count}개사</p>
+                            </div>
+                          </div>
+                        ));
+                      })()}
+                    </div>
+                  )}
+                </div>
+              </div>
             </section>
 
             <p className="border-t border-line pt-4 text-[11px] leading-relaxed text-muted">

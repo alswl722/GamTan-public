@@ -53,6 +53,11 @@ from db.document.document_access_log import access_history, record_access, recen
 from db.models import Classification, Company, FinancialInstitution, OwnerNotification, Portfolio, SourceDocument, TraceLog, Voucher
 from db.pcaf_engine.financed_emissions import portfolio_financed_emissions_by_year
 from db.pcaf_engine.pcaf import company_pcaf_summary, portfolio_summary
+from db.verification_results import (
+    CLASSIFICATION_ACCURACY_RESULT,
+    TRACK_A_MAPE_RESULT,
+    TRACK_B_FIELD_TEST_RESULT,
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -667,12 +672,15 @@ def climate_risk_report(format: str = "json", session: Session = Depends(get_ses
         },
         "risk_assessment": {
             "grade_distribution": portfolio["grade_distribution"],
+            "before_distribution": portfolio["before_distribution"],
         },
         "disclosure": {
             "measured_coverage_pct": portfolio["measured_coverage_pct"],
             "hitl_total": portfolio["hitl_total"],
             "reviewed_today": portfolio["reviewed_today"],
-            "verification_error_rate": {"status": "pending", "note": "산정 예정 — 회계 담당 미착수"},
+            "classification_accuracy": CLASSIFICATION_ACCURACY_RESULT,
+            "track_a_mape": TRACK_A_MAPE_RESULT,
+            "track_b_field_test": TRACK_B_FIELD_TEST_RESULT,
         },
         "financed_emissions_timeline": {
             "is_example": True,

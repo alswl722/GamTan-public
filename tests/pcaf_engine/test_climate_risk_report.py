@@ -4,8 +4,10 @@ docs/tasks.md).
 핵심 검증축:
   - portfolio_summary()를 재계산 없이 4단계(거버넌스/전략/리스크평가/공시) 틀로
     재배열한다 — 신규 계산 로직 없음.
-  - 검증 오차율은 "산정 예정"으로, 시계열 금융배출량은 "예시 데이터(is_example)"
-    로 명시된다 — 실측인 것처럼 보이지 않아야 한다.
+  - 검증 3수치 중 분류 정확도는 PR #92 실측 확정(status=measured,
+    db/verification_results.py), 트랙A·B는 전제 데이터 미확보로 "산정 예정"
+    (status=pending)으로 명시된다. 시계열 금융배출량은 "예시 데이터
+    (is_example)"로 명시된다 — 실측인 것처럼 보이지 않아야 한다.
   - 시계열 금융배출량은 시딩된 포트폴리오 대출 데이터가 있으면 실제 산식으로
     계산되고(db/pcaf_engine/financed_emissions.py), 없으면 빈 배열이다 —
     둘 다 정상 동작, 하드코딩 예시값이 아니다.
@@ -117,10 +119,16 @@ def test_json_response_has_four_sections(db, client):
     assert "disclosure" in body
 
 
-def test_verification_error_rate_marked_pending(db, client):
+def test_classification_accuracy_measured_track_a_b_pending(db, client):
+    """분류 정확도는 PR #92 실측 확정(status=measured), 트랙A·B는 전제
+    데이터 미확보로 여전히 pending — docs/v1-plan.md §5-1."""
     res = client.get("/admin/climate-risk-report")
     body = res.json()
-    assert body["disclosure"]["verification_error_rate"]["status"] == "pending"
+    disclosure = body["disclosure"]
+    assert disclosure["classification_accuracy"]["status"] == "measured"
+    assert disclosure["classification_accuracy"]["overall_pct"] == 98.0
+    assert disclosure["track_a_mape"]["status"] == "pending"
+    assert disclosure["track_b_field_test"]["status"] == "pending"
 
 
 def test_financed_emissions_empty_when_no_portfolio_seeded(db, client):
@@ -164,6 +172,9 @@ def test_risk_assessment_reuses_portfolio_grade_distribution(db, client):
     assert body["risk_assessment"]["grade_distribution"] == {
         str(k): v for k, v in expected["grade_distribution"].items()
     }
+    assert body["risk_assessment"]["before_distribution"] == {
+        str(k): v for k, v in expected["before_distribution"].items()
+    }
     assert body["strategy"]["company_count"] == expected["company_count"]
 
 
@@ -175,5 +186,10 @@ def test_pdf_format_returns_valid_pdf(db, client):
     with pdfplumber.open(__import__("io").BytesIO(res.content)) as pdf:
         text = "\n".join(page.extract_text() or "" for page in pdf.pages)
     assert "기후리스크" in text
-    assert "산정 예정" in text
+    # 분류 정확도는 실측 확정(PR #92) — PDF에 수치로 노출된다. 트랙A·B는
+    # 전제 데이터 미확보라 확정 전까지 "산정 예정" 배지·문구 자체를 노출하지
+    # 않는다(화면과 동일 — docs/v1-plan.md §5-1).
+    assert "분류 정확도" in text
+    assert "98.0%" in text
+    assert "산정 예정" not in text
     assert "예시 값" in text or "예시 데이터" in text

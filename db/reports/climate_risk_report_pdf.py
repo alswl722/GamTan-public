@@ -5,8 +5,9 @@ db/pcaf.py::portfolio_summary()가 이미 집계한 값을 4단계(거버넌스�
 리스크평가·공시) 틀로 재배열한다 — 새 계산·조회 로직 없음(감사 대응 근거
 패키지 PDF와 같은 원칙: "이 모듈은 재계산하지 않는다").
 
-검증 오차율(분류 정확도·트랙A MAPE·트랙B 실물대조 오차)은 회계 담당
-미착수라 실제 데이터가 없다 — "산정 예정"으로 명시한다. 시계열 금융배출량은
+검증 오차율 중 분류 정확도는 PR #92로 실측 확정됐다(db/verification_results.py).
+트랙A MAPE·트랙B 실물대조 오차는 전제 데이터 미확보로 여전히 "산정 예정"으로
+명시한다. 시계열 금융배출량은
 db/pcaf_engine/financed_emissions.py로 실제 계산하지만 대출잔액이 은행 내부
 여신 시스템 연동 없이 채운 mock이라 "예시 데이터"로 명시한다 — 실측인
 것처럼 꾸미지 않는다(CLAUDE.md §6 실패 가시성 원칙과 같은 결).
@@ -22,6 +23,8 @@ from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+from db.verification_results import CLASSIFICATION_ACCURACY_RESULT
 
 pdfmetrics.registerFont(UnicodeCIDFont("HYGothic-Medium"))
 _FONT = "HYGothic-Medium"
@@ -126,22 +129,25 @@ def build_climate_risk_report_pdf(
         styles["small"],
     ))
 
-    # ④ 공시 — 데이터 품질 커버리지 + HITL 처리 현황 + 검증 오차율(산정 예정)
+    # ④ 공시 — 데이터 품질 커버리지 + HITL 처리 현황 + 검증 오차율(분류 정확도 실측만
+    #    노출 — 트랙A·B는 전제 데이터 미확보라 확정 전까지 화면·PDF 모두 표시하지 않음)
     story.append(Paragraph("④ 공시", styles["h2"]))
     disclosure_rows = [
         ["항목", "값"],
         ["실측 데이터 커버리지", f"{portfolio['measured_coverage_pct']}%"],
         ["담당자 검토 대기(HITL)", f"{portfolio['hitl_total']}건"],
         ["오늘 검토 완료", f"{portfolio['reviewed_today']}건"],
+        ["분류 정확도 (정답지 50건 실측)", f"{CLASSIFICATION_ACCURACY_RESULT['overall_pct']}%"],
     ]
     t = Table(disclosure_rows, colWidths=[70 * mm, 90 * mm])
     t.setStyle(_table_style())
     story.append(t)
     story.append(Spacer(1, 3 * mm))
     story.append(Paragraph(
-        "검증 오차율(분류 정확도 · 트랙A MAPE · 트랙B 실물대조 오차) — 산정 예정. "
-        "회계 담당의 검증 수치 확정 이후 이 섹션에 반영됩니다.",
-        styles["warn"],
+        f"분류 정확도는 사람이 작성한 정답지 {CLASSIFICATION_ACCURACY_RESULT['sample_size']}건 대조 "
+        f"실측(자동확정 {CLASSIFICATION_ACCURACY_RESULT['auto_confirmed_pct']}%, "
+        f"HITL 재현율 {CLASSIFICATION_ACCURACY_RESULT['hitl_recall_pct']}%)입니다.",
+        styles["small"],
     ))
 
     story.append(Spacer(1, 5 * mm))
