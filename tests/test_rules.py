@@ -1,5 +1,5 @@
 """룰 엔진(api/agent/rules.py) 검증 — 정답지는 db/excel_loader.load_expected_results()."""
-from api.agent.rules import match_rule
+from api.agent.rules import _rule_matches, match_rule
 from db.excel_loader import (
     _split_keyword_groups,
     load_classification_rules,
@@ -129,3 +129,39 @@ def test_and_group_rule_matches_when_all_groups_present():
     assert m is not None and m["rule_id"] == "TEST-AND-2"
     # 기기명만 있고 연료 신호 없으면 매치 안 됨(임대료·구매 등 무관 맥락 방지)
     assert match_rule("컴프레서 임대료", [rule]) is None
+
+
+def test_boiler_only_rules_do_not_fire_without_boiler_word():
+    """회귀 테스트: R012("보일러 도시가스")·R014("공장 보일러 등유")는 58행
+    전수 재검토(PR #89) 과정에서 한때 '보일러' 키워드가 빠지고 연료명
+    단독(도시가스/등유)만 남은 적이 있었다. R011·R013이 이미 같은 연료명을
+    포함하는 더 넓은 동의어 집합이라 그 상태에서도 두 룰이 항상 함께
+    매치돼(R012⊂R011, R014⊂R013) scope는 우연히 같게 나왔지만,
+    match_rule()이 우선순위 컬럼이 아니라 시트 행 순서(matches[0])로
+    타이브레이크하는 구조상 R012가 R011보다, R014가 R013보다 앞으로 오는
+    순간 "등유 구매"·"도시가스 요금 청구서"처럼 보일러 맥락이 전혀 없는
+    텍스트도 검토 없이(needs_review=False) 자동분류로 새는 잠재 위험이
+    있었다. '보일러' 키워드를 AND-그룹으로 복원해 이 서브셈션 자체를
+    막는다 — R012·R014는 보일러 문맥이 있을 때만 매치돼야 한다.
+    """
+    by_id = {r["rule_id"]: r for r in RULES}
+
+    # 보일러 맥락 없는 단독 연료명 — R012/R014는 매치되면 안 된다(동의어
+    # 룰 R011/R013만 매치되는 게 정상).
+    for text, forbidden_id, allowed_id in (
+        ("도시가스 요금 청구서", "R012", "R011"),
+        ("등유 구매", "R014", "R013"),
+    ):
+        m = match_rule(text, [by_id[forbidden_id], by_id[allowed_id]])
+        assert m is not None and m["rule_id"] == allowed_id, (
+            f"{text!r}: {forbidden_id}가 보일러 맥락 없이 매치되면 안 된다 (matched={m})"
+        )
+
+    # 보일러 문맥이 있으면 두 룰 다 매치되는 게 정상(최종 scope가 같으니 안전).
+    for text, boiler_only_id in (
+        ("공장 보일러용 도시가스", "R012"),
+        ("공장 보일러 등유", "R014"),
+    ):
+        assert _rule_matches(text, by_id[boiler_only_id]) is True, (
+            f"{text!r}: {boiler_only_id}는 보일러 문맥이 있으면 매치돼야 한다"
+        )
