@@ -1,4 +1,12 @@
-"""api/document_ingestion.py — 업로드(OCR/엑셀) → source_documents → vouchers 경로 검증."""
+"""api/document_ingestion.py — 업로드(OCR/엑셀) → source_documents → vouchers 경로 검증.
+
+접수(create_upload_job)와 처리(process_upload_job)가 분리된 뒤(v1 2주차, 업로드
+백그라운드화)라 여기선 BackgroundTasks 없이 두 단계를 이어 붙여 동기로 실행하는
+_run_upload() 헬퍼를 쓴다. 중복 파일·기관 미귀속처럼 즉시 드러나야 하는 실패는
+여전히 create_upload_job()이 예외로 던지고(라우터의 409/422와 동일 경로), 그 외
+실패(엑셀 형식 오류, 문서 파싱 실패 등)는 더 이상 예외가 아니라 job.status="failed"
+로 남는다 — 백그라운드 경로라 호출자가 예외를 받을 수 없는 실제 구조를 그대로 반영한다.
+"""
 import io
 from datetime import date
 
@@ -14,10 +22,10 @@ import api.document_ingestion as document_ingestion
 from api.document_ingestion import (
     DuplicateDocumentError,
     MissingInstitutionAttributionError,
-    ingest_uploaded_document,
+    create_upload_job,
+    process_upload_job,
 )
-from db.document.document_text_extractor import DocumentParseError
-from db.models import Base, Company, FinancialInstitution, InstitutionBorrower, SourceDocument, Voucher
+from db.models import Base, Company, DocumentUploadJob, FinancialInstitution, InstitutionBorrower, OwnerNotification, SourceDocument, Voucher
 
 pdfmetrics.registerFont(UnicodeCIDFont("HYGothic-Medium"))
 
@@ -100,24 +108,34 @@ def _xlsx_bytes(rows: list[tuple]) -> bytes:
     return buf.getvalue()
 
 
+def _run_upload(session, company_id, file_bytes, filename, document_type, mode="ocr") -> DocumentUploadJob:
+    """create_upload_job + process_upload_job을 이어 붙여 동기로 실행하고 완료된
+    job을 반환한다. process_upload_job에 테스트 세션을 그대로 넘겨야(같은 엔진)
+    커밋된 결과가 이 세션에서도 바로 보인다(api/db.py::new_session은 앱 전역
+    엔진을 쓰므로 테스트용 in-memory sqlite와는 별개다)."""
+    job = create_upload_job(session, company_id, file_bytes, filename, document_type, mode=mode)
+    process_upload_job(job.id, session=session)
+    session.refresh(job)
+    return job
+
+
 def test_upload_without_institution_backfill_raises_clear_error(db):
     """source_documents.financial_institution_id는 NOT NULL — 백필 안 된 기업은
-    DB IntegrityError가 아니라 명확한 에러로 먼저 막혀야 한다(기관 귀속 확인이
-    문서 파싱보다 먼저 일어나므로 파일 내용은 아무거나 줘도 된다)."""
+    DB IntegrityError가 아니라 명확한 에러로 먼저 막혀야 한다. 기관 귀속 확인은
+    create_upload_job(접수 단계, 동기)에서 일어나므로 파일 내용은 아무거나 줘도 된다."""
     session, company_id = db
     with pytest.raises(MissingInstitutionAttributionError):
-        ingest_uploaded_document(
-            session, company_id, b"x", "a.jpg", "gas_bill", mode="ocr",
-        )
+        create_upload_job(session, company_id, b"x", "a.jpg", "gas_bill", mode="ocr")
 
 
 def test_ocr_upload_creates_one_source_document_and_one_voucher(db_with_institution):
     session, company_id, _inst_id, _ib_id = db_with_institution
-    result = ingest_uploaded_document(
+    job = _run_upload(
         session, company_id, _electric_bill_pdf(), "3월전기고지서.pdf",
         "electric_bill", mode="ocr",
     )
-    assert result["vouchers_created"] == 1
+    assert job.status == "done"
+    assert job.vouchers_created == 1
 
     docs = session.execute(select(SourceDocument)).scalars().all()
     assert len(docs) == 1
@@ -131,17 +149,22 @@ def test_ocr_upload_creates_one_source_document_and_one_voucher(db_with_institut
     assert vouchers[0].raw_json["source_document_id"] == docs[0].id
     assert vouchers[0].raw_json["quantity_unit"] == "kWh"
 
+    notifications = session.execute(select(OwnerNotification)).scalars().all()
+    assert len(notifications) == 1
+    assert notifications[0].type == "document_processed"
+
 
 def test_ocr_upload_without_document_type_auto_detects(db_with_institution):
     """document_type=None("그냥 업로드")이면 추출이 판별한 종류로 저장된다 —
     사장님이 문서종류를 몰라도 올릴 수 있어야 한다."""
     session, company_id, _inst_id, _ib_id = db_with_institution
-    result = ingest_uploaded_document(
+    job = _run_upload(
         session, company_id, _gas_bill_pdf(month="05"), "고지서.pdf",
         None, mode="ocr",
     )
-    assert result["document_type"] == "gas_bill"
-    assert result["vouchers_created"] == 1
+    assert job.status == "done"
+    assert job.result_document_type == "gas_bill"
+    assert job.vouchers_created == 1
 
     doc = session.execute(select(SourceDocument)).scalars().first()
     assert doc.document_type == "gas_bill"
@@ -157,10 +180,11 @@ def test_excel_upload_creates_one_source_document_and_multiple_vouchers(db_with_
         (date(2025, 1, 18), "구미석유", "경유 외 1종", 654000),
         (date(2025, 2, 15), "구미석유", "유류대금", 612000),
     ])
-    result = ingest_uploaded_document(
+    job = _run_upload(
         session, company_id, xlsx, "hometax_export.xlsx", "tax_invoice", mode="excel",
     )
-    assert result["vouchers_created"] == 2
+    assert job.status == "done"
+    assert job.vouchers_created == 2
 
     vouchers = session.execute(select(Voucher)).scalars().all()
     assert {v.month for v in vouchers} == {1, 2}
@@ -170,9 +194,21 @@ def test_excel_upload_creates_one_source_document_and_multiple_vouchers(db_with_
 def test_duplicate_file_upload_is_rejected(db_with_institution):
     session, company_id, _inst_id, _ib_id = db_with_institution
     content = _gas_bill_pdf()
-    ingest_uploaded_document(session, company_id, content, "a.pdf", "gas_bill", mode="ocr")
+    _run_upload(session, company_id, content, "a.pdf", "gas_bill", mode="ocr")
     with pytest.raises(DuplicateDocumentError):
-        ingest_uploaded_document(session, company_id, content, "a.pdf", "gas_bill", mode="ocr")
+        create_upload_job(session, company_id, content, "a.pdf", "gas_bill", mode="ocr")
+
+
+def test_duplicate_submission_while_still_processing_is_rejected(db_with_institution):
+    """같은 파일을 더블클릭 등으로 연달아 제출하면, 첫 건이 아직 처리 중(job이
+    아직 done으로 안 바뀐 상태)이어도 두 번째 접수는 막혀야 한다 — SourceDocument가
+    아직 없어도(첫 건이 processing인 동안엔 SourceDocument 자체가 없음) 막는지 확인."""
+    session, company_id, _inst_id, _ib_id = db_with_institution
+    content = _gas_bill_pdf()
+    create_upload_job(session, company_id, content, "a.pdf", "gas_bill", mode="ocr")
+    # 아직 process_upload_job을 안 불렀다 — 첫 job이 processing 상태로 남아있는 시점.
+    with pytest.raises(DuplicateDocumentError):
+        create_upload_job(session, company_id, content, "a.pdf", "gas_bill", mode="ocr")
 
 
 def test_missing_item_description_is_rejected_before_saving(db_with_institution, monkeypatch):
@@ -181,7 +217,8 @@ def test_missing_item_description_is_rejected_before_saving(db_with_institution,
     NULL로 저장됐고, 한참 뒤 분류 단계(hash_item)에서야 'NoneType' object has no
     attribute 'encode'로 크래시했다. 추출 결과에 item_description이 없으면 저장
     자체를 막아야 한다 — 어느 추출 경로(db/document_extraction.py의 4단계 중
-    어디든)의 버그든 여기서 막힌다. 세션에 아무것도 안 남아야 한다(반쪽 저장 없음)."""
+    어디든)의 버그든 여기서 막힌다. 세션에 아무것도 안 남아야 한다(반쪽 저장 없음).
+    백그라운드 경로의 실패라 예외가 아니라 job.status="failed"로 남는다."""
     monkeypatch.setattr(
         document_ingestion, "extract_document",
         lambda session, file_bytes, document_type: {
@@ -195,11 +232,16 @@ def test_missing_item_description_is_rejected_before_saving(db_with_institution,
         },
     )
     session, company_id, _inst_id, _ib_id = db_with_institution
-    with pytest.raises(DocumentParseError):
-        ingest_uploaded_document(session, company_id, b"fake", "a.jpg", "electric_bill", mode="ocr")
+    job = _run_upload(session, company_id, b"fake", "a.jpg", "electric_bill", mode="ocr")
 
+    assert job.status == "failed"
+    assert "품목명" in job.error_message
     assert session.execute(select(SourceDocument)).scalars().all() == []
     assert session.execute(select(Voucher)).scalars().all() == []
+
+    notifications = session.execute(select(OwnerNotification)).scalars().all()
+    assert len(notifications) == 1
+    assert notifications[0].type == "document_failed"
 
 
 def test_db_constraint_blocks_duplicate_even_if_app_check_is_bypassed(db_with_institution):
@@ -229,7 +271,7 @@ def test_db_constraint_blocks_duplicate_even_if_app_check_is_bypassed(db_with_in
 
 def test_institution_attribution_is_filled_when_backfilled(db_with_institution):
     session, company_id, inst_id, ib_id = db_with_institution
-    ingest_uploaded_document(
+    _run_upload(
         session, company_id, _tax_invoice_pdf(), "invoice.pdf",
         "tax_invoice", mode="ocr",
     )
@@ -245,7 +287,7 @@ def test_institution_attribution_is_filled_when_backfilled(db_with_institution):
 
 def test_text_layer_upload_records_extraction_method(db_with_institution):
     session, company_id, _inst_id, _ib_id = db_with_institution
-    ingest_uploaded_document(
+    _run_upload(
         session, company_id, _electric_bill_pdf(), "고지서.pdf", "electric_bill", mode="ocr",
     )
     doc = session.execute(select(SourceDocument)).scalars().first()
@@ -266,7 +308,7 @@ def test_ocr_fallback_upload_records_method_and_confidence(db_with_institution, 
         ),
     )
     session, company_id, _inst_id, _ib_id = db_with_institution
-    ingest_uploaded_document(
+    _run_upload(
         session, company_id, b"fake jpeg bytes not a real pdf", "사진.jpg",
         "electric_bill", mode="ocr",
     )
@@ -279,7 +321,7 @@ def test_management_fee_bill_upload_flags_low_quality_and_returns_guidance(
     db_with_institution, monkeypatch
 ):
     """관리비 고지서에서 뽑은 전기료는 1차 계량 데이터가 아니라 verification_status를
-    낮게 잡고, 사장님에게 재발행 요청을 안내하는 메시지를 응답에 실어 보낸다
+    낮게 잡고, 사장님에게 재발행 요청을 안내하는 메시지를 job에 남긴다
     (db/document_text_extractor.py::parse_management_fee_bill)."""
     import db.document.document_extraction as document_extraction
     from db.document.document_ocr_extractor import OcrResult
@@ -293,10 +335,10 @@ def test_management_fee_bill_upload_flags_low_quality_and_returns_guidance(
         ),
     )
     session, company_id, _inst_id, _ib_id = db_with_institution
-    result = ingest_uploaded_document(
+    job = _run_upload(
         session, company_id, b"fake jpeg bytes", "관리비.jpg", "electric_bill", mode="ocr",
     )
-    assert "guidance_message" in result and "재발행" in result["guidance_message"]
+    assert job.guidance_message is not None and "재발행" in job.guidance_message
 
     doc = session.execute(select(SourceDocument)).scalars().first()
     assert doc.verification_status == "mgmt_fee_estimate"

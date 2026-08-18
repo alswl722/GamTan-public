@@ -9,9 +9,9 @@ import {
   type CompanyGoal,
   type DocumentGridResponse,
   type MonthlyCoveragePoint,
-  type MonthlyEmissionPoint,
   type RateMissingItem,
 } from "@/lib/api";
+import { MonthlyTrendChart } from "@/components/MonthlyTrendChart";
 
 /** 홈 화면의 "탄소 측정하러 가기" 박스 자리 — 5단계 위저드가 끝나면(doneCount===5)
  * 이 박스가 대신 뜬다. 활성 목표가 없으면 설정 유도 프롬프트를, 있으면 큰 링 +
@@ -115,9 +115,11 @@ function StatRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-/** 월별 막대 — 등급 목표는 monthly_coverage(채움/결손 이진값), 감축 목표는
- * monthly_emission(실제 배출량)을 같은 모양으로 그린다. 값이 없는 달도 얇은 회색
- * 막대로 남겨 x축이 끊기지 않게 한다(레퍼런스의 "아직 안 온 시간대" 막대와 같은 결). */
+/** 월별 막대 — 등급 목표의 monthly_coverage(채움/결손 이진값) 전용. 배출량 감축
+ * 목표는 리포트와 동일한 MonthlyTrendChart(연료별 스택 막대+꺾은선)를 쓴다(사용자
+ * 요청, 2026-08-18) — "채움 여부"만 있는 등급 목표는 배출량 성격이 아니라 이
+ * 단순 막대를 그대로 유지한다. 값이 없는 달도 얇은 회색 막대로 남겨 x축이 끊기지
+ * 않게 한다(레퍼런스의 "아직 안 온 시간대" 막대와 같은 결). */
 function MonthlyBars({ items }: { items: { month: number; value: number; filled: boolean }[] }) {
   if (items.length === 0) return null;
   const max = Math.max(1, ...items.map((i) => i.value));
@@ -139,10 +141,6 @@ function MonthlyBars({ items }: { items: { month: number; value: number; filled:
       })}
     </div>
   );
-}
-
-function emissionBars(points: MonthlyEmissionPoint[] | undefined) {
-  return (points ?? []).map((p) => ({ month: p.month, value: p.emission_tco2e, filled: p.emission_tco2e > 0 }));
 }
 
 function coverageBars(points: MonthlyCoveragePoint[] | undefined) {
@@ -293,7 +291,13 @@ function GoalProgressCard({
         )}
       </div>
 
-      <MonthlyBars items={isEmission ? emissionBars(goal.monthly_emission) : coverageBars(goal.monthly_coverage)} />
+      {isEmission ? (
+        goal.monthly_emission_detail && goal.monthly_emission_detail.length > 0 && (
+          <MonthlyTrendChart monthly={goal.monthly_emission_detail} />
+        )
+      ) : (
+        <MonthlyBars items={coverageBars(goal.monthly_coverage)} />
+      )}
 
       {!isEmission && !achieved && <GoalChecklist items={goal.missing_items} />}
 

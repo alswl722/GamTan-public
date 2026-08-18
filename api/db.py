@@ -43,3 +43,13 @@ def get_session():
         yield session
     finally:
         session.close()
+
+
+def new_session() -> Session:
+    """요청 스코프 밖(BackgroundTasks 등)에서 쓰는 독립 세션 — 호출부가 직접 close한다.
+
+    get_session()은 제너레이터라 응답이 나가는 순간 세션이 닫혀 백그라운드
+    작업에서 재사용할 수 없다(api/document_ingestion.py::process_upload_job).
+    """
+    get_engine()
+    return _SessionLocal()

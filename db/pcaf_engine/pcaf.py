@@ -190,8 +190,13 @@ def _before_baseline(company, dist1, dist2) -> dict:
     }
 
 
-def _monthly_by_fuel(session: Session, company_id: int, year: int | None = None) -> list[dict]:
+def monthly_by_fuel(session: Session, company_id: int, year: int | None = None) -> list[dict]:
     """월(1~12) × 연료 대분류 실측 배출량 그리드 — 리포트 월별 추이 차트 재료.
+
+    홈 화면 배출량 감축 목표 카드(db/pcaf_engine/company_goals.py::
+    _emission_reduction_progress)도 같은 차트(web/components/MonthlyTrendChart.tsx)를
+    그대로 재사용하려고 이 함수를 그대로 가져다 쓴다(2026-08-18) — non-underscore로
+    공개해 모듈 간 공유가 자연스럽게 드러나게 함.
 
     결손 보정치는 섞지 않는다. 자료가 없는 달은 그대로 0으로 비워서 결손 자체가
     차트에 드러나게 한다(업종평균 추정을 실측인 것처럼 섞어 보여주지 않음 —
@@ -337,7 +342,7 @@ def _after_measured(session, company_id, dist1, dist2, year: int | None = None) 
         "gap_months": gap_detail,
         "projected_grade": projected_grade,
         "by_fuel": by_fuel,
-        "monthly": _monthly_by_fuel(session, company_id, year=year),
+        "monthly": monthly_by_fuel(session, company_id, year=year),
     }
 
 

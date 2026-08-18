@@ -10,16 +10,19 @@ import {
   apiPost,
   apiUpload,
   deleteDocument,
+  getActiveUploadJobs,
   getCompanyId,
   getDocumentGrid,
   getDocumentReviewStatus,
   getDocumentsForCell,
   getReportingYears,
   getUnclassifiedCount,
+  getUploadJob,
   getUploadStreak,
   type DocumentGridResponse,
   type DocumentType,
   type UploadedDocument,
+  type UploadJob,
 } from "@/lib/api";
 
 /** 하단바 "데이터 업로드" 탭 — 문서종류(세금계산서·전기요금고지서·도시가스고지서) ×
@@ -135,6 +138,19 @@ function OwnerUploadsPageContent() {
   const [classifySuccessMessage, setClassifySuccessMessage] = useState<string | null>(null);
   const [unclassifiedCount, setUnclassifiedCount] = useState<number | null>(null);
 
+  // 백그라운드 처리 중인 업로드 잡(v1 2주차) — 이 페이지를 벗어나도 서버에서
+  // 계속 처리되므로, 여기 붙어 있는 동안만 가볍게 다시 조회해 진행 상태를
+  // 보여준다. 언마운트 후에도 폴링 콜백이 setState를 부르지 않도록 mountedRef로 막는다.
+  const [activeJobs, setActiveJobs] = useState<UploadJob[]>([]);
+  const mountedRef = useRef(true);
+  const prevActiveJobIdsRef = useRef<Set<number>>(new Set());
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   /** "분류 다시 실행" 버튼을 실제로 미분류 건이 남아있을 때만 보여주기 위한 조회 —
    * 부가 정보라 실패해도 조용히 넘어간다(버튼을 못 띄울 뿐, 화면은 계속 진행). */
   async function refreshUnclassifiedCount(cid: number) {
@@ -223,6 +239,63 @@ function OwnerUploadsPageContent() {
     setClassifying(false);
   }
 
+  /** 처리 중인 업로드 잡을 다시 조회해 "N건 처리 중" 표시를 갱신한다. 지난 조회 때
+   * processing이었는데 이번엔 목록에서 빠진 잡은 그새 done/failed로 끝난 것이므로
+   * handleJobsFinished로 넘겨 그리드·분류·완료 안내를 정리한다. 페이지를 계속
+   * 보고 있을 때만 의미 있는 갱신이고, 안 보고 있어도 서버 처리 자체는 그대로
+   * 진행된다(그리드/알림 배너로 나중에 확인 가능). */
+  async function refreshActiveJobs(cid: number) {
+    try {
+      const jobs = await getActiveUploadJobs(cid);
+      const nextIds = new Set(jobs.map((j) => j.job_id));
+      const justFinishedIds = [...prevActiveJobIdsRef.current].filter((id) => !nextIds.has(id));
+      prevActiveJobIdsRef.current = nextIds;
+      if (mountedRef.current) setActiveJobs(jobs);
+      if (justFinishedIds.length > 0) {
+        await handleJobsFinished(cid, justFinishedIds);
+      }
+    } catch (err) {
+      console.error("처리 중인 업로드 조회 실패(부가 정보라 화면은 계속 진행):", err);
+    }
+  }
+
+  /** 방금 끝난(done|failed) 잡들을 반영 — 성공 건이 있으면 자동 분류를 트리거하고
+   * 그리드를 새로고침, 실패 건은 에러로 보여준다(백엔드가 OwnerNotification도
+   * 별도로 남기므로 이 페이지를 벗어난 뒤에 끝나도 완전히 묻히진 않는다). */
+  async function handleJobsFinished(cid: number, jobIds: number[]) {
+    const results = await Promise.all(
+      jobIds.map((id) => getUploadJob(cid, id).catch(() => null)),
+    );
+    const finished = results.filter((j): j is UploadJob => j !== null);
+    const succeeded = finished.filter((j) => j.status === "done");
+    const failed = finished.filter((j) => j.status === "failed");
+
+    if (succeeded.length > 0) {
+      await classifyNewVouchers(cid);
+    }
+    await loadGrid();
+    if (!mountedRef.current) return;
+
+    if (succeeded.length > 0) {
+      const sourceDocIds = succeeded
+        .map((j) => j.result_source_document_id)
+        .filter((id): id is number => id !== null);
+      const notice = await reviewNoticeFor(cid, sourceDocIds);
+      if (!mountedRef.current) return;
+      setUploadReviewNotice(notice);
+      setUploadCompleteMessage(
+        succeeded.length === 1 && succeeded[0].result_document_type
+          ? `${DOC_LABEL[succeeded[0].result_document_type]} ${succeeded[0].result_month}월 자료가 등록됐어요.`
+          : `${succeeded.length}건을 등록했어요.`,
+      );
+    }
+    if (failed.length > 0) {
+      setUploadError(
+        failed.map((j) => `${j.original_filename}: ${j.error_message ?? "처리에 실패했어요."}`).join(" / "),
+      );
+    }
+  }
+
   /** year 생략 시 백엔드가 그 기업의 최신 전표 연도를 기본값으로 쓴다 — 리포트
    * 화면(ScenePcaf.tsx)과 같은 기준(db/pcaf_quality.py::default_reporting_year).
    * 연도 선택기에서 다른 연도를 고르면 이 함수를 다시 불러 그 해로 갈아끼운다. */
@@ -236,6 +309,7 @@ function OwnerUploadsPageContent() {
       setExpanded(null);
       setCellDocs({});
       void refreshUnclassifiedCount(cid);
+      void refreshActiveJobs(cid);
       // 연도 목록은 매번 다시 조회한다 — 캐시해서 최초 1회만 부르면, 그 해의
       // 마지막 문서를 삭제(handleDelete → loadGrid)해도 이미 사라진 연도가
       // 선택기에 그대로 남는다(실측 확인, 2026-08-17). 삭제·업로드 둘 다 이
@@ -259,6 +333,16 @@ function OwnerUploadsPageContent() {
   useEffect(() => {
     void loadGrid();
   }, []);
+
+  // 처리 중인 잡이 있는 동안만 가볍게 재조회 — 없으면 폴링을 켜두지 않는다(이
+  // 페이지를 벗어나 있는 동안엔 이 인터벌 자체가 없으니 무의미한 요청도 없음,
+  // 서버 처리는 페이지와 무관하게 계속됨).
+  useEffect(() => {
+    if (companyId === null || activeJobs.length === 0) return;
+    const t = setInterval(() => void refreshActiveJobs(companyId), 4000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- activeJobs 개수 변화에만 반응
+  }, [companyId, activeJobs.length]);
 
   async function loadCell(docType: DocumentType, month: number) {
     if (companyId === null || !grid) return;
@@ -324,6 +408,10 @@ function OwnerUploadsPageContent() {
     }
   }
 
+  /** 접수(파일 저장 + job 생성)만 기다린다 — 실제 OCR/추출은 백그라운드에서 돌고,
+   * 완료·실패는 refreshActiveJobs 폴링(위 useEffect)이 감지해 그리드·자동분류·완료
+   * 안내를 정리한다(handleJobsFinished). 그래서 이 함수가 끝나자마자 이 페이지를
+   * 벗어나도 무방하다 — v1 2주차, 업로드 백그라운드화. */
   async function handleUpload(file: File) {
     if (companyId === null || !expanded) return;
     setUploading(true);
@@ -333,22 +421,14 @@ function OwnerUploadsPageContent() {
       form.append("file", file);
       form.append("document_type", expanded.docType);
       form.append("mode", "ocr");
-      const res = await apiUpload<{ source_document_id: number }>(
+      await apiUpload<{ job_id: number }>(
         `/owner/${companyId}/documents/upload`,
         form,
         DOCUMENT_UPLOAD_TIMEOUT_MS,
       );
-      await classifyNewVouchers(companyId);
-      await loadCell(expanded.docType, expanded.month);
-      await loadGrid();
-      // 검토 대기 여부를 먼저 확인한 뒤에 모달을 연다 — 메시지부터 먼저 세팅해 모달이
-      // 바로 뜨고 안내 줄만 몇 초 뒤에 따라붙으면, 사용자가 뜨자마자 닫아버릴 경우
-      // 안내를 놓친다(실측으로 확인된 버그). 완성된 상태로 한 번에 띄운다.
-      const notice = await reviewNoticeFor(companyId, [res.source_document_id]);
-      setUploadReviewNotice(notice);
-      setUploadCompleteMessage(`${DOC_LABEL[expanded.docType]} ${expanded.month}월 자료가 등록됐어요.`);
+      void refreshActiveJobs(companyId);
     } catch (err) {
-      console.error("업로드 실패:", err);
+      console.error("업로드 접수 실패:", err);
       setUploadError(err instanceof Error ? err.message : "업로드에 실패했습니다.");
     } finally {
       setUploading(false);
@@ -356,15 +436,16 @@ function OwnerUploadsPageContent() {
     }
   }
 
-  /** 여러 장을 한 번에 골라도 되도록 한 장씩 순차 업로드한다(문서마다 document_type을
-   * 스스로 판별해야 해서 uploadOcr류의 병렬 실행과 달리 완료 모달·그리드 새로고침을
-   * 마지막에 한 번만 띄우는 편이 자연스럽다). 일부만 실패해도 나머지는 계속 올리고,
-   * 성공한 장이 하나라도 있으면 그 결과로 모달을 띄운다. */
+  /** 여러 장을 한 번에 골라도 되도록 한 장씩 순차로 접수한다(document_type을 안 보내
+   * 서버가 스스로 판별하므로 파일마다 어느 문서종류가 될지 미리 알 수 없다). 접수는
+   * 각각 즉시 끝나고(job_id만 받음), 실제 인식·등록은 백그라운드에서 처리돼
+   * refreshActiveJobs 폴링(handleJobsFinished)이 완료를 감지해 그리드·완료 안내를
+   * 정리한다 — 이 함수는 접수만 끝내면 되니 몇 장을 올리든 금방 끝난다. */
   async function handleAutoUpload(files: File[]) {
     if (companyId === null || files.length === 0) return;
     setAutoUploading(true);
     setAutoUploadError(null);
-    const successes: { document_type: DocumentType; month: number; source_document_id: number }[] = [];
+    let acceptedCount = 0;
     const errors: string[] = [];
     for (const file of files) {
       try {
@@ -372,33 +453,18 @@ function OwnerUploadsPageContent() {
         form.append("file", file);
         form.append("mode", "ocr");
         // document_type을 안 보낸다 — OCR/비전이 스스로 문서종류를 판별한다("그냥 업로드").
-        const res = await apiUpload<{ document_type: DocumentType; month: number; source_document_id: number }>(
+        await apiUpload<{ job_id: number }>(
           `/owner/${companyId}/documents/upload`,
           form,
           DOCUMENT_UPLOAD_TIMEOUT_MS,
         );
-        successes.push(res);
+        acceptedCount += 1;
       } catch (err) {
-        console.error("자동 업로드 실패:", err);
+        console.error("자동 업로드 접수 실패:", err);
         errors.push(`${file.name}: ${err instanceof Error ? err.message : "업로드에 실패했습니다."}`);
       }
     }
-    if (successes.length > 0) {
-      await classifyNewVouchers(companyId);
-      await loadGrid();
-      // 검토 대기 여부를 먼저 확인한 뒤에 모달을 연다 — 메시지부터 먼저 세팅해 모달이
-      // 바로 뜨고 안내 줄만 몇 초 뒤에 따라붙으면(여러 장일수록 review-status 병렬
-      // 호출이 늘어 더 오래 걸림), 사용자가 뜨자마자 닫아버릴 경우 안내를 놓친다
-      // (실측으로 확인된 버그 — "도장 꾹" 모달은 떴는데 검토 대기 줄만 없었음).
-      // 완성된 상태로 한 번에 띄운다.
-      const notice = await reviewNoticeFor(companyId, successes.map((s) => s.source_document_id));
-      setUploadReviewNotice(notice);
-      setUploadCompleteMessage(
-        successes.length === 1
-          ? `${DOC_LABEL[successes[0].document_type]} ${successes[0].month}월로 인식해 등록했어요.`
-          : `${successes.length}건을 인식해 등록했어요.`,
-      );
-    }
+    if (acceptedCount > 0) void refreshActiveJobs(companyId);
     setAutoUploadError(errors.length > 0 ? errors.join(" / ") : null);
     setAutoUploading(false);
     if (autoFileInputRef.current) autoFileInputRef.current.value = "";
@@ -420,6 +486,15 @@ function OwnerUploadsPageContent() {
         {streakMonths !== null && streakMonths > 0 && (
           <span className="rounded-full bg-brand-soft px-2.5 py-1 text-[11px] font-semibold text-brand-ink">
             {streakMonths}개월 연속 업로드 중
+          </span>
+        )}
+        {/* 백그라운드에서 아직 처리 중인 업로드(v1 2주차) — 이 화면을 벗어나 있어도
+         * 서버는 계속 처리하고, 여기 다시 왔을 때(또는 열어둔 채 폴링으로) 자연스럽게
+         * 사라진다. 실패는 조용히 넘어가지 않고 별도로 uploadError/알림 배너에 뜬다. */}
+        {activeJobs.length > 0 && (
+          <span className="flex items-center gap-1 rounded-full bg-line px-2.5 py-1 text-[11px] font-semibold text-muted">
+            <span className="size-1.5 animate-pulse rounded-full bg-brand" />
+            {activeJobs.length}건 처리 중이에요
           </span>
         )}
         {/* 업로드는 됐는데 분류만 안 된 채 남는 경우를 위한 탈출구 — 업로드 실패
@@ -485,7 +560,7 @@ function OwnerUploadsPageContent() {
         </p>
         <label className="btn-cta mt-3 flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-2xl bg-brand py-3 text-[13px] font-bold text-white disabled:opacity-60">
           <UploadCloud size={16} />
-          {autoUploading ? "인식하는 중…" : "여러 장 한 번에 그냥 업로드하기"}
+          {autoUploading ? "접수하는 중…" : "여러 장 한 번에 그냥 업로드하기"}
           <input
             ref={autoFileInputRef}
             type="file"
@@ -628,7 +703,7 @@ function OwnerUploadsPageContent() {
 
                     <label className="btn-cta mt-3 flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-2xl bg-brand py-3 text-[13px] font-bold text-white disabled:opacity-60">
                       <UploadCloud size={16} />
-                      {uploading ? "업로드하는 중…" : "추가 업로드"}
+                      {uploading ? "접수하는 중…" : "추가 업로드"}
                       <input
                         ref={fileInputRef}
                         type="file"

@@ -9,6 +9,7 @@ import {
   apiUpload,
   getCompanyId,
   getDocumentGrid,
+  pollUploadJob,
 } from "@/lib/api";
 
 /** 장면 ② — 연료 유형 체크 + 자료 업로드(세금계산서·전기요금고지서·도시가스고지서) 통합 화면.
@@ -273,18 +274,23 @@ export function SceneUpload({
       form.append("file", file);
       form.append("document_type", docType);
       form.append("mode", "ocr");
-      // year/month는 안 보낸다 — 서버가 문서 내용에서 직접 읽어낸다
-      // (db/document_text_extractor.py). 응답에 실려오는 month를 그대로 배지에 쓴다.
-      const res = await apiUpload<{ month?: number }>(
+      // 업로드 요청은 접수(job_id)만 받고 바로 끝난다 — 실제 OCR/LLM 추출은
+      // 서버 백그라운드에서 돈다(v1 2주차). 완료까지는 이 화면에서 폴링으로
+      // 기다린다("다음" 버튼이 완료를 전제로 하므로 위저드에선 계속 기다림).
+      const accepted = await apiUpload<{ job_id: number }>(
         `/owner/${cid}/documents/upload`,
         form,
         DOCUMENT_UPLOAD_TIMEOUT_MS,
       );
+      const job = await pollUploadJob(cid, accepted.job_id);
+      if (job.status === "failed") {
+        throw new Error(job.error_message ?? "업로드 처리에 실패했어요.");
+      }
       setEntries((e) => ({
         ...e,
         [docType]: [
           ...e[docType].filter((m) => m.id !== entryId),
-          { id: entryId, fileName: file.name, status: "done", month: res.month },
+          { id: entryId, fileName: file.name, status: "done", month: job.result_month ?? undefined },
         ],
       }));
       refreshCoverage();
@@ -338,16 +344,20 @@ export function SceneUpload({
       const form = new FormData();
       form.append("file", file);
       form.append("mode", "ocr");
-      const res = await apiUpload<{ document_type: DocType; month?: number }>(
+      const accepted = await apiUpload<{ job_id: number }>(
         `/owner/${cid}/documents/upload`,
         form,
         DOCUMENT_UPLOAD_TIMEOUT_MS,
       );
+      const job = await pollUploadJob(cid, accepted.job_id);
+      if (job.status === "failed" || !job.result_document_type) {
+        throw new Error(job.error_message ?? "업로드 처리에 실패했어요.");
+      }
       setEntries((e) => ({
         ...e,
-        [res.document_type]: [
-          ...e[res.document_type],
-          { id: entryId, fileName: file.name, status: "done", month: res.month },
+        [job.result_document_type as DocType]: [
+          ...e[job.result_document_type as DocType],
+          { id: entryId, fileName: file.name, status: "done", month: job.result_month ?? undefined },
         ],
       }));
       refreshCoverage();
@@ -378,12 +388,20 @@ export function SceneUpload({
       form.append("file", file);
       form.append("document_type", "tax_invoice");
       form.append("mode", "excel");
-      const res = await apiUpload<{ vouchers_created: number; skipped_rows: number }>(
+      const accepted = await apiUpload<{ job_id: number }>(
         `/owner/${cid}/documents/upload`,
         form,
         DOCUMENT_UPLOAD_TIMEOUT_MS,
       );
-      setExcelResult({ status: "done", count: res.vouchers_created, skipped: res.skipped_rows });
+      const job = await pollUploadJob(cid, accepted.job_id);
+      if (job.status === "failed") {
+        throw new Error(job.error_message ?? "업로드 처리에 실패했어요.");
+      }
+      setExcelResult({
+        status: "done",
+        count: job.vouchers_created ?? 0,
+        skipped: job.skipped_rows ?? 0,
+      });
       refreshCoverage();
     } catch (err) {
       console.error("엑셀 업로드 실패:", err);

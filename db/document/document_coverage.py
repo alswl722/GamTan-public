@@ -7,11 +7,18 @@ LLM 미호출 — 전부 결정론적 코드(CLAUDE.md 원칙1과 같은 결).
 """
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from db.document.document_requirements import DocumentType, FuelTypes, required_documents
-from db.models import Classification, Company, SourceDocument, SourceDocumentAccessLog, Voucher
+from db.models import (
+    Classification,
+    Company,
+    DocumentUploadJob,
+    SourceDocument,
+    SourceDocumentAccessLog,
+    Voucher,
+)
 
 _DOCUMENT_TYPES: tuple[DocumentType, ...] = ("tax_invoice", "electric_bill", "gas_bill")
 
@@ -158,6 +165,15 @@ def delete_source_document(session: Session, document: SourceDocument) -> str | 
         session.execute(delete(Voucher).where(Voucher.id.in_(voucher_ids)))
     session.execute(
         delete(SourceDocumentAccessLog).where(SourceDocumentAccessLog.source_document_id == document.id)
+    )
+    # 업로드 잡(v1 2주차, api/document_ingestion.py::process_upload_job)이 완료 시
+    # result_source_document_id로 이 문서를 가리켜뒀다 — job 자체(처리 이력)는
+    # 지우지 않고 참조만 끊는다(FK가 NOT NULL이 아니라 그대로 두면 삭제 시
+    # IntegrityError, 2026-08-18 실측 확인).
+    session.execute(
+        update(DocumentUploadJob)
+        .where(DocumentUploadJob.result_source_document_id == document.id)
+        .values(result_source_document_id=None)
     )
 
     file_path = document.file_path

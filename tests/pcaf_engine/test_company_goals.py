@@ -267,22 +267,20 @@ def test_grade_upgrade_progress_monthly_coverage_reflects_missing_months(db):
 
 
 def test_emission_reduction_progress_includes_monthly_emission_even_when_not_measured(db):
-    """같은 보고연도 안(measured=False)이어도 월별 배출량 막대 데이터는 내려줘야
-    홈 박스가 "활동 현황"을 보여줄 수 있다."""
+    """같은 보고연도 안(measured=False)이어도 월별 배출 데이터는 내려줘야 홈 박스가
+    "활동 현황"을 보여줄 수 있다. 리포트 화면의 "월별 배출 추이"와 완전히 같은
+    차트를 재사용하기로 해(사용자 요청, 2026-08-18) 같은 재료 함수
+    (db/pcaf_engine/pcaf.py::monthly_by_fuel)를 그대로 쓴다 — 그래서 "아직 안 온
+    달"을 자르지 않고 항상 1~12월 전부(연료별 분해 포함) 내려온다."""
     session, cid = db
     _fill_scope_1_measured(session, cid)
     create_emission_reduction_goal(session, cid, target_reduction_pct=20)
 
     progress = get_active_goal_progress(session, cid)
-    current_month = datetime.now(timezone.utc).month
     assert progress["measured"] is False
-    assert len(progress["monthly_emission"]) == current_month
-    # _fill_scope_1_measured는 1~12월 전부 채우지만, 월별 막대는 "아직 안 온 달"을
-    # 제외한 경과월까지만 집계한다(assess_inventory_completeness와 같은 규칙) —
-    # 달마다 100kg=0.1tCO2e씩이므로 경과월 수 * 0.1이 합계가 된다.
-    assert sum(item["emission_tco2e"] for item in progress["monthly_emission"]) == pytest.approx(
-        current_month * 0.1
-    )
+    assert len(progress["monthly_emission_detail"]) == 12
+    # _fill_scope_1_measured는 1~12월 전부 100kg(=0.1tCO2e)씩 채운다 — 12개월 합계.
+    assert sum(item["total_tco2e"] for item in progress["monthly_emission_detail"]) == pytest.approx(1.2)
 
 
 # ── 활성 목표는 항상 1개 ──────────────────────────────────────────────────────
