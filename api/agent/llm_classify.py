@@ -99,12 +99,28 @@ def _build_prompt(item_description: str, amount_krw: int, rule_hint: dict | None
         f"공급가액: {amount_krw:,}원",
     ]
     if rule_hint:
-        parts.append(
-            "참고(룰 엔진 1차 판단, 애매하다고 표시됨): "
-            f"scope={rule_hint.get('scope')}, category={rule_hint.get('category')}, "
-            f"fuel_type={rule_hint.get('fuel_type')}, 근거=\"{rule_hint.get('reasoning')}\". "
-            "이 힌트를 참고하되, 품목명 자체에서 더 정확히 판단할 수 있으면 다르게 답해도 된다."
-        )
+        category = rule_hint.get("category") or ""
+        if "불명" in category:
+            # 룰 엔진이 "종류를 특정할 수 없다"고 이미 판단한 케이스(R018 가스종류
+            # 불명 등, db/calc_engine.py의 _UNKNOWN_FUELS 센티넬과 대응). 품목명
+            # 자체가 애초에 정보 부족이라 LLM이 자체 확신으로 임의 확정하면 안 된다
+            # — 실측으로 "공장 가스비"를 LLM이 confidence 0.8로 도시가스라 단정해
+            # 정답지(가스종류 불명)와 어긋나는 오분류가 발견됨.
+            parts.append(
+                "참고(룰 엔진 1차 판단): 이 표현은 회계 룰상 "
+                f"\"{rule_hint.get('reasoning')}\"으로, 연료 종류를 텍스트만으로 "
+                "특정할 수 없다고 이미 판단됐다. 품목명에 구체적 연료명(경유·휘발유·"
+                "도시가스·LPG 등)이 명시돼 있지 않다면 임의로 추정하지 말고 "
+                f"fuel_type=\"{category}\"(회계 룰의 불명 표기를 그대로 사용)로 답하고 "
+                "confidence를 낮게 보고하라."
+            )
+        else:
+            parts.append(
+                "참고(룰 엔진 1차 판단, 애매하다고 표시됨): "
+                f"scope={rule_hint.get('scope')}, category={category}, "
+                f"fuel_type={rule_hint.get('fuel_type')}, 근거=\"{rule_hint.get('reasoning')}\". "
+                "이 힌트를 참고하되, 품목명 자체에서 더 정확히 판단할 수 있으면 다르게 답해도 된다."
+            )
     return "\n".join(parts)
 
 

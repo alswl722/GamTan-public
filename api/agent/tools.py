@@ -86,11 +86,21 @@ def _rule_decision(voucher: Voucher) -> tuple[dict | None, dict | None]:
     rule = match_rule(voucher.item_description)
     if rule is not None and rule["auto_action"] in _SHORT_CIRCUIT_ACTIONS:
         confidence = _RULE_CONFIDENCE.get(rule["quality_grade"], 0.85)
+        evidence = f"[{rule['rule_id']}] {rule['reasoning']}"
+        # 룰 시트가 "사람검토필요"로 명시했는데 K택소노미 리드로도 노출되지 않는
+        # 룰(예: R018 공장 가스비, R058 공조설비 유지보수비)은 등급→confidence
+        # 환산(C=0.75 등)이 임계값(0.7)을 넘어 그대로 자동확정되고 있었다 —
+        # 별도 채널(리드 리스트)이 없는 이상 이 건들은 HITL로 가야 한다.
+        # K택소노미 리드로 노출되는 룰(R031·R051~R057 등, finance_lead_type 有)은
+        # 그 자체가 사람에게 보이는 별도 채널이라 그대로 둔다.
+        if rule["needs_review"] and not k_taxonomy_fields_for_rule(rule["rule_id"])["finance_lead_type"]:
+            confidence = min(confidence, CONFIDENCE_THRESHOLD - 0.01)
+            evidence += " — 회계 룰상 사람검토 필요"
         decided = {
             "scope": rule["scope"],
             "category": rule["category"],
             "fuel_type": rule["fuel_type"],
-            "evidence": f"[{rule['rule_id']}] {rule['reasoning']}",
+            "evidence": evidence,
             "method": "rule",
             "mixed_item": rule["mixed_item"],
             "confidence": confidence,
@@ -165,16 +175,29 @@ def _build_classification(
     return classification
 
 
-def _llm_result_to_decision(llm: dict) -> dict:
-    """Gemini(또는 캐시) 응답 dict → _build_classification 이 먹는 결정 dict로 변환."""
+def _llm_result_to_decision(llm: dict, rule_hint: dict | None = None) -> dict:
+    """Gemini(또는 캐시) 응답 dict → _build_classification 이 먹는 결정 dict로 변환.
+
+    rule_hint(룰 매칭은 실패했지만 참고용으로 넘긴 룰)가 회계 룰상 "사람검토
+    필요"로 표시돼 있으면, LLM이 자체적으로 높은 confidence를 줬더라도 임계값
+    미만으로 강제 하향한다 — 캐시에 저장된 llm 원본 dict는 건드리지 않고(캐시는
+    순수 LLM 응답으로 재사용돼야 함) 변환 결과에만 반영한다. LLM 산수 금지
+    원칙과 같은 결: 애매하다는 판단을 LLM의 자체 confidence 재량에만 맡기지
+    않는다.
+    """
+    confidence = float(llm.get("confidence") or 0.0)
+    evidence = llm.get("evidence")
+    if rule_hint is not None and rule_hint.get("needs_review"):
+        confidence = min(confidence, CONFIDENCE_THRESHOLD - 0.01)
+        evidence = f"{evidence} — 회계 룰상 사람검토 필요(참고: {rule_hint['rule_id']})"
     return {
         "scope": llm.get("scope"),
         "category": llm.get("category"),
         "fuel_type": llm.get("fuel_type"),
-        "evidence": llm.get("evidence"),
+        "evidence": evidence,
         "method": "llm",
         "mixed_item": bool(llm.get("mixed_item")),
-        "confidence": float(llm.get("confidence") or 0.0),
+        "confidence": confidence,
     }
 
 
@@ -224,7 +247,7 @@ def classify_vouchers(
         text_hash = hash_item(voucher.item_description)
         cached = cache_get(session, text_hash)
         if cached is not None:
-            decided = _llm_result_to_decision(cached)
+            decided = _llm_result_to_decision(cached, rule_hint=rule)
             created[i] = _build_classification(voucher, decided, price_index, factor_index)
             _tick()
         else:
@@ -255,7 +278,7 @@ def classify_vouchers(
 
         for v, rule, amount, i in pending:
             llm = results[hash_item(v.item_description)]
-            decided = _llm_result_to_decision(llm)
+            decided = _llm_result_to_decision(llm, rule_hint=rule)
             created[i] = _build_classification(v, decided, price_index, factor_index)
             _tick()
 
