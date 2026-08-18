@@ -81,7 +81,7 @@ def test_financed_emissions_marked_as_example(db, client):
 
 def test_risk_assessment_reuses_portfolio_grade_distribution(db, client):
     """새 계산 없음 — portfolio_summary()가 낸 값 그대로여야 한다."""
-    from db.pcaf import portfolio_summary
+    from db.pcaf_engine.pcaf import portfolio_summary
 
     session, _ = db
     expected = portfolio_summary(session)
