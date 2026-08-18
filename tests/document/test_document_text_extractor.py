@@ -103,6 +103,26 @@ def test_electric_bill_table_layout_usage_extracts_header_row_value():
     assert "quality_flag" not in result
 
 
+def test_electric_bill_table_layout_usage_matches_without_space_in_label():
+    """실측(2026-08-18, data/fixtures/electricity_bills 재업로드 검증): 같은 표
+    서식이라도 PaddleOCR(JPG 경로)이 "당월 사용량"을 "당월사용량"처럼 띄어쓰기
+    없이 재구성하는 경우가 있었다 — PDF/PNG 경로는 통과했는데 JPG만 review_required
+    로 빠진 원인. 라벨 리터럴에 공백을 그대로 박아두면 그 자리만 공백이 필수가
+    돼(_label_pattern은 문자 사이를 \\s*로 선택적으로 만들지만, 리터럴 공백 문자
+    자체는 최소 1개를 요구) 붙어 나온 텍스트를 못 잡았다."""
+    text = extract_pdf_text(_pdf([
+        "전기요금 고지서",
+        "청구월: 2025-02 계약종별: 산업용(을) 저압",
+        "당월사용량 전월사용량 전월 대비 계약전력",
+        "검침 확인지연 2,450 kWh 75 kW",
+        "청구금액(원) 590,000",
+    ]))
+    result = parse_document_text(text, "electric_bill")
+    assert result["quantity"] == 2450
+    assert result["quantity_unit"] == "kWh"
+    assert "quality_flag" not in result
+
+
 def test_electric_bill_kwh_present_but_unrecognized_sets_quality_flag():
     """사용량 텍스트가 있는 것 같은데(kWh 흔적) 알려진 두 패턴(인라인 라벨·표
     헤더) 어느 쪽에도 안 걸리면, 원래 사용량이 없는 서식과 똑같이 quantity=None
