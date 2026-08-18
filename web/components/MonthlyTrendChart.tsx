@@ -52,9 +52,14 @@ function smoothLinePath(pts: { x: number; y: number }[]): string {
 export function MonthlyTrendChart({
   monthly,
   title,
+  bare = false,
 }: {
   monthly: MonthlyRow[];
   title?: string;
+  /** true면 자체 bg-surface 카드 껍데기(mt-3 rounded-2xl p-5)를 없애고 내용만
+   * 그린다 — 이미 bg-surface 카드 안(예: GoalCard.tsx 목표 카드)에 넣을 때
+   * 카드 속 카드로 이중 여백이 생기는 걸 막는다(사용자 지적, 2026-08-19). */
+  bare?: boolean;
 }) {
   const maxTotal = Math.max(...monthly.map((m) => m.total_tco2e), 0.001);
   const fuelsPresent = new Set(monthly.flatMap((m) => Object.keys(m.by_fuel)));
@@ -71,7 +76,7 @@ export function MonthlyTrendChart({
   const linePath = smoothLinePath(points);
 
   return (
-    <div className="mt-3 rounded-2xl bg-surface p-5">
+    <div className={bare ? "" : "mt-3 rounded-2xl bg-surface p-5"}>
       {title && <div className="text-[13px] font-semibold text-ink">{title}</div>}
 
       <div

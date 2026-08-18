@@ -237,7 +237,7 @@ function GoalProgressCard({
   const currentGrade = goal.current_value ?? goal.baseline_value;
 
   return (
-    <div className="mt-5 rounded-3xl bg-surface px-5 pb-4 pt-5 shadow-card">
+    <div className="mt-5 rounded-3xl bg-surface px-5 pb-4 pt-4 shadow-card">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <span className="block text-[12px] font-bold text-brand-ink">
@@ -293,7 +293,9 @@ function GoalProgressCard({
 
       {isEmission ? (
         goal.monthly_emission_detail && goal.monthly_emission_detail.length > 0 && (
-          <MonthlyTrendChart monthly={goal.monthly_emission_detail} />
+          <div className="mt-4">
+            <MonthlyTrendChart monthly={goal.monthly_emission_detail} bare />
+          </div>
         )
       ) : (
         <MonthlyBars items={coverageBars(goal.monthly_coverage)} />
