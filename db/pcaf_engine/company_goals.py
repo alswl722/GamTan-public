@@ -25,11 +25,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from db.models import Company, CompanyGoal
+from db.pcaf_engine.pcaf import monthly_by_fuel
 from db.pcaf_engine.pcaf_quality import (
     aggregate_scope_emissions,
     assess_inventory_completeness,
     default_reporting_year,
-    scope_emission_detail,
 )
 from db.pcaf_engine.rate_products import rate_product_status_for_scope
 
@@ -77,20 +77,6 @@ def _applicable_months(year: int) -> int:
     맞춘다(미래 달까지 빈 막대로 늘어놓지 않기 위함)."""
     today = datetime.now(timezone.utc)
     return today.month if year == today.year else 12
-
-
-def _monthly_emissions(session: Session, company_id: int, year: int) -> list[dict]:
-    """월별 배출량 막대 차트 데이터 — Scope1+2 합산, scope_emission_detail(전표별
-    상세)을 월 단위로 다시 묶는다. 데이터 없는 달도 0으로 채워 x축이 끊기지 않게 한다."""
-    totals = {m: 0.0 for m in range(1, _applicable_months(year) + 1)}
-    for scope in _SCOPES:
-        for item in scope_emission_detail(session, company_id, year, scope):
-            if item["month"] in totals:
-                totals[item["month"]] += item["emission_co2e"]
-    return [
-        {"month": m, "emission_tco2e": round(kg / 1000.0, 3)}
-        for m, kg in sorted(totals.items())
-    ]
 
 
 def _monthly_coverage(session: Session, company_id: int, year: int, scope_group: str) -> list[dict]:
@@ -210,21 +196,25 @@ def get_active_goal(session: Session, company_id: int) -> CompanyGoal | None:
 
 def _emission_reduction_progress(session: Session, goal: CompanyGoal) -> dict:
     current_year = default_reporting_year(session, goal.company_id)
-    # 홈 박스의 월별 막대는 "비교가 성립하는지"와 무관하게 항상 최근 활동 현황을
+    # 홈 박스의 월별 차트는 "비교가 성립하는지"와 무관하게 항상 최근 활동 현황을
     # 보여준다 — 같은 보고연도 안이면 올해 쌓이는 데이터, 넘어갔으면 비교 대상 연도.
-    monthly_emission = _monthly_emissions(session, goal.company_id, current_year)
+    # 리포트 화면(web/components/ScenePcaf.tsx)의 "월별 배출 추이"와 완전히 같은
+    # 차트(web/components/MonthlyTrendChart.tsx)를 그대로 재사용하기로 해(사용자
+    # 요청, 2026-08-18) 같은 재료 함수(monthly_by_fuel)를 그대로 가져다 쓴다 —
+    # 연료별 분해가 이 카드에도 그대로 필요해졌기 때문.
+    monthly_emission_detail = monthly_by_fuel(session, goal.company_id, year=current_year)
 
     if current_year == goal.baseline_reporting_year:
         return {
             "achieved": False, "measured": False, "current_value": None,
-            "progress_pct": 0.0, "monthly_emission": monthly_emission,
+            "progress_pct": 0.0, "monthly_emission_detail": monthly_emission_detail,
         }
 
     current_value = _total_emission(session, goal.company_id, current_year)
     if current_value is None:
         return {
             "achieved": False, "measured": False, "current_value": None,
-            "progress_pct": 0.0, "monthly_emission": monthly_emission,
+            "progress_pct": 0.0, "monthly_emission_detail": monthly_emission_detail,
         }
 
     reduction_needed = goal.baseline_value - goal.target_value
@@ -238,7 +228,7 @@ def _emission_reduction_progress(session: Session, goal: CompanyGoal) -> dict:
         "measured": True,
         "current_value": current_value,
         "progress_pct": round(progress_pct, 1),
-        "monthly_emission": monthly_emission,
+        "monthly_emission_detail": monthly_emission_detail,
     }
 
 

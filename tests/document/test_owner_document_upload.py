@@ -13,12 +13,13 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfgen import canvas
 from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
+import api.db as api_db
 from api.db import get_session
 from api.document_ingestion import REPO_ROOT
 from api.main import app
-from db.models import Base, Classification, Company, FinancialInstitution, InstitutionBorrower, SourceDocument, Voucher
+from db.models import Base, Classification, Company, DocumentUploadJob, FinancialInstitution, InstitutionBorrower, SourceDocument, Voucher
 
 pdfmetrics.registerFont(UnicodeCIDFont("HYGothic-Medium"))
 
@@ -80,37 +81,60 @@ def db(tmp_path):
 
 
 @pytest.fixture()
-def client(db):
+def client(db, monkeypatch):
     session, _ = db
     app.dependency_overrides[get_session] = lambda: session
+    # 업로드는 이제 접수(요청 스코프 get_session)와 처리(BackgroundTasks 안에서
+    # api.db.new_session()으로 여는 별도 세션)로 나뉜다 — new_session()은 기본적으로
+    # 앱 전역 엔진(DATABASE_URL)을 쓰므로, 이 테스트의 파일 기반 sqlite 엔진을 직접
+    # 바꿔치기해야 백그라운드 처리 결과가 이 테스트의 session에서도 바로 보인다.
+    # TestClient는 BackgroundTasks가 끝난 뒤에야 응답을 반환하므로(확인됨) 아래
+    # client.post() 호출 시점엔 이미 처리가 끝나 있다.
+    engine = session.get_bind()
+    monkeypatch.setattr(api_db, "_engine", engine)
+    monkeypatch.setattr(
+        api_db, "_SessionLocal",
+        sessionmaker(bind=engine, class_=Session, expire_on_commit=False),
+    )
     yield TestClient(app)
     app.dependency_overrides.clear()
 
 
+def _upload_and_wait(client, company_id: int, **kwargs) -> dict:
+    """업로드 접수 응답(job_id)을 받은 뒤 잡 상세를 조회해 돌려준다 — TestClient가
+    BackgroundTasks 완료까지 기다린 뒤 응답하므로 접수 응답 직후 조회해도 안전하다.
+    실패 케이스(422였던 것들 포함)도 이제 이 dict의 status가 "failed"로 남는다."""
+    accepted = client.post(f"/owner/{company_id}/documents/upload", **kwargs)
+    assert accepted.status_code == 202, accepted.text
+    job_id = accepted.json()["job_id"]
+    job_res = client.get(f"/owner/{company_id}/documents/jobs/{job_id}")
+    assert job_res.status_code == 200, job_res.text
+    return job_res.json()
+
+
 def test_ocr_upload_electric_bill_succeeds(db, client):
     _, company_id = db
-    res = client.post(
-        f"/owner/{company_id}/documents/upload",
+    job = _upload_and_wait(
+        client, company_id,
         files={"file": ("고지서.pdf", _electric_bill_pdf(), "application/pdf")},
         data={"document_type": "electric_bill", "mode": "ocr"},
     )
-    assert res.status_code == 200, res.text
-    assert res.json()["vouchers_created"] == 1
+    assert job["status"] == "done", job
+    assert job["vouchers_created"] == 1
 
 
 def test_ocr_upload_without_document_type_auto_detects(db, client):
     """"그냥 업로드" — document_type 필드 자체를 안 보내도 OCR이 스스로 종류를
     판별해 처리한다(사장님이 어느 칸인지 몰라도 올릴 수 있어야 함)."""
     _, company_id = db
-    res = client.post(
-        f"/owner/{company_id}/documents/upload",
+    job = _upload_and_wait(
+        client, company_id,
         files={"file": ("고지서.pdf", _gas_bill_pdf(month="05"), "application/pdf")},
         data={"mode": "ocr"},
     )
-    assert res.status_code == 200, res.text
-    body = res.json()
-    assert body["document_type"] == "gas_bill"
-    assert body["month"] == 5
+    assert job["status"] == "done", job
+    assert job["result_document_type"] == "gas_bill"
+    assert job["result_month"] == 5
 
     grid = client.get(f"/owner/{company_id}/documents/grid?year=2025").json()
     gas_row = next(r for r in grid["document_types"] if r["document_type"] == "gas_bill")
@@ -127,21 +151,23 @@ def test_excel_upload_tax_invoice_succeeds(db, client):
     buf = io.BytesIO()
     wb.save(buf)
 
-    res = client.post(
-        f"/owner/{company_id}/documents/upload",
+    job = _upload_and_wait(
+        client, company_id,
         files={"file": ("hometax.xlsx", buf.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
         data={"document_type": "tax_invoice", "mode": "excel"},
     )
-    assert res.status_code == 200, res.text
-    assert res.json()["vouchers_created"] == 2
+    assert job["status"] == "done", job
+    assert job["vouchers_created"] == 2
 
 
 def test_duplicate_upload_returns_409(db, client):
+    """중복 파일은 접수(create_upload_job) 단계에서 동기로 걸러지므로 지금도 즉시
+    409다 — 202로 접수되는 건 처리가 필요한 새 파일뿐."""
     _, company_id = db
     files = {"file": ("고지서.pdf", _gas_bill_pdf(month="04"), "application/pdf")}
     data = {"document_type": "gas_bill", "mode": "ocr"}
     first = client.post(f"/owner/{company_id}/documents/upload", files=files, data=data)
-    assert first.status_code == 200, first.text
+    assert first.status_code == 202, first.text
     second = client.post(f"/owner/{company_id}/documents/upload", files=files, data=data)
     assert second.status_code == 409
 
@@ -182,22 +208,24 @@ def test_excel_mode_rejected_for_non_tax_invoice(db, client):
     assert res.status_code == 400
 
 
-def test_ocr_non_pdf_returns_422(db, client):
+def test_ocr_non_pdf_returns_202_then_job_fails(db, client):
     """PDF도 아니고 알려진 이미지 포맷(JPEG/PNG/WEBP/HEIC)도 아닌 바이트는 OCR
-    래스터화 단계에서 곧장 실패한다(모델 호출 자체가 안 감) — 합성값으로 가리지
-    않고 422로 명확히 실패한다(실패 가시성 원칙, 합성 mock 폴백 없음)."""
+    래스터화 단계에서 곧장 실패한다(모델 호출 자체가 안 감) — 접수(202) 자체는
+    성공하지만 백그라운드 처리가 job.status="failed"로 남는다. 합성값으로
+    가리지 않고 명확히 실패한다는 원칙은 그대로 유지된다(실패 가시성 원칙,
+    합성 mock 폴백 없음) — 다만 이제 그 실패가 동기 422가 아니라 잡 상태다."""
     _, company_id = db
-    res = client.post(
-        f"/owner/{company_id}/documents/upload",
+    job = _upload_and_wait(
+        client, company_id,
         files={"file": ("x.jpg", b"x", "image/jpeg")},
         data={"document_type": "electric_bill", "mode": "ocr"},
     )
-    assert res.status_code == 422
+    assert job["status"] == "failed", job
 
 
-def test_ocr_pdf_with_unrecognized_format_and_failed_ocr_returns_422(db, client, monkeypatch):
+def test_ocr_pdf_with_unrecognized_format_and_failed_ocr_job_fails(db, client, monkeypatch):
     """PDF는 맞지만 알려진 서식이 아니면(제목 줄 불일치 등) OCR 폴백을 타는데,
-    그마저 실패하면 값을 지어내지 않고 422로 실패한다 — 예전엔 year/month가
+    그마저 실패하면 값을 지어내지 않고 실패로 남는다 — 예전엔 year/month가
     있으면 합성값으로 통과했었다. OCR 호출은 monkeypatch로 대체해 실 모델 로딩을 안 쓴다."""
     import db.document.document_extraction as document_extraction
     from db.document.document_text_extractor import DocumentParseError
@@ -208,12 +236,12 @@ def test_ocr_pdf_with_unrecognized_format_and_failed_ocr_returns_422(db, client,
     monkeypatch.setattr(document_extraction, "ocr_extract", _ocr_fails)
 
     _, company_id = db
-    res = client.post(
-        f"/owner/{company_id}/documents/upload",
+    job = _upload_and_wait(
+        client, company_id,
         files={"file": ("x.pdf", _minimal_pdf(["아무 문서", "관련 없는 내용"]), "application/pdf")},
         data={"document_type": "electric_bill", "mode": "ocr"},
     )
-    assert res.status_code == 422
+    assert job["status"] == "failed", job
 
 
 def test_ocr_image_upload_succeeds_via_ocr_fallback(db, client, monkeypatch):
@@ -237,15 +265,14 @@ def test_ocr_image_upload_succeeds_via_ocr_fallback(db, client, monkeypatch):
     )
 
     _, company_id = db
-    res = client.post(
-        f"/owner/{company_id}/documents/upload",
+    job = _upload_and_wait(
+        client, company_id,
         files={"file": ("사진.jpg", b"\xff\xd8\xff\xe0fake-jpeg-bytes", "image/jpeg")},
         data={"document_type": "electric_bill", "mode": "ocr"},
     )
-    assert res.status_code == 200, res.text
-    body = res.json()
-    assert body["vouchers_created"] == 1
-    assert body["year"] == 2025 and body["month"] == 6
+    assert job["status"] == "done", job
+    assert job["vouchers_created"] == 1
+    assert job["result_year"] == 2025 and job["result_month"] == 6
 
 
 # ── GET .../documents/grid, GET .../documents — 데이터 업로드 탭 그리드 ─────────
@@ -301,13 +328,20 @@ def test_documents_for_cell_empty_when_no_upload(db, client):
 
 # ── DELETE .../documents/{id} — 연쇄 삭제 ────────────────────────────────────
 def test_delete_document_removes_voucher_and_physical_file(db, client):
+    """이 문서를 만든 DocumentUploadJob(result_source_document_id로 참조)이 아직
+    남아있는 상태에서 삭제한다 — 실측 확인된 회귀: sqlite는 기본적으로 FK를
+    강제하지 않아 여기선 조용히 통과하지만, 실제 Postgres에선 job이 문서를
+    참조 중이면 삭제가 IntegrityError로 막혔다(2026-08-18). 이제
+    delete_source_document()가 참조를 먼저 끊으므로(job 자체는 유지) 성공해야
+    하고, job의 참조도 null로 남아야 한다."""
     session, company_id = db
-    upload_res = client.post(
-        f"/owner/{company_id}/documents/upload",
+    job = _upload_and_wait(
+        client, company_id,
         files={"file": ("고지서.pdf", _gas_bill_pdf(month="06"), "application/pdf")},
         data={"document_type": "gas_bill", "mode": "ocr"},
     )
-    doc_id = upload_res.json()["source_document_id"]
+    doc_id = job["result_source_document_id"]
+    job_id = job["job_id"]
 
     doc = session.get(SourceDocument, doc_id)
     abs_path = os.path.join(REPO_ROOT, doc.file_path)
@@ -334,15 +368,20 @@ def test_delete_document_removes_voucher_and_physical_file(db, client):
     assert session.query(Classification).filter_by(voucher_id=voucher_id).one_or_none() is None
     assert not os.path.exists(abs_path)
 
+    # job 레코드(처리 이력) 자체는 남아있되, 지워진 문서에 대한 참조만 끊겨야 한다.
+    remaining_job = session.get(DocumentUploadJob, job_id)
+    assert remaining_job is not None
+    assert remaining_job.result_source_document_id is None
+
 
 def test_delete_document_returns_404_for_other_company(db, client):
     session, company_id = db
-    upload_res = client.post(
-        f"/owner/{company_id}/documents/upload",
+    job = _upload_and_wait(
+        client, company_id,
         files={"file": ("고지서.pdf", _gas_bill_pdf(month="07"), "application/pdf")},
         data={"document_type": "gas_bill", "mode": "ocr"},
     )
-    doc_id = upload_res.json()["source_document_id"]
+    doc_id = job["result_source_document_id"]
 
     other = Company(name="타사", industry_code="C251")
     session.add(other)
@@ -365,12 +404,12 @@ def test_review_status_counts_review_required_classification(db, client):
     """업로드 완료 모달용 — 방금 올린 문서에서 만들어진 전표가 담당자 검토
     대기(review_required)로 분류되면 건수로 잡힌다."""
     session, company_id = db
-    upload_res = client.post(
-        f"/owner/{company_id}/documents/upload",
+    job = _upload_and_wait(
+        client, company_id,
         files={"file": ("고지서.pdf", _gas_bill_pdf(month="08"), "application/pdf")},
         data={"document_type": "gas_bill", "mode": "ocr"},
     )
-    doc_id = upload_res.json()["source_document_id"]
+    doc_id = job["result_source_document_id"]
     voucher = session.query(Voucher).filter_by(source_document_id=doc_id).one()
     session.add(Classification(voucher_id=voucher.id, scope=1, status="review_required"))
     session.commit()
@@ -382,12 +421,12 @@ def test_review_status_counts_review_required_classification(db, client):
 
 def test_review_status_zero_before_classification_runs(db, client):
     session, company_id = db
-    upload_res = client.post(
-        f"/owner/{company_id}/documents/upload",
+    job = _upload_and_wait(
+        client, company_id,
         files={"file": ("고지서.pdf", _gas_bill_pdf(month="09"), "application/pdf")},
         data={"document_type": "gas_bill", "mode": "ocr"},
     )
-    doc_id = upload_res.json()["source_document_id"]
+    doc_id = job["result_source_document_id"]
 
     res = client.get(f"/owner/{company_id}/documents/{doc_id}/review-status")
     assert res.status_code == 200, res.text
@@ -396,12 +435,12 @@ def test_review_status_zero_before_classification_runs(db, client):
 
 def test_review_status_returns_404_for_other_company(db, client):
     session, company_id = db
-    upload_res = client.post(
-        f"/owner/{company_id}/documents/upload",
+    job = _upload_and_wait(
+        client, company_id,
         files={"file": ("고지서.pdf", _gas_bill_pdf(month="10"), "application/pdf")},
         data={"document_type": "gas_bill", "mode": "ocr"},
     )
-    doc_id = upload_res.json()["source_document_id"]
+    doc_id = job["result_source_document_id"]
 
     other = Company(name="타사", industry_code="C251")
     session.add(other)

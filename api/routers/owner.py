@@ -4,6 +4,9 @@
 - PATCH /owner/{company_id}/fuel-types          2단계(연료 유형 체크) 저장 + 3단계 필수서류 안내
 - POST  /owner/{company_id}/documents/upload    3~4단계 업로드(세금계산서 OCR|엑셀, 전기·도시가스 OCR)
                                                  — document_type 생략 시 자동판별("그냥 업로드", mode=ocr 전용)
+                                                 — 202 즉시 응답 + job_id, 실제 추출은 백그라운드(아래 jobs 참고)
+- GET   /owner/{company_id}/documents/jobs/{job_id}  업로드 잡 단건 상태 폴링(처리 중/완료/실패)
+- GET   /owner/{company_id}/documents/jobs      최근 업로드 잡 목록(?status=processing 등)
 - GET   /owner/{company_id}/documents/grid      데이터 업로드 탭 — 문서종류 × 월 그리드
 - GET   /owner/{company_id}/documents           그리드 한 칸의 업로드 파일 목록
 - DELETE /owner/{company_id}/documents/{id}     업로드 파일 삭제(전표·분류까지 연쇄 삭제)
@@ -30,7 +33,7 @@ import os
 from datetime import datetime, timezone
 from typing import Literal
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -40,7 +43,8 @@ from api.document_ingestion import (
     REPO_ROOT,
     DuplicateDocumentError,
     MissingInstitutionAttributionError,
-    ingest_uploaded_document,
+    create_upload_job,
+    process_upload_job,
 )
 from api.queries import get_coverage, get_owner_notifications, get_owner_progress, get_pending_anomaly_checks
 from db.alerts import detect_alerts
@@ -52,8 +56,6 @@ from db.document.document_coverage import (
     upload_streak,
 )
 from db.document.document_requirements import FuelTypes, required_documents
-from db.document.document_text_extractor import DocumentParseError
-from db.hometax_excel_parser import HometaxExcelFormatError
 from db.gov_support.evidence import generate_evidence_batch
 from db.gov_support.matching import (
     company_profile_text,
@@ -62,7 +64,7 @@ from db.gov_support.matching import (
     raw_text_by_program_id,
 )
 from db.pcaf_engine.k_taxonomy import k_taxonomy_leads_for_company
-from db.models import Classification, Company, OwnerNotification, SourceDocument, Voucher
+from db.models import Classification, Company, DocumentUploadJob, OwnerNotification, SourceDocument, Voucher
 from db.pcaf_engine.pcaf_quality import default_reporting_year
 from db.pcaf_engine.rate_products import rate_product_status_for_company
 from db.quality_issues import record_ingestion_failure
@@ -197,9 +199,10 @@ def owner_progress(company_id: int, session: Session = Depends(get_session)):
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@router.post("/{company_id}/documents/upload")
+@router.post("/{company_id}/documents/upload", status_code=202)
 async def upload_document(
     company_id: int,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     document_type: str | None = Form(None),
     mode: str = Form("ocr"),
@@ -207,13 +210,20 @@ async def upload_document(
 ):
     """3단계(세금계산서 OCR|엑셀 택1)·4단계(전기·도시가스고지서 OCR) 공용 업로드.
 
-    실제 처리는 api/document_ingestion.py — source_documents 적재 후 vouchers를
-    만들어 기존 classify_vouchers 파이프라인이 그대로 이어받게 한다. mode="excel"은
-    document_type="tax_invoice"에서만 의미 있음(대량 홈택스 엑셀 파서 경로).
+    파일 저장·중복/기관귀속 검증만 이 요청 안에서 동기로 끝내고 즉시 202로
+    {job_id, status:"processing"}를 반환한다 — 실제 추출(OCR/LLM, 최악 90초+
+    걸릴 수 있음, api/document_ingestion.py 주석 참고)은 process_upload_job()이
+    백그라운드에서 이어받는다(사장님이 업로드 페이지에 머물러 있지 않아도 되게
+    하기 위함, v1 2주차). 진행 상태는 GET .../documents/jobs[/{job_id}]로 조회.
 
-    document_type을 생략(None)하면 어느 칸인지 모르고 올린 "그냥 업로드"다(mode=
-    "ocr" 전용) — OCR/비전이 스스로 종류를 판별한다. 판별 자체가 안 되면 추정으로
-    채우지 않고 422로 명확히 실패한다(실패 가시성 원칙).
+    mode="excel"은 document_type="tax_invoice"에서만 의미 있음(대량 홈택스 엑셀
+    파서 경로). document_type을 생략(None)하면 어느 칸인지 모르고 올린 "그냥
+    업로드"다(mode="ocr" 전용) — OCR/비전이 스스로 종류를 판별한다.
+
+    중복 제출·기관 미귀속은 흔치 않고 사실상 설정 오류에 가까워 여기서 동기로
+    즉시 409/422로 드러낸다(실패 가시성 원칙, CLAUDE.md §6) — 그 외 실패(엑셀
+    형식 오류, 문서 파싱 실패 등)는 백그라운드에서 job을 failed로 남기고
+    OwnerNotification으로 알린다.
     """
     if document_type is not None and document_type not in _VALID_DOCUMENT_TYPES:
         raise HTTPException(status_code=400, detail=f"invalid document_type: {document_type}")
@@ -221,18 +231,14 @@ async def upload_document(
         raise HTTPException(status_code=400, detail=f"invalid mode: {mode}")
     if mode == "excel" and document_type != "tax_invoice":
         raise HTTPException(status_code=400, detail="엑셀 업로드는 세금계산서만 지원합니다")
-    # 문서 자체(PDF 텍스트)에서 날짜를 읽어낸다(db/document_text_extractor.py).
-    # 못 읽으면 합성값으로 가리지 않고 422로 명확히 실패한다(실패 가시성 원칙).
 
     file_bytes = await file.read()
     filename = file.filename or "upload"
     try:
-        # PaddleOCR(db/document_ocr_extractor.py)은 CPU 연산이라 동기 호출 그대로 두면
-        # 이 요청이 끝날 때까지 이벤트 루프 전체가 막힌다 — 그 사이 다른 사용자의 아무
-        # 요청도(연료 유형 저장 등 가벼운 PATCH까지) 응답을 못 받고 타임아웃난다(실측
-        # 확인). 스레드로 넘겨 이벤트 루프는 다른 요청을 계속 처리하게 한다.
-        return await asyncio.to_thread(
-            ingest_uploaded_document,
+        # 파일 I/O·해시·DB 조회 정도라 가볍지만, 그래도 스레드로 넘겨 이벤트 루프를
+        # 막지 않는다(기존 관례 유지).
+        job = await asyncio.to_thread(
+            create_upload_job,
             session, company_id, file_bytes, filename,
             document_type, mode=mode,
         )
@@ -248,23 +254,54 @@ async def upload_document(
             failure_reason="missing_institution", detail=str(e),
         )
         raise HTTPException(status_code=422, detail=str(e))
-    except HometaxExcelFormatError as e:
-        # 실패 가시성 원칙 — 파싱 실패를 목업 데이터로 가리지 않고 그대로 안내(CLAUDE.md §6)
-        record_ingestion_failure(
-            session, company_id, document_type=document_type, original_filename=filename,
-            failure_reason="excel_format", detail=str(e),
-        )
-        raise HTTPException(status_code=422, detail=str(e))
-    except DocumentParseError as e:
-        # 문서에서 날짜·금액을 못 읽었거나(화질 불량 등) 엉뚱한 칸에 업로드된 경우 —
-        # 같은 실패 가시성 원칙, 값을 지어내지 않고 사유를 그대로 보여준다.
-        # OcrEngineError(PaddleOCR 엔진 자체 실패)도 이 서브클래스라 여기서
-        # 같이 잡힌다 — 원인 구분은 detail 텍스트로 충분해 failure_reason은 공유한다.
-        record_ingestion_failure(
-            session, company_id, document_type=document_type, original_filename=filename,
-            failure_reason="parse_error", detail=str(e),
-        )
-        raise HTTPException(status_code=422, detail=str(e))
+
+    background_tasks.add_task(process_upload_job, job.id)
+    return {"job_id": job.id, "status": job.status}
+
+
+def _job_to_dict(job: DocumentUploadJob) -> dict:
+    return {
+        "job_id": job.id,
+        "status": job.status,
+        "original_filename": job.original_filename,
+        "document_type_hint": job.document_type_hint,
+        "mode": job.mode,
+        "result_source_document_id": job.result_source_document_id,
+        "result_document_type": job.result_document_type,
+        "result_year": job.result_year,
+        "result_month": job.result_month,
+        "vouchers_created": job.vouchers_created,
+        "skipped_rows": job.skipped_rows,
+        "guidance_message": job.guidance_message,
+        "error_message": job.error_message,
+        "created_at": job.created_at,
+        "finished_at": job.finished_at,
+    }
+
+
+@router.get("/{company_id}/documents/jobs/{job_id}")
+def upload_job_status(company_id: int, job_id: int, session: Session = Depends(get_session)):
+    """업로드 잡 단건 상태 폴링 — 위저드(SceneUpload)가 완료까지 이 값을 기다린다."""
+    job = session.get(DocumentUploadJob, job_id)
+    if job is None or job.company_id != company_id:
+        raise HTTPException(status_code=404, detail=f"job_id={job_id} 없음")
+    return _job_to_dict(job)
+
+
+@router.get("/{company_id}/documents/jobs")
+def upload_jobs(
+    company_id: int,
+    status: str | None = None,
+    session: Session = Depends(get_session),
+):
+    """최근 업로드 잡 목록(최신순 최대 30건) — /owner/uploads가 페이지 재진입 시
+    "처리 중" 표시를 복원하는 데 쓴다(?status=processing)."""
+    stmt = select(DocumentUploadJob).where(DocumentUploadJob.company_id == company_id)
+    if status is not None:
+        stmt = stmt.where(DocumentUploadJob.status == status)
+    stmt = stmt.order_by(DocumentUploadJob.created_at.desc()).limit(30)
+    jobs = session.execute(stmt).scalars().all()
+    return {"jobs": [_job_to_dict(j) for j in jobs]}
 
 
 @router.get("/{company_id}/documents/grid")

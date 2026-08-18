@@ -459,6 +459,47 @@ class DocumentIngestionFailure(Base):
     )
 
 
+class DocumentUploadJob(Base):
+    """업로드 백그라운드 처리 잡 — 접수(파일 저장)와 실제 추출(OCR/LLM)을 분리한다.
+
+    POST /owner/{id}/documents/upload는 이 레코드를 processing으로 만들고 즉시
+    202로 응답한다(api/document_ingestion.py::create_upload_job). 실제 무거운 작업
+    (api/document_ingestion.py::process_upload_job)은 FastAPI BackgroundTasks로
+    돌며 이 레코드를 done/failed로 갱신한다 — 사장님이 업로드 페이지에 머물러
+    있지 않아도 되게 하기 위함(v1 2주차, docs 미반영·채팅 계획 참고). 완료 시
+    OwnerNotification(type=document_processed|document_failed)을 남겨 실패를
+    조용히 흘려보내지 않는다(CLAUDE.md §6 실패 가시성 원칙).
+    """
+    __tablename__ = "document_upload_jobs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    original_filename = Column(String(255), nullable=False)
+    file_hash = Column(String(64), nullable=False)  # 같은 파일 재제출(더블클릭 등) 감지용
+    file_path = Column(String(500), nullable=False)  # data/uploads/ 하위 상대경로 — 백그라운드에서 다시 읽음
+    document_type_hint = Column(String(50))  # null이면 "그냥 업로드"(자동판별)
+    mode = Column(String(10), nullable=False)  # ocr | excel
+    status = Column(String(20), nullable=False, default="processing")
+    result_source_document_id = Column(Integer, ForeignKey("source_documents.id"))
+    result_document_type = Column(String(50))
+    result_year = Column(SmallInteger)
+    result_month = Column(SmallInteger)
+    vouchers_created = Column(Integer)
+    skipped_rows = Column(Integer)
+    guidance_message = Column(Text)
+    error_message = Column(Text)
+    created_at = Column(DateTime(timezone=True), default=now)
+    finished_at = Column(DateTime(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('processing', 'done', 'failed')",
+            name="ck_document_upload_jobs_status",
+        ),
+        Index("ix_document_upload_jobs_company_status", "company_id", "status"),
+    )
+
+
 class RateApprovalRequest(Base):
     """우대금리·설비금융 안내 승인요청 큐 (v1 §6 2주차).
 

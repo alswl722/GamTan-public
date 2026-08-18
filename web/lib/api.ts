@@ -94,15 +94,13 @@ export async function apiUpload<T>(
 /** 에이전트 실행은 분류(LLM 병렬 호출) 포함이라 더 길게 허용. */
 export const AGENT_RUN_TIMEOUT_MS = 60_000;
 
-/** 문서 업로드는 PaddleOCR(로컬 추론) 처리가 포함돼 기본 15초로는 부족할 수 있다
- * (모델 최초 로딩 시 특히) — apiUpload 호출부(SceneUpload.tsx, owner/uploads/page.tsx)
- * 에서 이 값을 timeoutMs로 넘긴다.
- *
- * 60초였을 때 실측(2026-08-17, 처음 보는 서식의 전기요금 이메일 청구서 업로드)
- * 타임아웃 발생 — 로그 기준 OCR 콜드 로딩만 약 28초, 거기에 OCR 추론 + 4단계
- * LLM 최후수단(Gemini 호출 최대 20초 × 최대 2회 재시도)까지 이어지면 90초를
- * 넘길 수 있는 구조였다. 여유 있게 2분으로 올림. */
-export const DOCUMENT_UPLOAD_TIMEOUT_MS = 120_000;
+/** 업로드 요청 자체는 파일 저장 + 잡(job) 접수만 하고 바로 202를 반환한다(v1 2주차
+ * — 실제 OCR/LLM 추출은 백그라운드로 옮겨졌다, api/document_ingestion.py 참고).
+ * 예전엔 PaddleOCR 콜드 로딩(~28초)+LLM 최후수단(최대 20초×2회)까지 이 요청 안에서
+ * 다 끝내야 해서 최악 90초+ 걸렸고(실측, 2026-08-17) 타임아웃을 120초까지 올렸던
+ * 이력이 있는데, 이제 그 무거운 처리가 요청 밖으로 빠졌으니 기본 타임아웃이면 된다.
+ * 진행 상태는 apiUpload 호출부가 getUploadJob()으로 폴링해서 확인한다. */
+export const DOCUMENT_UPLOAD_TIMEOUT_MS = DEFAULT_TIMEOUT_MS;
 
 // 계정(로그인) 개념이 없어 "지금 어느 기업으로 보고 있는지"를 서버가 알 방법이 없다 —
 // 브라우저에 선택값을 저장해두고 모든 /owner 호출이 이 값을 쓴다. 기업 선택 화면
@@ -185,7 +183,7 @@ export interface OwnerNotification {
   id: number;
   type: string;
   message: string;
-  payload: { sent_count?: number } | null;
+  payload: { sent_count?: number; job_id?: number; source_document_id?: number } | null;
   created_at: string;
   read_at: string | null;
 }
@@ -390,6 +388,58 @@ export function getDocumentReviewStatus(
   );
 }
 
+// GET /owner/{company_id}/documents/jobs[/{job_id}] — 업로드 백그라운드 처리 잡
+// (api/document_ingestion.py::DocumentUploadJob). 업로드 응답은 이제 job_id만
+// 담고 있고, 실제 결과(document_type·month·vouchers_created 등)는 이 잡을
+// done이 될 때까지 폴링해서 얻는다.
+export interface UploadJob {
+  job_id: number;
+  status: "processing" | "done" | "failed";
+  original_filename: string;
+  document_type_hint: DocumentType | null;
+  mode: "ocr" | "excel";
+  result_source_document_id: number | null;
+  result_document_type: DocumentType | null;
+  result_year: number | null;
+  result_month: number | null;
+  vouchers_created: number | null;
+  skipped_rows: number | null;
+  guidance_message: string | null;
+  error_message: string | null;
+  created_at: string;
+  finished_at: string | null;
+}
+
+export function getUploadJob(companyId: number, jobId: number): Promise<UploadJob> {
+  return apiGet<UploadJob>(`/owner/${companyId}/documents/jobs/${jobId}`);
+}
+
+/** 처리 중인 잡 목록 — 페이지 재진입 시 "N건 처리 중" 표시 복원용. */
+export function getActiveUploadJobs(companyId: number): Promise<UploadJob[]> {
+  return apiGet<{ jobs: UploadJob[] }>(
+    `/owner/${companyId}/documents/jobs?status=processing`,
+  ).then((r) => r.jobs);
+}
+
+/** job이 done|failed가 될 때까지 짧은 간격으로 반복 조회한다. 호출부가 이 Promise를
+ * await하면(SceneUpload.tsx) "완료까지 기다리는" 기존 UX를 그대로 유지할 수 있고,
+ * await 없이 fire-and-forget으로 두면(owner/uploads/page.tsx) 페이지를 떠나도
+ * 무관하게 서버에선 계속 처리된다 — 다음 방문 때 그리드/알림으로 결과를 알 수 있다.
+ * maxAttempts를 넘기면 "시간 초과"로 명확히 실패시킨다(무한정 처리 중으로 걸어두지
+ * 않음 — 실패 가시성 원칙). */
+export async function pollUploadJob(
+  companyId: number,
+  jobId: number,
+  { intervalMs = 2500, maxAttempts = 60 }: { intervalMs?: number; maxAttempts?: number } = {},
+): Promise<UploadJob> {
+  for (let i = 0; i < maxAttempts; i++) {
+    const job = await getUploadJob(companyId, jobId);
+    if (job.status !== "processing") return job;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  throw new Error("업로드 처리 상태 확인이 시간 초과됐어요 — 잠시 후 새로고침해 확인해 주세요.");
+}
+
 /** 업로드 파일 삭제 — 거기서 만들어진 전표·분류까지 연쇄 삭제된다(되돌릴 수 없음). */
 export function deleteDocument(
   companyId: number,
@@ -411,9 +461,14 @@ export function getUnclassifiedCount(companyId: number): Promise<{ unclassified_
 // db/pcaf_engine/company_goals.py. 5단계 위저드 완료 후 홈 화면 박스가 목표 카드로
 // 바뀔 때 쓰는 API. 진행률·체크리스트는 저장값이 아니라 조회할 때마다 다시 계산된다.
 export type GoalType = "emission_reduction" | "grade_upgrade";
-export interface MonthlyEmissionPoint {
+// 월(1~12) × 연료 대분류 실측 배출량 — db/pcaf_engine/pcaf.py::monthly_by_fuel.
+// 리포트(ScenePcaf.tsx)의 "월별 배출 추이"와 홈 화면 배출량 감축 목표 카드
+// (GoalCard.tsx)가 완전히 같은 차트(MonthlyTrendChart.tsx)로 이 데이터를 그린다
+// (사용자 요청, 2026-08-18 — 두 화면의 시각 언어를 통일).
+export interface MonthlyRow {
   month: number;
-  emission_tco2e: number;
+  total_tco2e: number;
+  by_fuel: Record<string, number>;
 }
 export interface MonthlyCoveragePoint {
   month: number;
@@ -436,7 +491,7 @@ export interface CompanyGoal {
   progress_pct: number;
   missing_items?: RateMissingItem[];
   disclaimer_text?: string;
-  monthly_emission?: MonthlyEmissionPoint[]; // emission_reduction 전용 — 이번 해(또는 비교연도) 월별 배출량
+  monthly_emission_detail?: MonthlyRow[]; // emission_reduction 전용 — 이번 해(또는 비교연도) 월별 배출(연료별 분해)
   monthly_coverage?: MonthlyCoveragePoint[]; // grade_upgrade 전용 — 월별 데이터 완전성(링·막대 공용)
 }
 

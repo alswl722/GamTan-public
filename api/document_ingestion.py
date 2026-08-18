@@ -3,6 +3,11 @@
 두 인입 경로(마이데이터 mock, 업로드)가 공유하는 최종 착지점. 여기서 만든
 vouchers는 기존 classify_vouchers()/calc_engine.py 파이프라인을 무수정으로 탄다
 (감탄 v1 1주차 아키텍처 결정 — docs 미반영, 채팅 계획 참고).
+
+접수(create_upload_job, 동기·빠름)와 실제 추출(process_upload_job, 백그라운드)을
+분리한다 — PaddleOCR 콜드 로딩(~28초)에 LLM 최후수단(Gemini 최대 20초×2회
+재시도)까지 이어지면 90초를 넘길 수 있어(실측, web/lib/api.ts 주석), 그 요청을
+그대로 사장님이 붙잡고 있게 하지 않기 위함(v1 2주차, docs 미반영·채팅 계획 참고).
 """
 import hashlib
 import os
@@ -12,11 +17,13 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from api.db import new_session
 from api.queries import resolve_institution_borrower
 from db.document.document_extraction import extract_document
-from db.document.document_text_extractor import DocumentParseError
-from db.hometax_excel_parser import parse_hometax_excel
-from db.models import SourceDocument, Voucher
+from db.document.document_text_extractor import DOCUMENT_TYPE_LABEL, DocumentParseError
+from db.hometax_excel_parser import HometaxExcelFormatError, parse_hometax_excel
+from db.models import DocumentUploadJob, OwnerNotification, SourceDocument, Voucher
+from db.quality_issues import record_ingestion_failure
 
 REPO_ROOT = os.path.dirname(os.path.dirname(__file__))
 UPLOADS_DIR = os.path.join(REPO_ROOT, "data", "uploads")
@@ -29,7 +36,7 @@ DOCUMENT_TYPE_TO_VOUCHER_SOURCE = {
 
 
 class DuplicateDocumentError(ValueError):
-    """동일 기업이 같은 파일을 다시 올렸을 때 — source_documents.file_hash 중복방지."""
+    """동일 기업이 같은 파일을 다시 올렸거나, 그 파일이 이미 처리 중일 때."""
 
 
 class MissingInstitutionAttributionError(ValueError):
@@ -74,24 +81,30 @@ def _existing_document(session: Session, company_id: int, file_hash: str) -> Sou
     return session.execute(stmt).scalars().first()
 
 
-def ingest_uploaded_document(
+def _existing_processing_job(session: Session, company_id: int, file_hash: str) -> DocumentUploadJob | None:
+    """같은 파일이 이미 처리 중인지 — 더블클릭·연타 제출로 같은 OCR을 두 번 태우지 않기 위한 방어선."""
+    stmt = select(DocumentUploadJob).where(
+        DocumentUploadJob.company_id == company_id,
+        DocumentUploadJob.file_hash == file_hash,
+        DocumentUploadJob.status == "processing",
+    )
+    return session.execute(stmt).scalars().first()
+
+
+def create_upload_job(
     session: Session,
     company_id: int,
     file_bytes: bytes,
     filename: str,
     document_type: str | None,
     mode: str = "ocr",
-) -> dict:
-    """업로드 1건 처리 → {"source_document_id", "vouchers_created", "document_type"} 반환.
+) -> DocumentUploadJob:
+    """업로드 접수 — 빠른 DB 체크·파일 저장만 동기로 수행하고 잡을 만들어 반환한다.
 
-    document_type=None(mode="ocr" 전용, "그냥 업로드")이면 어느 칸인지 힌트 없이
-    OCR/비전이 스스로 종류를 판별한다(db/document_extraction.py) — 실제 저장되는
-    종류는 항상 추출 결과(row["document_type"])를 신뢰하고, 파라미터로 받은 값은
-    검증 힌트로만 쓰인다. mode="excel"은 document_type="tax_invoice" 필수(여러
-    행 → 여러 voucher, 라우터가 이미 강제하므로 자동판별과 무관).
-
-    실패하면 값을 지어내지 않고 DocumentParseError를 그대로 던진다(db/
-    document_extraction.py).
+    무거운 추출(OCR/LLM)은 process_upload_job()이 백그라운드에서 이어받는다.
+    중복·기관미귀속 검증은 실패 시 사용자가 즉시 알아야 하는 종류라(사실상 설정
+    오류거나 명백한 재업로드) 여기서 동기로 판정해 예외를 그대로 던진다 — 라우터가
+    지금처럼 409/422로 바로 응답한다.
     """
     if document_type is not None and document_type not in DOCUMENT_TYPE_TO_VOUCHER_SOURCE:
         raise ValueError(f"알 수 없는 document_type: {document_type}")
@@ -99,123 +112,185 @@ def ingest_uploaded_document(
     file_hash = _file_hash(file_bytes)
     if _existing_document(session, company_id, file_hash) is not None:
         raise DuplicateDocumentError("이미 업로드된 파일입니다")
-
-    file_path = _save_file(company_id, file_hash, filename, file_bytes)
+    if _existing_processing_job(session, company_id, file_hash) is not None:
+        raise DuplicateDocumentError("이미 처리 중인 파일입니다")
 
     ib = resolve_institution_borrower(session, company_id)
     if ib is None:
         raise MissingInstitutionAttributionError(
             f"company {company_id}는 아직 금융기관에 귀속되지 않았습니다 (institution_borrowers 없음)"
         )
-    financial_institution_id, institution_borrower_id = ib
 
-    skipped_rows = 0
-    extraction_method = None
-    extraction_confidence = None
-    guidance_message = None
-    if document_type == "tax_invoice" and mode == "excel":
-        rows, skipped_rows = parse_hometax_excel(file_bytes)
-        extracted: dict = {"rows": rows, "skipped_rows": skipped_rows}
-        source_system = "upload:excel"
-        resolved_document_type = "tax_invoice"
-    else:
-        row = extract_document(session, file_bytes, document_type)
-        rows = [row]
-        extracted = row
-        source_system = "upload:ocr"
-        # document_type 파라미터는 검증 힌트일 뿐 — 실제 저장은 항상 추출이
-        # 판별한 값을 신뢰한다("그냥 업로드"에선 애초에 힌트 자체가 없다).
-        resolved_document_type = row["document_type"]
-        # db/document_extraction.py가 어느 경로(text_layer|html_text|ocr)로 읽었는지,
-        # OCR이면 신뢰도가 얼마였는지 실어 보낸다 — source_documents에 그대로
-        # 영속화해 감사할 수 있게 한다(CLAUDE.md 원칙5, 0021 마이그레이션).
-        extraction_method = row.get("extraction_method")
-        extraction_confidence = row.get("extraction_confidence")
-        guidance_message = row.get("guidance_message")
+    file_path = _save_file(company_id, file_hash, filename, file_bytes)
 
-    # 관리비 고지서에서 뽑은 전기료처럼 1차 계량 데이터가 아닌 간접 추정치는
-    # quality_flag로 표시돼 온다 — verification_status를 낮게 잡아 감사 흔적을
-    # 남긴다(db/document_text_extractor.py::parse_management_fee_bill, CLAUDE.md §6
-    # 결손 월 업종평균 임시보정과 같은 결).
-    verification_status = extracted.get("quality_flag", "unverified") if mode != "excel" else "unverified"
-
-    doc = SourceDocument(
-        financial_institution_id=financial_institution_id,
+    job = DocumentUploadJob(
         company_id=company_id,
-        document_type=resolved_document_type,
-        source_system=source_system,
         original_filename=filename,
         file_hash=file_hash,
         file_path=file_path,
-        extracted_json=extracted,
-        verification_status=verification_status,
-        extraction_method=extraction_method,
-        extraction_confidence=extraction_confidence,
-        # "데이터 업로드" 그리드용 — OCR(단일 row)만 단일 월로 특정 가능하다. 엑셀
-        # 대량 업로드는 여러 달에 걸칠 수 있어 null로 남긴다(그리드 특정 칸에는 안
-        # 뜨지만 데이터 자체는 그대로 적재된다).
-        year=rows[0]["year"] if mode == "ocr" else None,
-        month=rows[0]["month"] if mode == "ocr" else None,
+        document_type_hint=document_type,
+        mode=mode,
+        status="processing",
     )
-    voucher_source = DOCUMENT_TYPE_TO_VOUCHER_SOURCE[resolved_document_type]
+    session.add(job)
+    session.commit()
+    return job
 
-    # 방어선 — 어느 추출 경로(db/document_extraction.py의 4단계 중 어디든)가 실수로
-    # item_description을 못 채운 채 "성공"을 반환해도, 여기서 걸러내지 않으면
-    # NULL이 voucher에 그대로 저장됐다가 한참 뒤 분류 단계(api/agent/tools.py::
-    # classify_vouchers → hash_item)에서야 "'NoneType' object has no attribute
-    # 'encode'"로 크래시한다(실측 확인 — LLM 라우터 경로에 이 검증이 빠져 있었음).
-    # 세션에 아직 아무것도 add하기 전이라 롤백 없이 그냥 실패시키면 된다.
-    for row in rows:
-        if not row.get("item_description"):
-            raise DocumentParseError("품목명을 읽어내지 못했어요 — 더 선명하게 다시 올려 주세요")
 
-    created: list[Voucher] = []
+def _fail_job(session: Session, job: DocumentUploadJob, *, failure_reason: str, detail: str) -> None:
+    """실패 처리 공통 경로 — job 갱신 + 실패 이력 + 사장님 알림(실패 가시성 원칙, CLAUDE.md §6)."""
+    record_ingestion_failure(
+        session, job.company_id, document_type=job.document_type_hint,
+        original_filename=job.original_filename, failure_reason=failure_reason, detail=detail,
+    )
+    job.status = "failed"
+    job.error_message = detail
+    job.finished_at = datetime.now(timezone.utc)
+    session.add(OwnerNotification(
+        company_id=job.company_id,
+        type="document_failed",
+        message=f"{job.original_filename} 업로드에 실패했어요 — {detail} 다시 올려 주세요.",
+        payload={"job_id": job.id, "failure_reason": failure_reason},
+    ))
+    session.commit()
+
+
+def process_upload_job(job_id: int, session: Session | None = None) -> None:
+    """백그라운드 실행부 — create_upload_job()이 저장해둔 파일을 읽어 실제 추출·적재를 수행한다.
+
+    요청 스코프 세션은 응답이 나가면 닫히므로 기본적으로 독립 세션(api/db.py::
+    new_session)을 새로 연다. session을 직접 넘기면(테스트 전용 — create_upload_job과
+    같은 세션/엔진을 써야 눈에 보인다) 그 세션을 그대로 쓰고 여기서 닫지 않는다
+    (호출자가 lifecycle을 소유). 로직은 기존 ingest_uploaded_document()의 나머지
+    절반과 동일 — 룰만 "예외를 던진다"에서 "job을 failed로 남기고 리턴한다"로
+    바뀐다(백그라운드라 호출자가 예외를 받을 수 없음).
+    """
+    owns_session = session is None
+    if session is None:
+        session = new_session()
     try:
-        # doc 추가부터 commit까지 통째로 감싼다 — 중간의 session.flush()가 doc의
-        # file_hash 유니크 제약 위반을 이 시점에 먼저 던질 수 있어(레이스), try
-        # 블록을 마지막 commit()에만 좁게 걸면 그 순간의 IntegrityError를 놓친다.
-        session.add(doc)
-        session.flush()  # doc.id 확보 — voucher들의 source_document_id로 필요
+        job = session.get(DocumentUploadJob, job_id)
+        if job is None or job.status != "processing":
+            return
+
+        abs_path = os.path.join(REPO_ROOT, job.file_path)
+        with open(abs_path, "rb") as f:
+            file_bytes = f.read()
+
+        ib = resolve_institution_borrower(session, job.company_id)
+        if ib is None:
+            # 접수 시점엔 있었는데 그 사이 사라지는 경우는 사실상 없지만, 방어적으로.
+            _fail_job(session, job, failure_reason="missing_institution",
+                      detail="기업이 금융기관에 귀속되어 있지 않습니다.")
+            return
+        financial_institution_id, institution_borrower_id = ib
+
+        document_type = job.document_type_hint
+        mode = job.mode
+
+        skipped_rows = 0
+        extraction_method = None
+        extraction_confidence = None
+        guidance_message = None
+        try:
+            if document_type == "tax_invoice" and mode == "excel":
+                rows, skipped_rows = parse_hometax_excel(file_bytes)
+                extracted: dict = {"rows": rows, "skipped_rows": skipped_rows}
+                source_system = "upload:excel"
+                resolved_document_type = "tax_invoice"
+            else:
+                row = extract_document(session, file_bytes, document_type)
+                rows = [row]
+                extracted = row
+                source_system = "upload:ocr"
+                resolved_document_type = row["document_type"]
+                extraction_method = row.get("extraction_method")
+                extraction_confidence = row.get("extraction_confidence")
+                guidance_message = row.get("guidance_message")
+        except HometaxExcelFormatError as e:
+            _fail_job(session, job, failure_reason="excel_format", detail=str(e))
+            return
+        except DocumentParseError as e:
+            _fail_job(session, job, failure_reason="parse_error", detail=str(e))
+            return
 
         for row in rows:
-            raw = {**row, "source_document_id": doc.id}
-            v = Voucher(
-                company_id=company_id,
-                source=voucher_source,
-                year=row["year"],
-                month=row["month"],
-                issue_date=_parse_issue_date(row.get("issue_date")),
-                supplier_name=row.get("supplier_name"),
-                item_description=row.get("item_description"),
-                supply_amount_krw=row.get("supply_amount_krw"),
-                raw_json=raw,
-                source_document_id=doc.id,
-                financial_institution_id=financial_institution_id,
-                institution_borrower_id=institution_borrower_id,
-            )
-            session.add(v)
-            created.append(v)
+            if not row.get("item_description"):
+                _fail_job(session, job, failure_reason="parse_error",
+                           detail="품목명을 읽어내지 못했어요 — 더 선명하게 다시 올려 주세요")
+                return
 
+        verification_status = extracted.get("quality_flag", "unverified") if mode != "excel" else "unverified"
+
+        doc = SourceDocument(
+            financial_institution_id=financial_institution_id,
+            company_id=job.company_id,
+            document_type=resolved_document_type,
+            source_system=source_system,
+            original_filename=job.original_filename,
+            file_hash=job.file_hash,
+            file_path=job.file_path,
+            extracted_json=extracted,
+            verification_status=verification_status,
+            extraction_method=extraction_method,
+            extraction_confidence=extraction_confidence,
+            year=rows[0]["year"] if mode == "ocr" else None,
+            month=rows[0]["month"] if mode == "ocr" else None,
+        )
+        voucher_source = DOCUMENT_TYPE_TO_VOUCHER_SOURCE[resolved_document_type]
+
+        created: list[Voucher] = []
+        try:
+            session.add(doc)
+            session.flush()
+
+            for row in rows:
+                raw = {**row, "source_document_id": doc.id}
+                v = Voucher(
+                    company_id=job.company_id,
+                    source=voucher_source,
+                    year=row["year"],
+                    month=row["month"],
+                    issue_date=_parse_issue_date(row.get("issue_date")),
+                    supplier_name=row.get("supplier_name"),
+                    item_description=row.get("item_description"),
+                    supply_amount_krw=row.get("supply_amount_krw"),
+                    raw_json=raw,
+                    source_document_id=doc.id,
+                    financial_institution_id=financial_institution_id,
+                    institution_borrower_id=institution_borrower_id,
+                )
+                session.add(v)
+                created.append(v)
+
+            session.commit()
+        except IntegrityError:
+            session.rollback()
+            _fail_job(session, job, failure_reason="duplicate", detail="이미 업로드된 파일입니다")
+            return
+
+        job.status = "done"
+        job.result_source_document_id = doc.id
+        job.result_document_type = resolved_document_type
+        job.vouchers_created = len(created)
+        job.skipped_rows = skipped_rows
+        job.guidance_message = guidance_message
+        job.finished_at = datetime.now(timezone.utc)
+
+        label = DOCUMENT_TYPE_LABEL.get(resolved_document_type, resolved_document_type)
+        if mode == "ocr":
+            job.result_year = rows[0]["year"]
+            job.result_month = rows[0]["month"]
+            message = f"{label} {job.result_month}월 자료가 등록됐어요."
+        else:
+            message = f"{label} {len(created)}건이 등록됐어요."
+        session.add(OwnerNotification(
+            company_id=job.company_id,
+            type="document_processed",
+            message=message,
+            payload={"job_id": job.id, "source_document_id": doc.id},
+        ))
         session.commit()
-    except IntegrityError as e:
-        # 앞의 _existing_document() 체크는 SELECT-then-INSERT라 동시 업로드(더블클릭·
-        # 재시도)가 둘 다 체크를 통과할 수 있다 — DB 유니크 제약(0008)이 최종 방어선.
-        session.rollback()
-        raise DuplicateDocumentError("이미 업로드된 파일입니다") from e
-
-    result = {
-        "source_document_id": doc.id,
-        "vouchers_created": len(created),
-        "skipped_rows": skipped_rows,
-        "document_type": resolved_document_type,
-    }
-    if mode == "ocr":
-        # 프론트가 더 이상 업로드 전에 월을 묻지 않으므로, 문서에서 실제로 읽어낸
-        # year/month를 응답에 실어 보내 업로드 완료 후 "1월 접수됨" 같은 표시를 만든다.
-        result["year"] = rows[0]["year"]
-        result["month"] = rows[0]["month"]
-        if guidance_message:
-            # 관리비 고지서처럼 업로드는 성공했지만 사장님에게 직접 전할 안내가
-            # 있는 경우(재발행 요청 권장 등) — 실패가 아니므로 200 응답에 실어 보낸다.
-            result["guidance_message"] = guidance_message
-    return result
+    finally:
+        if owns_session:
+            session.close()

@@ -44,9 +44,16 @@ export default function OwnerNotificationBanner({ companyId }: { companyId: numb
     if (notification) markNotificationRead(companyId, notification.id).catch(() => {});
   }
 
+  // 업로드 백그라운드 처리(v1 2주차) 알림은 "데이터 업로드" 탭으로, 그 외(확정
+  // 전송 등 기존 알림)는 지금처럼 리포트로 보낸다.
+  const href =
+    notification.type === "document_processed" || notification.type === "document_failed"
+      ? "/owner/uploads"
+      : "/owner/report";
+
   return (
     <Link
-      href="/owner/report"
+      href={href}
       onClick={handleClick}
       className="mt-3 flex items-center gap-2 rounded-xl bg-brand-soft px-3.5 py-2.5 transition-opacity hover:opacity-90"
     >
