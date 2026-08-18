@@ -6,8 +6,8 @@ Last updated: 2026-08-18
 Scope: 2026년 8월 v1 구현·검증·시연 일정
 ```
 
-> **진행 현황 요약** — 로컬 기준(alembic head `0024`, 공유 DB 적용 완료)
-> `pytest` 392 passed, 3 skipped(회귀 없음). 2주차 Tier 1은 전부 완료됐다.
+> **진행 현황 요약** — dev 기준(alembic head `0024`, 공유 DB 적용 완료)
+> `pytest` 413 passed, 3 skipped(회귀 없음). 2주차 Tier 1은 전부 완료됐다.
 > 완료 항목 전체 목록은 §4, 남은 항목은 §5 참고. 각 항목의 구현 상세(왜
 > 그렇게 만들었는지, 어떤 트레이드오프가 있었는지)는 이 문서가 아니라 해당
 > PR 본문·커밋 메시지에 있다 — git 이력이 정본.
@@ -15,6 +15,14 @@ Scope: 2026년 8월 v1 구현·검증·시연 일정
 > PR #74) 둘 다 백엔드+프론트 완료. §6은 원래 "물량 직접 입력" 설계였으나
 > 검증 안 된 숫자가 계산에 들어가는 위험 때문에 "예/아니오/모르겠어요
 > 확인" 방식으로 전면 재설계됐다 — 아래 §6 본문이 최신 설계.
+> **완료**: "규제 대응 리포트"(§5였던 항목, PR #79)가 금감원 4단계 구조
+> 포트폴리오 리포트로 구현되며 §4로 이동. `db/`, `tests/` 디렉토리를
+> 역할별 서브패키지(document/pcaf_engine/reports 등)로 정리(PR #80).
+> 5개 기업 175건 합성 fixture 추가(PR #84). PR #79·#80이 근접한 시점에
+> 병합되며 `db/climate_risk_report_pdf.py`가 `db/reports/`로 옮겨지지
+> 않고 `api/routers/admin.py`의 `FinancialInstitution`·
+> `EXAMPLE_FINANCED_EMISSIONS_TIMELINE` import가 함께 유실되는 회귀가
+> 발생 — `fix/climate-risk-report-import`에서 즉시 수정.
 >
 > 기준 브랜치: `dev` · 결선 목표: 2026년 8월 말(1박 2일 결선 해커톤) · 팀: 개발자 2명(A·B) + 회계·도메인 1명
 
@@ -123,6 +131,10 @@ Scope: 2026년 8월 v1 구현·검증·시연 일정
 | Tier 2 | 확정 전송 → 사장님 알림 배너 (Figma 선디자인 → 폴링 배너, `OwnerNotification` 모델) | B | #70 |
 | Tier 2 | 이상치 되묻기 — 사장님 확인 절차(예/아니오/모르겠어요, HITL 큐 우선순위 배지) | B | #74 |
 | 부수 | uvicorn `--reload` 감시 범위를 코드 디렉토리로 한정(업로드 중 서버 재시작 방지) | B | #69 |
+| Tier 2 | 규제 대응 리포트 — 금감원 4단계 구조(거버넌스/전략/리스크평가/공시) 포트폴리오 리포트(JSON/PDF) | — | #79 |
+| 부수 | 5개 기업(구미정밀 외) 세금계산서·전기요금고지서 합성 fixture 175건 추가 | — | #84 |
+| 부수 | `db/`, `tests/` 디렉토리를 역할별 서브패키지로 정리(document/pcaf_engine/reports 등) | — | #80 |
+| 부수 | PR #79·#80 근접 병합으로 유실된 `admin.py` import(`FinancialInstitution`, `EXAMPLE_FINANCED_EMISSIONS_TIMELINE`) 및 `db/climate_risk_report_pdf.py` 위치 회귀 수정 | — | fix/climate-risk-report-import |
 
 ---
 
@@ -133,7 +145,6 @@ Scope: 2026년 8월 v1 구현·검증·시연 일정
 | Tier 1 | 검증 3수치 확정 (분류 정확도, 트랙A MAPE, 트랙B 실물대조 오차) | 회계 | ⬜ 미착수 | 발표·Q&A 근거로 반드시 필요 — 유일하게 남은 Tier 1 |
 | Tier 2 | 청중별 통역 / 탄소 신용카드(QR) | 미배정 | ⬜ 미착수 | 상세 스펙 미작성 |
 | Tier 2 | 포트폴리오 뷰 확장 — 히트맵·연동 우선순위 Top10 | 미배정 | ⬜ 미착수 | `docs/owner-admin-flow-spec.md` §5 |
-| Tier 2 | 규제 대응 리포트 (금감원 4단계 구조 자동 섹션) | 미배정 | ⬜ 미착수 | `docs/owner-admin-flow-spec.md` §6 |
 | Tier 2 | 개인화된 정부 지원사업 매칭 (기업마당 API + 벡터 검색) | A(예정) | ⬜ 기획 완료, 착수 전 | `docs/gov-support-matching-plan.md` — 기술선택(FAISS/pgvector)·착수시점 팀 확인 필요(§10) |
 | 부수 | 룰 우선순위 충돌 정리 (표현 변형이 엉뚱한 룰에 오매칭) | 미배정 | ⬜ 미착수 | K택소노미 작업 중 발견, `분류_기준표_확장` 시트 전체 이슈 |
 | 3주차 | A+B 전체 플로우 통합 테스트 (사장님·관리자 1회 통주) | A+B | ⬜ 미착수 | |
