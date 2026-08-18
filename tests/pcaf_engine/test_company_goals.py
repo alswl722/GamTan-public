@@ -97,12 +97,18 @@ def _fill_scope_1_revenue(session, cid, *, year=YEAR):
 
 
 # ── 배출량 감축 목표 ──────────────────────────────────────────────────────────
-def test_create_emission_reduction_goal_snapshots_baseline_and_target(db):
+def test_create_emission_reduction_goal_snapshots_baseline_and_target(db, monkeypatch):
     session, cid = db
+    # 시작월을 1월로 고정 — 롤링 12개월 윈도우가 달력년도(1~12월)와 정확히 겹치게
+    # 해서 아래 숫자 검증(12개월치 = 1.2tCO2e)을 실행 시점(현재 몇 월인지)과
+    # 무관하게 재현 가능하게 한다.
+    monkeypatch.setattr("db.pcaf_engine.company_goals._now_year_month", lambda: (YEAR, 1))
     _fill_scope_1_measured(session, cid)
 
     goal = create_emission_reduction_goal(session, cid, target_reduction_pct=20)
     assert goal.goal_type == "emission_reduction"
+    assert goal.baseline_reporting_year == YEAR
+    assert goal.baseline_start_month == 1
     assert goal.baseline_value == pytest.approx(1.2)  # 12개월 * 100kg / 1000
     assert goal.target_value == pytest.approx(1.2 * 0.8)
     assert goal.target_reduction_pct == 20
@@ -144,9 +150,12 @@ def test_emission_reduction_progress_not_measured_within_same_reporting_year(db)
     assert progress["status"] == "active"
 
 
-def test_emission_reduction_progress_measured_after_year_rollover(db, monkeypatch):
-    """보고연도가 넘어가면 다음 해 총 배출량과 비교해 실제로 진행률을 계산한다."""
+def test_emission_reduction_progress_measured_after_rolling_window_closes(db, monkeypatch):
+    """기준 윈도우(설정월부터 롤링 12개월)가 끝나고 비교 윈도우로 넘어가면 실제로
+    진행률을 계산한다 — 예전엔 "달력년도가 넘어가면"이었지만, 이제는 시작월
+    기준이라(1월 시작이면 결과적으로 같음) _now_year_month를 이동시켜 재현한다."""
     session, cid = db
+    monkeypatch.setattr("db.pcaf_engine.company_goals._now_year_month", lambda: (YEAR, 1))
     _fill_scope_1_measured(session, cid)  # 12개월 * 100kg = 1.2 tCO2e (baseline)
     goal = create_emission_reduction_goal(session, cid, target_reduction_pct=50)  # target 0.6
 
@@ -154,7 +163,7 @@ def test_emission_reduction_progress_measured_after_year_rollover(db, monkeypatc
     for m in range(1, 13):
         _add_voucher(session, cid, m, "도시가스", quantity=100, scope=1, emission=50.0, year=next_year)
 
-    monkeypatch.setattr("db.pcaf_engine.company_goals.default_reporting_year", lambda *a, **k: next_year)
+    monkeypatch.setattr("db.pcaf_engine.company_goals._now_year_month", lambda: (next_year, 1))
     progress = get_active_goal_progress(session, cid)
     assert progress["measured"] is True
     assert progress["current_value"] == pytest.approx(0.6)  # 12 * 50kg / 1000
@@ -276,13 +285,14 @@ def test_grade_upgrade_progress_monthly_coverage_reflects_missing_months(db):
     assert progress["progress_pct"] == pytest.approx(3 / current_month * 100, abs=0.1)
 
 
-def test_emission_reduction_progress_includes_monthly_emission_even_when_not_measured(db):
-    """같은 보고연도 안(measured=False)이어도 월별 배출 데이터는 내려줘야 홈 박스가
+def test_emission_reduction_progress_includes_monthly_emission_even_when_not_measured(db, monkeypatch):
+    """같은 기준 윈도우 안(measured=False)이어도 월별 배출 데이터는 내려줘야 홈 박스가
     "활동 현황"을 보여줄 수 있다. 리포트 화면의 "월별 배출 추이"와 완전히 같은
     차트를 재사용하기로 해(사용자 요청, 2026-08-18) 같은 재료 함수
     (db/pcaf_engine/pcaf.py::monthly_by_fuel)를 그대로 쓴다 — 그래서 "아직 안 온
-    달"을 자르지 않고 항상 1~12월 전부(연료별 분해 포함) 내려온다."""
+    달"을 자르지 않고 항상 윈도우 12개월 전부(연료별 분해 포함) 내려온다."""
     session, cid = db
+    monkeypatch.setattr("db.pcaf_engine.company_goals._now_year_month", lambda: (YEAR, 1))
     _fill_scope_1_measured(session, cid)
     create_emission_reduction_goal(session, cid, target_reduction_pct=20)
 
@@ -291,6 +301,63 @@ def test_emission_reduction_progress_includes_monthly_emission_even_when_not_mea
     assert len(progress["monthly_emission_detail"]) == 12
     # _fill_scope_1_measured는 1~12월 전부 100kg(=0.1tCO2e)씩 채운다 — 12개월 합계.
     assert sum(item["total_tco2e"] for item in progress["monthly_emission_detail"]) == pytest.approx(1.2)
+
+
+# ── 롤링 12개월 윈도우 (달력년도 아님, 사용자 지적 2026-08-19) ─────────────────
+def test_baseline_window_starts_at_creation_month_not_calendar_year(db, monkeypatch):
+    """8월에 목표를 세우면 기준값은 "8~12월(YEAR) + 1~7월(YEAR+1)"만 잡아야 한다 —
+    달력년도 전체(1~12월)가 아니라 설정월부터 롤링 12개월이라는 게 이번 변경의 핵심."""
+    session, cid = db
+    monkeypatch.setattr("db.pcaf_engine.company_goals._now_year_month", lambda: (YEAR, 8))
+    # 1~7월(YEAR)은 기준 윈도우 밖 — 아무리 커도 기준값에 안 잡혀야 한다.
+    for m in range(1, 8):
+        _add_voucher(session, cid, m, "도시가스", quantity=100, scope=1, emission=999.0, year=YEAR)
+    # 8~12월(YEAR)은 기준 윈도우 안.
+    for m in range(8, 13):
+        _add_voucher(session, cid, m, "도시가스", quantity=100, scope=1, emission=100.0, year=YEAR)
+
+    goal = create_emission_reduction_goal(session, cid, target_reduction_pct=10)
+    assert goal.baseline_reporting_year == YEAR
+    assert goal.baseline_start_month == 8
+    # 8~12월(YEAR) 5개월 * 100kg = 0.5tCO2e — 1~7월의 999kg짜리는 안 잡힘.
+    assert goal.baseline_value == pytest.approx(0.5)
+
+
+def test_comparison_window_matches_baseline_month_count(db, monkeypatch):
+    """비교 시점에도 "8~9월(다음해)"처럼 기준과 같은 자리의 12개월 윈도우만 잡아야
+    한다 — 예전 버그(달력년도 vs 달력년도)라면 다음해 1~12월 전체를 잘못 비교했을
+    지점이라, 윈도우 밖(1~7월 다음해)에 큰 값을 넣어도 안 잡히는지로 확인한다."""
+    session, cid = db
+    monkeypatch.setattr("db.pcaf_engine.company_goals._now_year_month", lambda: (YEAR, 8))
+    for m in range(8, 13):
+        _add_voucher(session, cid, m, "도시가스", quantity=100, scope=1, emission=100.0, year=YEAR)
+    create_emission_reduction_goal(session, cid, target_reduction_pct=10)  # baseline 0.5tCO2e
+
+    next_year = YEAR + 1
+    for m in range(1, 8):  # 비교 윈도우 밖
+        _add_voucher(session, cid, m, "도시가스", quantity=100, scope=1, emission=999.0, year=next_year)
+    for m in (8, 9):  # 비교 윈도우 안
+        _add_voucher(session, cid, m, "도시가스", quantity=100, scope=1, emission=100.0, year=next_year)
+
+    monkeypatch.setattr("db.pcaf_engine.company_goals._now_year_month", lambda: (next_year, 9))
+    progress = get_active_goal_progress(session, cid)
+    assert progress["measured"] is True
+    assert progress["current_value"] == pytest.approx(0.2)  # 8,9월(다음해)만 100kg씩 = 0.2tCO2e
+
+
+def test_still_in_baseline_before_window_closes(db, monkeypatch):
+    """시작월이 8월이면 다음 해 7월까지는 여전히 기준 윈도우 안이다 — 예전 버그(달력
+    년도 기준)라면 1월만 돼도 곧바로 비교 모드로 넘어갔을 지점."""
+    session, cid = db
+    monkeypatch.setattr("db.pcaf_engine.company_goals._now_year_month", lambda: (YEAR, 8))
+    for m in range(8, 13):
+        _add_voucher(session, cid, m, "도시가스", quantity=100, scope=1, year=YEAR)
+    create_emission_reduction_goal(session, cid, target_reduction_pct=10)
+
+    monkeypatch.setattr("db.pcaf_engine.company_goals._now_year_month", lambda: (YEAR + 1, 3))
+    progress = get_active_goal_progress(session, cid)
+    assert progress["measured"] is False
+    assert progress["achieved"] is False
 
 
 # ── 활성 목표는 항상 1개 ──────────────────────────────────────────────────────

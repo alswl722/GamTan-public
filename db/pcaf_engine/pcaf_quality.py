@@ -29,7 +29,7 @@ PCAF Standard Part A Third Edition, Table 10.1-2(Annex p.192) 원문 옵션 체�
 PR #25 리뷰 반영 (2026-08-12): 최초 버전은 연료 버킷(전기/가스/경유·유류) 구분 없이
 회사·연도 전표를 전부 한데 묶어 activity_basis_breakdown을 집계했고, 그 결과 Scope 1과
 Scope 2가 같은 dominant_basis/option_code를 받는 버그가 있었다(예: 경유 11개월 + 전기
-1개월이 섞이면 전기 행이 경유 데이터에 좌우됨). _FUEL_BUCKET_SCOPE로 연료→Scope를
+1개월이 섞이면 전기 행이 경유 데이터에 좌우됨). FUEL_BUCKET_SCOPE로 연료→Scope를
 매핑해 Scope 1(가스·경유/유류)과 Scope 2(전기)를 분리 집계하도록 고쳤다.
 
 v1 §4 "인벤토리 완전성 집계" (2026-08-12): aggregate_scope_emissions 추가 —
@@ -77,7 +77,7 @@ from db.models import (
     Voucher,
 )
 
-_FUEL_BUCKET_SCOPE = {"전기": "scope_2", "가스": "scope_1", "경유/유류": "scope_1"}
+FUEL_BUCKET_SCOPE = {"전기": "scope_2", "가스": "scope_1", "경유/유류": "scope_1"}
 _UPGRADE_SCOPES = ("scope_1", "scope_2")
 
 # 결손월 안내를 web/app/owner/uploads 그리드(문서종류 × 월)의 실제 칸으로 딥링크
@@ -89,7 +89,7 @@ def _selected_fuels(fuel_types: dict | None) -> set[str] | None:
     """companies.fuel_types_json → 이 기업이 실제로 체크한 연료 대분류 집합.
 
     api/queries.py::_selected_coverage_fuels와 같은 판정을 이 모듈 안에서 독립적으로
-    유지한다(_fuel_bucket과 같은 이유 — db/pcaf.py 계열과 분리). None(연료 체크 전
+    유지한다(fuel_bucket과 같은 이유 — db/pcaf.py 계열과 분리). None(연료 체크 전
     상태)이면 필터를 걸지 않는다 — 체크 전에는 모든 연료를 결손 후보로 본다.
 
     이 필터가 없으면 기업이 아예 쓰지 않는 연료(예: 경유 지게차가 없는 공장)의 매트릭스
@@ -192,7 +192,7 @@ def assess_inventory_completeness(
 ) -> CompletenessAssessment:
     """해당 기업·보고연도·Scope의 12개월 충족 여부, 결손월, 활동자료 근거 구성비를 집계.
 
-    scope_group: "scope_1"(가스, 경유/유류) | "scope_2"(전기). _FUEL_BUCKET_SCOPE로
+    scope_group: "scope_1"(가스, 경유/유류) | "scope_2"(전기). FUEL_BUCKET_SCOPE로
     연료 버킷을 Scope에 매핑해 해당 Scope의 연료만 대상으로 집계한다. 그중에서도
     Company.fuel_types_json에 체크된 연료만 대상이다(_selected_fuels) — 안 쓰는
     연료는 애초에 결손 판정에 들어가지 않는다.
@@ -213,7 +213,7 @@ def assess_inventory_completeness(
     today = as_of or datetime.now(timezone.utc)
     applicable_months = today.month if reporting_year == today.year else 12
 
-    all_scope_fuels = [f for f, s in _FUEL_BUCKET_SCOPE.items() if s == scope_group]
+    all_scope_fuels = [f for f, s in FUEL_BUCKET_SCOPE.items() if s == scope_group]
     company = session.get(Company, company_id)
     selected = _selected_fuels(company.fuel_types_json if company else None)
     fuels = all_scope_fuels if selected is None else [f for f in all_scope_fuels if f in selected]
@@ -227,7 +227,7 @@ def assess_inventory_completeness(
     basis_counts: dict[str, int] = {}
     covered_months: set[int] = set()
     for voucher, classification in rows:
-        bucket = _fuel_bucket(classification.fuel_type)
+        bucket = fuel_bucket(classification.fuel_type)
         if bucket not in matrix:
             continue
         matrix[bucket][voucher.month] = True
@@ -273,7 +273,7 @@ def aggregate_scope_emissions(
     if scope_group == "scope_3":
         return {"emission_tco2e": None, "scope3_status": "not_calculated", "verified": False}
 
-    fuels = [f for f, s in _FUEL_BUCKET_SCOPE.items() if s == scope_group]
+    fuels = [f for f, s in FUEL_BUCKET_SCOPE.items() if s == scope_group]
     rows = session.execute(
         select(Voucher, Classification)
         .join(Classification, Classification.voucher_id == Voucher.id)
@@ -283,7 +283,7 @@ def aggregate_scope_emissions(
     total_kg = 0.0
     has_any = False
     for voucher, classification in rows:
-        if _fuel_bucket(classification.fuel_type) not in fuels:
+        if fuel_bucket(classification.fuel_type) not in fuels:
             continue
         has_any = True
         if classification.status == "rejected" or not classification.emission_co2e:
@@ -308,7 +308,7 @@ def scope_emission_detail(
     if scope_group == "scope_3":
         return []
 
-    fuels = [f for f, s in _FUEL_BUCKET_SCOPE.items() if s == scope_group]
+    fuels = [f for f, s in FUEL_BUCKET_SCOPE.items() if s == scope_group]
     rows = session.execute(
         select(Voucher, Classification)
         .join(Classification, Classification.voucher_id == Voucher.id)
@@ -318,7 +318,7 @@ def scope_emission_detail(
 
     items = []
     for voucher, classification in rows:
-        if _fuel_bucket(classification.fuel_type) not in fuels:
+        if fuel_bucket(classification.fuel_type) not in fuels:
             continue
         if classification.status == "rejected" or not classification.emission_co2e:
             continue
@@ -344,10 +344,12 @@ _FUEL_TYPE_TO_BUCKET = {
 }
 
 
-def _fuel_bucket(fuel_type: str | None) -> str:
+def fuel_bucket(fuel_type: str | None) -> str:
     """분류 엔진이 이미 확정한 Classification.fuel_type → 연료 대분류(db/pcaf.py::
-    _fuel_bucket과 동일 매핑 — db/pcaf.py 계열과 독립적으로 유지하기 위해 이 모듈
-    안에서 완결시킨다).
+    fuel_bucket과 동일 매핑이지만 db/pcaf.py 계열과 독립적으로 이 모듈 안에서
+    완결시킨다 — 이 프로젝트가 이미 쓰는 소규모 헬퍼 복제 관례). non-underscore로
+    공개해 db/pcaf_engine/company_goals.py의 롤링 윈도우 집계(2026-08-19)가
+    가져다 쓴다(FUEL_BUCKET_SCOPE와 짝).
 
     2026-08-17 이전엔 Voucher.item_description 원문을 키워드로 다시 재해석했다
     (전기/전력/한전/한국전력/kWh 등). 문제는 분류 엔진이 이미 scope·fuel_type을
@@ -578,7 +580,7 @@ def quality_upgrade_candidate(
     revenue_count = completeness.activity_basis_breakdown.get("revenue", 0)
     missing_count = sum(len(months) for months in completeness.missing_months.values())
 
-    all_scope_fuels = [f for f, s in _FUEL_BUCKET_SCOPE.items() if s == scope_group]
+    all_scope_fuels = [f for f, s in FUEL_BUCKET_SCOPE.items() if s == scope_group]
     company = session.get(Company, company_id)
     selected = _selected_fuels(company.fuel_types_json if company else None)
     fuels_list = all_scope_fuels if selected is None else [f for f in all_scope_fuels if f in selected]

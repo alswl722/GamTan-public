@@ -14,7 +14,7 @@ Before(기준선)은 항상 5등급 — 전표 없이 매출/업종 통계만 �
 """
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from api.queries import get_coverage, get_distribution
@@ -190,8 +190,11 @@ def _before_baseline(company, dist1, dist2) -> dict:
     }
 
 
-def monthly_by_fuel(session: Session, company_id: int, year: int | None = None) -> list[dict]:
-    """월(1~12) × 연료 대분류 실측 배출량 그리드 — 리포트 월별 추이 차트 재료.
+def monthly_by_fuel(
+    session: Session, company_id: int, year: int | None = None,
+    months: list[tuple[int, int]] | None = None,
+) -> list[dict]:
+    """월별 연료 대분류 실측 배출량 그리드 — 리포트 월별 추이 차트 재료.
 
     홈 화면 배출량 감축 목표 카드(db/pcaf_engine/company_goals.py::
     _emission_reduction_progress)도 같은 차트(web/components/MonthlyTrendChart.tsx)를
@@ -202,14 +205,22 @@ def monthly_by_fuel(session: Session, company_id: int, year: int | None = None) 
     차트에 드러나게 한다(업종평균 추정을 실측인 것처럼 섞어 보여주지 않음 —
     §5-1 LLM 산수 금지와 같은 결의 "숫자를 지어내지 않는다" 원칙).
 
-    year를 주면 그 해 전표만 집계한다 — 실측(2026-08-17) year 필터가 없어
-    연도 선택기를 바꿔도 이 차트만 항상 전체 기간 합산으로 똑같이 보이던
-    문제 발견, 프론트가 현재 리포트 연도(quality-report의 reporting_year)를
-    그대로 넘긴다. 생략하면(관리자 포트폴리오 집계 등 다른 호출부) 기존과
-    동일하게 전체 연도를 합산한다 — 하위호환 유지.
+    year를 주면 그 해(1~12월) 전표만 집계한다 — 실측(2026-08-17) year 필터가 없어
+    연도 선택기를 바꿔도 이 차트만 항상 전체 기간 합산으로 똑같이 보이던 문제
+    발견, 프론트가 현재 리포트 연도(quality-report의 reporting_year)를 그대로
+    넘긴다.
+
+    months를 주면(year보다 우선) 정확히 그 (연,월) 12쌍만 집계한다 — 목표 카드의
+    롤링 12개월 윈도우(달력년도가 아니라 목표 설정월부터 시작, 2026-08-19)가
+    두 해에 걸칠 수 있어서 필요해졌다. 반환 순서는 months 리스트 순서를 그대로
+    따른다(달력 1월이 아니라 윈도우 시작월부터 시간순으로 그려지게) — 정확히
+    12개월 연속 구간이라 각 항목의 "month"(1~12)는 윈도우 안에서 중복되지 않는다.
+
+    둘 다 생략하면(관리자 포트폴리오 집계 등 다른 호출부) 기존과 동일하게 전체
+    기간을 합산한다 — 하위호환 유지.
     """
     stmt = (
-        select(Voucher.month, Classification.fuel_type, Classification.emission_co2e)
+        select(Voucher.year, Voucher.month, Classification.fuel_type, Classification.emission_co2e)
         .join(Classification, Classification.voucher_id == Voucher.id)
         .where(
             Voucher.company_id == company_id,
@@ -217,12 +228,18 @@ def monthly_by_fuel(session: Session, company_id: int, year: int | None = None) 
             Classification.status != "rejected",
         )
     )
-    if year is not None:
+    if months is not None:
+        stmt = stmt.where(or_(*[and_(Voucher.year == y, Voucher.month == m) for y, m in months]))
+        ordered_months = [m for _, m in months]
+    elif year is not None:
         stmt = stmt.where(Voucher.year == year)
+        ordered_months = list(range(1, 13))
+    else:
+        ordered_months = list(range(1, 13))
     rows = session.execute(stmt).all()
 
-    by_month_bucket_kg: dict[int, dict[str, float]] = {m: {} for m in range(1, 13)}
-    for month, fuel_type, emission in rows:
+    by_month_bucket_kg: dict[int, dict[str, float]] = {m: {} for m in ordered_months}
+    for _voucher_year, month, fuel_type, emission in rows:
         if emission is None:
             continue
         bucket = _fuel_bucket(fuel_type)
@@ -235,7 +252,7 @@ def monthly_by_fuel(session: Session, company_id: int, year: int | None = None) 
             "total_tco2e": round(sum(by_month_bucket_kg[m].values()) / 1000.0, 2),
             "by_fuel": {k: round(v / 1000.0, 2) for k, v in by_month_bucket_kg[m].items()},
         }
-        for m in range(1, 13)
+        for m in ordered_months
     ]
 
 
