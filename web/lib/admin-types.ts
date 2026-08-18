@@ -171,10 +171,14 @@ export interface ClimateRiskReport {
     verification_error_rate: { status: "pending"; note: string };
   };
   financed_emissions_timeline: {
-    /** 항상 true — business_loan_exposures가 0건이라 실측 금융배출량이 없다.
-     * 대출잔액이 은행 내부 여신 시스템과 연동되기 전까지는 예시 값만 내려온다. */
+    /** 항상 true — 대출잔액(business_loan_exposures)이 은행 내부 여신
+     * 시스템과 연동되기 전까지는 mock 값으로 계산한 예시일 뿐 실측이 아니다.
+     * 산식(귀속계수×차주배출량) 자체는 실제 계산 결과다. */
     is_example: true;
     note: string;
-    years: { year: number; grade_label: string }[];
+    /** company_count: 그 연도에 실제로 계산된(재무정보+배출량+대출잔액이
+     * 모두 있는) 기업 수 — 데이터가 없는 기업은 연도 배열 자체가 비거나
+     * 이 값이 작게 나올 수 있다. */
+    years: { year: number; financed_emission_tco2e: number; company_count: number }[];
   };
 }
