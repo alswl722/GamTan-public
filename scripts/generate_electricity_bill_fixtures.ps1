@@ -148,7 +148,18 @@ $Bills = @(
     @{ Year=2025; Month=9;  UsageKwh=5050;  PrevUsageKwh=5600;  BaseFee=328000; EnergyFee=451975; Tax=124025; BilledAmount=864000;  DueDate="2025-10-25"; IssueDate="2025-10-04"; PeriodStart="2025-09-01"; PeriodEnd="2025-09-30"; MeterDate="2025-09-30" },
     @{ Year=2025; Month=10; UsageKwh=4700;  PrevUsageKwh=5050;  BaseFee=328000; EnergyFee=420650; Tax=110350; BilledAmount=809000;  DueDate="2025-11-25"; IssueDate="2025-11-04"; PeriodStart="2025-10-01"; PeriodEnd="2025-10-31"; MeterDate="2025-10-31" },
     @{ Year=2025; Month=11; UsageKwh=4900;  PrevUsageKwh=4700;  BaseFee=328000; EnergyFee=438550; Tax=113450; BilledAmount=840000;  DueDate="2025-12-25"; IssueDate="2025-12-04"; PeriodStart="2025-11-01"; PeriodEnd="2025-11-30"; MeterDate="2025-11-30" },
-    @{ Year=2025; Month=12; UsageKwh=11800; PrevUsageKwh=4900;  BaseFee=328000; EnergyFee=1056100; Tax=328900; BilledAmount=1928000; DueDate="2026-01-25"; IssueDate="2026-01-05"; PeriodStart="2025-12-01"; PeriodEnd="2025-12-31"; MeterDate="2025-12-31" }
+    @{ Year=2025; Month=12; UsageKwh=11800; PrevUsageKwh=4900;  BaseFee=328000; EnergyFee=1056100; Tax=328900; BilledAmount=1928000; DueDate="2026-01-25"; IssueDate="2026-01-05"; PeriodStart="2025-12-01"; PeriodEnd="2025-12-31"; MeterDate="2025-12-31" },
+
+    # ── 2026년 1~8월: 12월 스파이크(11,800kWh) 이후 일부 되돌아왔지만 이전 기준선(4,900)으로는
+    #    복귀하지 않고 8,000대에서 재상승 — 청구서에 원인 설명 여전히 없음(진행 중인 이상치) ──
+    @{ Year=2026; Month=1;  UsageKwh=9200;  PrevUsageKwh=11800; BaseFee=328000; EnergyFee=823400;  Tax=394600; BilledAmount=1546000; DueDate="2026-02-25"; IssueDate="2026-02-05"; PeriodStart="2026-01-01"; PeriodEnd="2026-01-31"; MeterDate="2026-01-31" },
+    @{ Year=2026; Month=2;  UsageKwh=8700;  PrevUsageKwh=9200;  BaseFee=328000; EnergyFee=778650;  Tax=355350; BilledAmount=1462000; DueDate="2026-03-25"; IssueDate="2026-03-05"; PeriodStart="2026-02-01"; PeriodEnd="2026-02-28"; MeterDate="2026-02-28" },
+    @{ Year=2026; Month=3;  UsageKwh=8300;  PrevUsageKwh=8700;  BaseFee=328000; EnergyFee=742850;  Tax=323150; BilledAmount=1394000; DueDate="2026-04-25"; IssueDate="2026-04-05"; PeriodStart="2026-03-01"; PeriodEnd="2026-03-31"; MeterDate="2026-03-31" },
+    @{ Year=2026; Month=4;  UsageKwh=8000;  PrevUsageKwh=8300;  BaseFee=328000; EnergyFee=716000;  Tax=300000; BilledAmount=1344000; DueDate="2026-05-25"; IssueDate="2026-05-05"; PeriodStart="2026-04-01"; PeriodEnd="2026-04-30"; MeterDate="2026-04-30" },
+    @{ Year=2026; Month=5;  UsageKwh=8600;  PrevUsageKwh=8000;  BaseFee=328000; EnergyFee=769700;  Tax=347300; BilledAmount=1445000; DueDate="2026-06-25"; IssueDate="2026-06-05"; PeriodStart="2026-05-01"; PeriodEnd="2026-05-31"; MeterDate="2026-05-31" },
+    @{ Year=2026; Month=6;  UsageKwh=9800;  PrevUsageKwh=8600;  BaseFee=328000; EnergyFee=877100;  Tax=440900; BilledAmount=1646000; DueDate="2026-07-25"; IssueDate="2026-07-05"; PeriodStart="2026-06-01"; PeriodEnd="2026-06-30"; MeterDate="2026-06-30" },
+    @{ Year=2026; Month=7;  UsageKwh=11200; PrevUsageKwh=9800;  BaseFee=328000; EnergyFee=1002400; Tax=551600; BilledAmount=1882000; DueDate="2026-08-25"; IssueDate="2026-08-05"; PeriodStart="2026-07-01"; PeriodEnd="2026-07-31"; MeterDate="2026-07-31" },
+    @{ Year=2026; Month=8;  UsageKwh=12500; PrevUsageKwh=11200; BaseFee=328000; EnergyFee=1118750; Tax=653250; BilledAmount=2100000; DueDate="2026-09-25"; IssueDate="2026-09-05"; PeriodStart="2026-08-01"; PeriodEnd="2026-08-31"; MeterDate="2026-08-31" }
 )
 
 $common = @{
