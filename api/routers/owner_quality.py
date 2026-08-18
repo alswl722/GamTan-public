@@ -24,9 +24,9 @@ from api.db import get_session
 from api.queries import get_distribution
 from db.models import BorrowerEmissionInventory, Company, PcafQualityRule
 from db.organizational_boundary import ensure_organizational_boundary
-from db.owner_report_pdf import build_owner_report_pdf
-from db.pcaf import benchmark_against_industry
-from db.pcaf_quality import (
+from db.reports.owner_report_pdf import build_owner_report_pdf
+from db.pcaf_engine.pcaf import benchmark_against_industry
+from db.pcaf_engine.pcaf_quality import (
     assess_borrower_emission_quality,
     assess_inventory_completeness,
     available_reporting_years,

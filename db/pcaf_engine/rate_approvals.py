@@ -14,8 +14,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from db.models import Company, RateApprovalRequest
-from db.pcaf_quality import default_reporting_year
-from db.rate_products import rate_product_status_for_scope
+from db.pcaf_engine.pcaf_quality import default_reporting_year
+from db.pcaf_engine.rate_products import rate_product_status_for_scope
 
 DISCLAIMER_TEXT = (
     "본 안내는 데이터 완전성 개선을 제안할 뿐 PCAF 등급 상승이나 우대금리·설비금융 "

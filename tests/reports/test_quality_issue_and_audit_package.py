@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from api.db import get_session
 from api.main import app
 from db.audit_package import build_audit_package
-from db.audit_report_pdf import build_audit_report_pdf
+from db.reports.audit_report_pdf import build_audit_report_pdf
 from db.models import (
     Base,
     Classification,

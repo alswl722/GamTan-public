@@ -47,11 +47,10 @@ from db.alerts import detect_alerts
 from db.calc_engine import CalcDataGap, ClassifiedItemInput, compute_emission, \
     index_emission_factors, index_unit_prices
 from db.audit_package import build_audit_package
-from db.audit_report_pdf import build_audit_report_pdf
-from db.climate_risk_report_pdf import EXAMPLE_FINANCED_EMISSIONS_TIMELINE, build_climate_risk_report_pdf
-from db.document_access_log import access_history, record_access, recent_access_log
-from db.models import Classification, Company, FinancialInstitution, OwnerNotification, SourceDocument, TraceLog, Voucher
-from db.pcaf import company_pcaf_summary, portfolio_summary
+from db.reports.audit_report_pdf import build_audit_report_pdf
+from db.document.document_access_log import access_history, record_access, recent_access_log
+from db.models import Classification, Company, OwnerNotification, SourceDocument, TraceLog, Voucher
+from db.pcaf_engine.pcaf import company_pcaf_summary, portfolio_summary
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 

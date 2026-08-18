@@ -17,10 +17,10 @@ from reportlab.pdfgen import canvas
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-import db.document_extraction as document_extraction
-from db.document_extraction import extract_document
-from db.document_ocr_extractor import OcrResult
-from db.document_text_extractor import DocumentParseError
+import db.document.document_extraction as document_extraction
+from db.document.document_extraction import extract_document
+from db.document.document_ocr_extractor import OcrResult
+from db.document.document_text_extractor import DocumentParseError
 from db.models import Base
 
 pdfmetrics.registerFont(UnicodeCIDFont("HYGothic-Medium"))

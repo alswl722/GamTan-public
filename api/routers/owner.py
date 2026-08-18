@@ -40,22 +40,22 @@ from api.document_ingestion import (
 )
 from api.queries import get_coverage, get_owner_notifications, get_owner_progress, get_pending_anomaly_checks
 from db.alerts import detect_alerts
-from db.document_coverage import (
+from db.document.document_coverage import (
     delete_source_document,
     document_pending_review_count,
     document_upload_grid,
     documents_for_cell,
     upload_streak,
 )
-from db.document_requirements import FuelTypes, required_documents
-from db.document_text_extractor import DocumentParseError
+from db.document.document_requirements import FuelTypes, required_documents
+from db.document.document_text_extractor import DocumentParseError
 from db.hometax_excel_parser import HometaxExcelFormatError
-from db.k_taxonomy import k_taxonomy_leads_for_company
+from db.pcaf_engine.k_taxonomy import k_taxonomy_leads_for_company
 from db.models import Classification, Company, OwnerNotification, SourceDocument, Voucher
-from db.pcaf_quality import default_reporting_year
-from db.rate_products import rate_product_status_for_company
+from db.pcaf_engine.pcaf_quality import default_reporting_year
+from db.pcaf_engine.rate_products import rate_product_status_for_company
 from db.quality_issues import record_ingestion_failure
-from db.rate_approvals import (
+from db.pcaf_engine.rate_approvals import (
     CompanyNotFoundError,
     DISCLAIMER_TEXT,
     InvalidScopeError,

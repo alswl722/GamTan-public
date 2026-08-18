@@ -34,6 +34,15 @@
 - 무료 티어 자동 pause 있음 → GitHub Actions 1일 1회 핑 쿼리
 - **공유 DB이므로 여러 명이 동시에 접속한다.** `alembic upgrade/downgrade`를 포함한 모든 DDL은 팀 전체에 즉시 영향을 준다 — 적용 전 사용자 확인 필수, 로컬 마이그레이션 파일을 만든 뒤에도 커밋·푸시를 미루지 말 것(리비전 번호 충돌 방지)
 
+### 디렉토리 구성 (`db/`, `tests/`)
+
+`db/`, `tests/`는 파일이 늘어날 때마다 역할별 서브디렉토리로 묶는다 — 평평한 디렉토리에 파일을 계속 추가하지 않는다.
+
+- **새 코드 파일을 추가할 때**: 기존 서브디렉토리(`db/document/`, `db/pcaf_engine/`, `db/reports/`) 중 역할이 맞는 곳이 있으면 거기에 넣는다. 어디에도 안 맞으면 `db/` 루트에 두되, 성격이 같은 파일이 2~3개 이상 쌓이면 그때 서브디렉토리로 새로 묶는다(예: 마이데이터/시드 계열 `mydata_csv_source.py`·`hometax_excel_parser.py`·`seed_mock.py`·`excel_loader.py`, 감사/알림 계열 `alerts.py`·`audit_package.py`·`quality_issues.py`).
+- **`db/models.py`, `db/init_db.py`는 이동하지 않는다** — 거의 전 파일이 참조하는 코어라 서브패키지로 옮기면 이동 실익 없이 대규모 import 수정만 발생함.
+- **테스트는 대응하는 소스 서브디렉토리와 이름을 맞춘다**: `db/document/*.py` → `tests/document/`, `db/pcaf_engine/*.py` → `tests/pcaf_engine/`, `db/reports/*.py` → `tests/reports/`. 라우터가 소스를 감싸서 호출할 뿐 직접 import하지 않는 TestClient 통합 테스트(`test_admin.py`, `test_owner_quality.py` 등)는 억지로 끼워 넣지 말고 `tests/` 루트에 둔다.
+- 이동 시 `git mv`로 이력을 보존하고, 그룹 내부 상호 import와 외부(api/, tests/) 참조처를 모두 새 경로로 고친 뒤 관련 테스트를 반드시 재실행해 통과를 확인한다.
+
 ## 4. DB 테이블 (22개)
 
 세부 컬럼·제약은 정본 `db/models.py`, 사람이 읽기 쉬운 표는 `docs/db-schema.md` 참고. 두 세대로 나뉜다.

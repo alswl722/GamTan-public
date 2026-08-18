@@ -16,7 +16,7 @@ from api.document_ingestion import (
     MissingInstitutionAttributionError,
     ingest_uploaded_document,
 )
-from db.document_text_extractor import DocumentParseError
+from db.document.document_text_extractor import DocumentParseError
 from db.models import Base, Company, FinancialInstitution, InstitutionBorrower, SourceDocument, Voucher
 
 pdfmetrics.registerFont(UnicodeCIDFont("HYGothic-Medium"))
@@ -254,8 +254,8 @@ def test_text_layer_upload_records_extraction_method(db_with_institution):
 
 
 def test_ocr_fallback_upload_records_method_and_confidence(db_with_institution, monkeypatch):
-    import db.document_extraction as document_extraction
-    from db.document_ocr_extractor import OcrResult
+    import db.document.document_extraction as document_extraction
+    from db.document.document_ocr_extractor import OcrResult
 
     monkeypatch.setattr(
         document_extraction, "ocr_extract",
@@ -281,8 +281,8 @@ def test_management_fee_bill_upload_flags_low_quality_and_returns_guidance(
     """관리비 고지서에서 뽑은 전기료는 1차 계량 데이터가 아니라 verification_status를
     낮게 잡고, 사장님에게 재발행 요청을 안내하는 메시지를 응답에 실어 보낸다
     (db/document_text_extractor.py::parse_management_fee_bill)."""
-    import db.document_extraction as document_extraction
-    from db.document_ocr_extractor import OcrResult
+    import db.document.document_extraction as document_extraction
+    from db.document.document_ocr_extractor import OcrResult
 
     monkeypatch.setattr(
         document_extraction, "ocr_extract",

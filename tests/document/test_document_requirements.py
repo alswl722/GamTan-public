@@ -1,5 +1,5 @@
 """연료 체크 → 업로드 문서 요구 상태 판정 골든케이스 (db/document_requirements.py)."""
-from db.document_requirements import required_documents
+from db.document.document_requirements import required_documents
 
 
 def test_electricity_only_makes_tax_invoice_optional():

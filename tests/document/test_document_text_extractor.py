@@ -7,7 +7,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfgen import canvas
 
-from db.document_text_extractor import (
+from db.document.document_text_extractor import (
     DocumentParseError,
     DocumentTypeMismatchError,
     detect_document_type,
