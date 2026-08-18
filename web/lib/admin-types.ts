@@ -162,13 +162,27 @@ export interface ClimateRiskReport {
   };
   risk_assessment: {
     grade_distribution: Record<string, number>;
+    /** 도입 전 기준선 — 정의상 전 기업 5등급(매출·업종 통계 대입), Before/After 대조용. */
+    before_distribution: Record<string, number>;
   };
   disclosure: {
     measured_coverage_pct: number;
     hitl_total: number;
     reviewed_today: number;
-    /** 회계 담당 미착수 — 항상 status: "pending"(산정 예정)만 온다. 실측값 없음. */
-    verification_error_rate: { status: "pending"; note: string };
+    /** PR #92로 실측 확정(기대_결과 50건 정답지 대조). DB 상태와 무관한
+     * 고정값 — docs/v1-plan.md §5-1, db/verification_results.py. */
+    classification_accuracy: {
+      status: "measured";
+      overall_pct: number;
+      auto_confirmed_pct: number;
+      hitl_recall_pct: number;
+      sample_size: number;
+      note: string;
+    };
+    /** 전제 데이터(공시 기업 리스트업) 미확보 — 항상 pending. */
+    track_a_mape: { status: "pending"; note: string };
+    /** 전제 데이터(실물 파일럿 기업) 미확보 — 항상 pending. */
+    track_b_field_test: { status: "pending"; note: string };
   };
   financed_emissions_timeline: {
     /** 항상 true — 대출잔액(business_loan_exposures)이 은행 내부 여신
