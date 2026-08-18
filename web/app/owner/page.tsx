@@ -81,6 +81,8 @@ export default function OwnerHomePage() {
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<OwnerProgress | null>(null);
   const [goal, setGoal] = useState<CompanyGoal | null | undefined>(undefined); // undefined = 아직 조회 전
+  const [goalError, setGoalError] = useState(false);
+  const [goalRetryNonce, setGoalRetryNonce] = useState(0); // "다시 시도" 버튼이 이 값을 올려 조회 이펙트를 다시 태운다
   const [goalSheetOpen, setGoalSheetOpen] = useState(false);
 
   useEffect(() => {
@@ -115,23 +117,33 @@ export default function OwnerHomePage() {
     // 5단계가 전부 끝난 뒤에만 목표 조회 — 그 전엔 홈 박스가 여전히 측정 유도 카드다.
     if (selectedId === null || !progress) {
       setGoal(undefined);
+      setGoalError(false);
       return;
     }
     const doneCount = Object.values(progress.steps).filter(Boolean).length;
     if (doneCount < MEASURE_STAGES.length) {
       setGoal(undefined);
+      setGoalError(false);
       return;
     }
     let cancelled = false;
+    setGoalError(false);
     getCompanyGoal(selectedId)
       .then((r) => {
         if (!cancelled) setGoal(r.goal);
       })
-      .catch((err) => console.error("목표 조회 실패:", err));
+      .catch((err) => {
+        console.error("목표 조회 실패:", err);
+        // 실패를 "활성 목표 없음"과 구분해야 한다 — 안 그러면 goal이 undefined로
+        // 남고 렌더에서 null 취급되어(goal ?? null) "목표 설정" 프롬프트가 뜬다.
+        // 사용자 입장에선 세워둔 목표가 아무 안내 없이 "사라진" 것처럼 보인다
+        // (실패 가시성 원칙 위반, 실측 신고 2026-08-19).
+        if (!cancelled) setGoalError(true);
+      });
     return () => {
       cancelled = true;
     };
-  }, [selectedId, progress]);
+  }, [selectedId, progress, goalRetryNonce]);
 
   function choose(id: number) {
     setCompanyId(id);
@@ -223,6 +235,19 @@ export default function OwnerHomePage() {
             ))}
           </span>
         </Link>
+      ) : selectedId !== null && goalError ? (
+        <div className="mt-5 rounded-3xl bg-surface px-5 py-5 shadow-card">
+          <p className="text-[13px] leading-relaxed text-muted">
+            목표를 불러오지 못했어요. 서버 연결 상태를 확인한 뒤 다시 시도해 주세요.
+          </p>
+          <button
+            type="button"
+            onClick={() => setGoalRetryNonce((n) => n + 1)}
+            className="btn-cta mt-3 rounded-xl bg-brand px-4 py-2 text-[12.5px] font-bold text-white"
+          >
+            다시 시도
+          </button>
+        </div>
       ) : selectedId !== null ? (
         <GoalBox goal={goal ?? null} companyId={selectedId} onOpenSheet={() => setGoalSheetOpen(true)} />
       ) : null}
