@@ -247,6 +247,34 @@ export function getRateCandidate(companyId: number): Promise<RateCandidateRespon
   return apiGet<RateCandidateResponse>(`/owner/${companyId}/rate-candidate`);
 }
 
+// GET /owner/{company_id}/gov-support-candidates — db/gov_support/matching.py::match_gov_support_programs.
+// 개인화된 정부 지원사업 매칭(docs/gov-support-matching-plan.md 정본). 매칭 목록
+// 자체는 결정론적 코사인 유사도가 결정하고, evidence만 LLM 생성(실패 시 null).
+export interface GovSupportCandidate {
+  program_id: number;
+  program_name: string;
+  agency_name: string | null;
+  apply_end_date: string | null;
+  detail_url: string | null;
+  similarity: number;
+  evidence: string | null;
+}
+export interface GovSupportCandidatesResponse {
+  as_of: string | null;
+  candidates: GovSupportCandidate[];
+}
+
+/** "혜택" 페이지의 세 번째 카드(GovSupportCard) — 우대금리·K택소노미와 같은
+ * "안내 레이어" 성격, 읽기 전용(신청 후보 안내이지 선정 보장 아님).
+ *
+ * 기본 타임아웃(15초)보다 넉넉한 25초를 쓴다 — 백엔드가 후보별 근거문장을
+ * Gemini로 병렬 생성해도(api/routers/owner.py, asyncio.gather) 개별 호출이
+ * 10초 가까이 걸릴 수 있어(2026-08-18 실측: 13초대) 기본 타임아웃과 여유가
+ * 거의 없었다. */
+export function getGovSupportCandidates(companyId: number): Promise<GovSupportCandidatesResponse> {
+  return apiGet<GovSupportCandidatesResponse>(`/owner/${companyId}/gov-support-candidates`, 25_000);
+}
+
 // GET /owner/{company_id}/reporting-years — db/pcaf_quality.py::available_reporting_years.
 // 리포트 화면·데이터 업로드 탭의 연도 선택기가 공유하는 목록(전표가 있는 연도만, 최신순).
 export interface ReportingYearsResponse {

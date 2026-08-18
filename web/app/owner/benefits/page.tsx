@@ -4,41 +4,52 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import {
   getCompanyId,
+  getGovSupportCandidates,
   getKTaxonomyLeads,
   getRateCandidate,
+  type GovSupportCandidatesResponse,
   type KTaxonomyLeadsResponse,
   type RateCandidateResponse,
 } from "@/lib/api";
 import { RateProductCard } from "@/components/RateProductCard";
 import { KTaxonomyCard } from "@/components/KTaxonomyCard";
+import { GovSupportCard } from "@/components/GovSupportCard";
 
-/** 하단바 "혜택" 탭 — 우대금리(RateProductCard)와 K택소노미 설비금융(KTaxonomyCard)을
- * 한 페이지의 두 섹션으로 묶는다. 예전엔 각각 메인 화면(/owner)에 개별 카드로 떠
- * 있었으나, 두 안내 모두 rate_approval_requests의 request_type만 다를 뿐(rate_upgrade
- * vs equipment_finance) 같은 "금융 혜택 안내" 성격이라 페이지로 분리했다.
+/** 하단바 "맞춤 혜택" 탭 — 우대금리(RateProductCard)·K택소노미 설비금융(KTaxonomyCard)·
+ * 정부 지원사업 매칭(GovSupportCard)을 한 페이지의 세 섹션으로 묶는다. 예전엔 각각
+ * 메인 화면(/owner)에 개별 카드로 떠 있었으나, 셋 다 "신청 후보 안내이지 선정
+ * 보장이 아니다"라는 같은 성격의 "금융 혜택 안내"라 페이지로 묶었다
+ * (docs/gov-support-matching-plan.md §8).
  *
- * 두 카드 컴포넌트는 각자 내부에서 fetch해 데이터가 없으면 스스로 숨는다 — 이 페이지는
- * 그와 별개로 "둘 다 없을 때"의 빈 상태 문구를 보여주려고 가볍게 한 번 더 조회한다. */
+ * 세 카드 컴포넌트는 각자 내부에서 fetch해 데이터가 없으면 스스로 숨는다 — 이
+ * 페이지는 그와 별개로 "셋 다 없을 때"의 빈 상태 문구를 보여주려고 가볍게 한 번
+ * 더 조회한다. */
 export default function OwnerBenefitsPage() {
   const [companyId, setCompanyId] = useState<number | null>(null);
   const [rate, setRate] = useState<RateCandidateResponse | null>(null);
   const [taxonomy, setTaxonomy] = useState<KTaxonomyLeadsResponse | null>(null);
+  const [govSupport, setGovSupport] = useState<GovSupportCandidatesResponse | null>(null);
 
   useEffect(() => {
     getCompanyId()
       .then((id) => {
         setCompanyId(id);
-        return Promise.all([getRateCandidate(id), getKTaxonomyLeads(id)]);
+        return Promise.all([getRateCandidate(id), getKTaxonomyLeads(id), getGovSupportCandidates(id)]);
       })
-      .then(([r, t]) => {
+      .then(([r, t, g]) => {
         setRate(r);
         setTaxonomy(t);
+        setGovSupport(g);
       })
       .catch((err) => console.error("금융 혜택 조회 실패:", err));
   }, []);
 
-  const loaded = rate !== null && taxonomy !== null;
-  const isEmpty = loaded && rate.candidates.length === 0 && taxonomy.leads.length === 0;
+  const loaded = rate !== null && taxonomy !== null && govSupport !== null;
+  const isEmpty =
+    loaded &&
+    rate.candidates.length === 0 &&
+    taxonomy.leads.length === 0 &&
+    govSupport.candidates.length === 0;
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col px-5 pb-16">
@@ -51,10 +62,14 @@ export default function OwnerBenefitsPage() {
         </Link>
       </div>
 
-      <h1 className="mt-4 text-[17px] font-bold leading-snug text-ink">금융 혜택</h1>
-      <p className="mt-1 text-[12.5px] leading-relaxed text-muted">
-        측정된 탄소 데이터를 바탕으로 받을 수 있는 우대금리·설비금융 안내예요.
-      </p>
+      <h1 className="mt-4 text-[19px] font-bold leading-snug text-ink">
+        <span className="text-brand-ink">감탄</span>이 찾은 딱 맞는{" "}
+        <span className="text-brand-ink">혜택</span>,
+        <br />
+        지금 확인해 보세요.
+      </h1>
+
+      <div className="mt-5 border-t border-line" />
 
       {!loaded ? (
         <p className="mt-6 text-[13px] text-faint">불러오는 중…</p>
@@ -63,7 +78,7 @@ export default function OwnerBenefitsPage() {
           <p className="text-[13px] leading-relaxed text-muted">
             아직 안내할 혜택이 없어요.
             <br />
-            데이터를 더 채우면 여기에 우대금리·설비금융 안내가 나타나요.
+            데이터를 더 채우면 여기에 우대금리·설비금융·정부 지원사업 안내가 나타나요.
           </p>
         </div>
       ) : (
@@ -73,6 +88,7 @@ export default function OwnerBenefitsPage() {
           )}
           <RateProductCard companyId={companyId} />
           <KTaxonomyCard companyId={companyId} />
+          <GovSupportCard companyId={companyId} />
         </>
       )}
     </div>

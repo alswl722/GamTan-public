@@ -11,6 +11,7 @@
 - GET   /owner/{company_id}/rate-candidate      우대금리 상품 자격 상태(이미 대상 | 개선 필요)
 - POST  /owner/{company_id}/rate-requests       우대금리·설비금융 안내 요청 생성 → 관리자 승인요청 큐
 - GET   /owner/{company_id}/k-taxonomy-leads    K택소노미·설비투자 리드(있으면 설비금융 안내 요청 버튼 노출)
+- GET   /owner/{company_id}/gov-support-candidates  개인화된 정부 지원사업 매칭 후보(top-K, 근거문장 포함)
 - GET   /owner/{company_id}/anomaly-checks      이상치 되묻기 — 답변 대기 중인 확인 요청 목록
 - PATCH /owner/{company_id}/classifications/{voucher_id}/anomaly-check  이상치 확인 답변(네/아니오/모르겠어요, 숫자 입력 없음)
 - GET   /owner/{company_id}/notifications       확정 전송 알림 목록(메인 화면 배너, 폴링 조회, ?unread=true)
@@ -50,6 +51,13 @@ from db.document.document_coverage import (
 from db.document.document_requirements import FuelTypes, required_documents
 from db.document.document_text_extractor import DocumentParseError
 from db.hometax_excel_parser import HometaxExcelFormatError
+from db.gov_support.evidence import generate_evidence_batch
+from db.gov_support.matching import (
+    company_profile_text,
+    latest_fetched_at,
+    match_gov_support_programs,
+    raw_text_by_program_id,
+)
 from db.pcaf_engine.k_taxonomy import k_taxonomy_leads_for_company
 from db.models import Classification, Company, OwnerNotification, SourceDocument, Voucher
 from db.pcaf_engine.pcaf_quality import default_reporting_year
@@ -385,6 +393,52 @@ def k_taxonomy_leads(company_id: int, session: Session = Depends(get_session)):
     데이터를 자기 기업으로 좁혀 재사용한다(db/k_taxonomy.py::k_taxonomy_leads_for_company).
     """
     return {"leads": k_taxonomy_leads_for_company(session, company_id)}
+
+
+@router.get("/{company_id}/gov-support-candidates")
+def gov_support_candidates(company_id: int, session: Session = Depends(get_session)):
+    """개인화된 정부 지원사업 매칭 — 기업 프로필 기반 top-K 후보
+    (db/gov_support/matching.py::match_gov_support_programs).
+
+    매칭 목록 자체는 결정론적 코사인 유사도가 결정하고(원칙1과 동일한 결),
+    LLM은 후보별 근거 문장만 생성한다 — 생성 실패해도 evidence만 null이 되고
+    후보 목록·마감일·소관기관 등 사실 필드는 그대로 노출된다(§7 실패 가시성,
+    docs/gov-support-matching-plan.md 정본). 우대금리·설비금융 안내(원칙10)와
+    같은 결로 "신청 후보 안내"이지 "선정 보장"이 아니다.
+
+    일반 def다(async def 아님) — FastAPI가 이 함수 전체를 워커 스레드에서
+    돌려주므로 이벤트 루프를 막지 않는다. **처음에 async def + asyncio.gather로
+    만들었다가 실패했다** — async def로 바꾸면 그 앞의 블로킹 호출(DB 조회·
+    임베딩 API)이 스레드로 안 넘어간 채 이벤트 루프 위에서 그대로 실행돼,
+    이 요청 하나가 동시에 들어온 다른 API(우대금리·K택소노미) 요청까지 전부
+    지연시켰다(2026-08-18 실측: 세 엔드포인트 동시 타임아웃). 일반 def가
+    이 라우터의 다른 엔드포인트와도 같은 결.
+
+    근거문장은 db/gov_support/evidence.py::generate_evidence_batch가
+    llm_cache로 캐싱 + 캐시 미스만 병렬 생성한다 — 캐싱 없이 매번 5건을
+    다시 물으면 새로고침할 때마다 8~9초씩 걸렸다(2026-08-18 실측, 전표
+    분류가 이미 쓰는 llm_cache 패턴 재사용).
+    """
+    company = session.get(Company, company_id)
+    if company is None:
+        raise HTTPException(status_code=404, detail="기업을 찾을 수 없습니다")
+
+    candidates = match_gov_support_programs(session, company_id)
+    if candidates:
+        profile_text = company_profile_text(company)
+        raw_texts = raw_text_by_program_id(session, [c["program_id"] for c in candidates])
+        evidences = generate_evidence_batch(
+            session, profile_text,
+            [(c["program_id"], c["program_name"], raw_texts.get(c["program_id"], "")) for c in candidates],
+        )
+        for candidate in candidates:
+            candidate["evidence"] = evidences.get(candidate["program_id"])
+
+    fetched_at = latest_fetched_at(session)
+    return {
+        "as_of": fetched_at.date().isoformat() if fetched_at else None,
+        "candidates": candidates,
+    }
 
 
 @router.get("/{company_id}/notifications")

@@ -1,5 +1,5 @@
 from sqlalchemy import (
-    Column, Integer, String, Float, DateTime, JSON, ForeignKey,
+    Column, Integer, String, Float, DateTime, Date, JSON, ForeignKey,
     SmallInteger, Text, Numeric, Index, UniqueConstraint, CheckConstraint,
     Boolean
 )
@@ -781,4 +781,47 @@ class OwnerNotification(Base):
 
     __table_args__ = (
         Index("ix_owner_notifications_company_unread", "company_id", "read_at"),
+    )
+
+
+class GovSupportProgram(Base):
+    """정부 지원사업 공고 — 기업마당(bizinfo) 등 외부 API에서 배치로 수집한 캐시.
+    docs/gov-support-matching-plan.md 정본.
+
+    기업별 매칭 결과는 저장하지 않고 매 조회 시 재계산한다(원칙8 대상 아님 —
+    추천일 뿐 승인·확정 개념이 없음). embedding은 pgvector `Vector` 타입이 아니라
+    JSON(float 리스트)이다 — 이 프로젝트 테스트가 SQLite로 도는데 Vector 타입은
+    Postgres 전용이라 충돌해서, 공유 Postgres에 그대로 저장하되 코사인 유사도는
+    db/gov_support/matching.py가 Python으로 계산한다(§5 정정, 2026-08-18).
+    """
+    __tablename__ = "gov_support_programs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source = Column(String(30), nullable=False, default="bizinfo")
+    external_id = Column(String(50), nullable=False)  # API 원본 공고 ID (bizinfo pblancId)
+    program_name = Column(String(200), nullable=False)
+    category = Column(String(50))  # 분야명 (코드 아님 — "기술"·"경영" 등)
+    agency_name = Column(String(100))  # 소관기관
+
+    apply_start_date = Column(Date)  # 파싱 성공 시만 채움
+    apply_end_date = Column(Date)  # 파싱 성공 시만 채움 — null은 "마감일 모름/상시"로 해석
+    apply_period_raw = Column(String(100))  # 원문 그대로 — "모집 완료시"·"예산 소진시까지" 등
+
+    # hashtags에서 뽑은 지역명 콤마 목록. null이거나 전국(다수 지역) 판정이면 지역
+    # 제한 없음으로 취급 — 판정 로직은 db/gov_support/matching.py::is_region_eligible.
+    region_tags = Column(String(200))
+
+    detail_url = Column(String(500))
+    raw_text = Column(Text)  # 임베딩 대상 원문(사업개요+지원대상, HTML 태그 제거)
+    raw_text_hash = Column(String(64))  # sha256(raw_text) — 변경분만 재임베딩 판단
+    embedding = Column(JSON)  # float 리스트(768차원) — pgvector Vector 타입 아님, 위 docstring 참고
+
+    is_active = Column(Boolean, nullable=False, default=True)  # 최신 배치에서 안 보이면 false
+    fetched_at = Column(DateTime(timezone=True))  # 마지막 성공 수집 시각
+    updated_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), default=now)
+
+    __table_args__ = (
+        UniqueConstraint("source", "external_id", name="uq_gov_support_source_external_id"),
+        Index("ix_gov_support_active_apply_end", "is_active", "apply_end_date"),
     )
