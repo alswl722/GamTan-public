@@ -65,7 +65,7 @@ dominant_basis 다수결(max())을 _weakest_basis로 교체했다 — 결손월�
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from db.models import (
@@ -110,17 +110,21 @@ def _selected_fuels(fuel_types: dict | None) -> set[str] | None:
 
 
 def default_reporting_year(session: Session, company_id: int) -> int:
-    """연도 파라미터 생략 시 쓸 기본값 — 달력상 올해가 아니라 그 기업의 전표가
-    실제로 존재하는 가장 최근 연도를 쓴다. 결산 주기가 달력연도와 다를 수 있고,
-    무엇보다 "올해"로 고정하면 데이터가 전부 작년(또는 그 이전) 연도인 기업은
-    아무 전표도 없는 빈 연도를 기본값으로 잡아 리포트가 항상 텅 비어 보인다.
+    """연도 파라미터 생략 시 쓸 기본값 — 달력상 올해.
+
+    실측(2026-08-17): 이전엔 "올해"로 고정하면 데이터가 전부 작년 연도인 기업의
+    리포트가 텅 비어 보인다는 이유로 그 기업의 전표가 실제로 존재하는 가장 최근
+    연도를 썼다. 그러나 시연용 고정 연도 데이터를 더 이상 쓰지 않고 사장님이
+    실시간으로 당해년도 전표를 업로드하는 구조가 된 이후로는 반대 문제가 커졌다
+    — 이미 작년 전표가 있는 기업이 올해 것을 새로 업로드해도 리포트·업로드 화면이
+    계속 작년 연도를 기본값으로 붙들어 "지금 넣은 데이터가 반영이 안 된다"로
+    보였다. 그래서 올해 전표가 아직 없어 리포트가 비어 보이더라도 달력상 올해를
+    기본값으로 고정한다 — 과거 연도는 연도 선택기(available_reporting_years)로
+    본다.
 
     api/routers/owner_quality.py(품질 리포트)와 우대금리 후보 판정이 같은 기준을
     공유해야 두 화면의 연도가 어긋나지 않는다."""
-    latest_year = session.execute(
-        select(func.max(Voucher.year)).where(Voucher.company_id == company_id)
-    ).scalar()
-    return latest_year or datetime.now(timezone.utc).year
+    return datetime.now(timezone.utc).year
 
 
 def available_reporting_years(session: Session, company_id: int) -> list[int]:
@@ -184,7 +188,7 @@ class CompletenessAssessment:
 
 
 def assess_inventory_completeness(
-    session: Session, company_id: int, reporting_year: int, scope_group: str
+    session: Session, company_id: int, reporting_year: int, scope_group: str, *, as_of: datetime | None = None
 ) -> CompletenessAssessment:
     """해당 기업·보고연도·Scope의 12개월 충족 여부, 결손월, 활동자료 근거 구성비를 집계.
 
@@ -193,16 +197,22 @@ def assess_inventory_completeness(
     Company.fuel_types_json에 체크된 연료만 대상이다(_selected_fuels) — 안 쓰는
     연료는 애초에 결손 판정에 들어가지 않는다.
 
-    completeness_pct는 "12개월 × 해당 Scope의 **선택된** 연료 개수" 슬롯 중 결손 없는
-    슬롯의 비율이다 — 배출량 가중이 아니라 시간·배출원 커버리지 기준(§6.3). 품질 후보
-    점수(candidate_score) 산정에는 이 값을 참고자료로만 넘기고 직접 곱하지 않는다
-    (완전성과 품질 후보는 분리, §6.3) — 다만 결손 존재 자체는 약한 고리 원칙에 따라
-    candidate_score에도 영향을 준다(assess_borrower_emission_quality 참고).
+    completeness_pct는 "해당 연도 경과월 × 해당 Scope의 **선택된** 연료 개수" 슬롯 중
+    결손 없는 슬롯의 비율이다 — 배출량 가중이 아니라 시간·배출원 커버리지 기준(§6.3).
+    reporting_year가 달력상 올해(as_of 기준)면 아직 오지 않은 달은 분모·결손 판정
+    양쪽에서 제외한다(실측 2026-08-17: 지금이 8월인데 9~12월이 결손으로 잡혀 데이터
+    완전성이 실제보다 낮게 보이던 문제) — 과거 연도는 그대로 12개월 전부를 본다.
+    품질 후보 점수(candidate_score) 산정에는 이 값을 참고자료로만 넘기고 직접 곱하지
+    않는다(완전성과 품질 후보는 분리, §6.3) — 다만 결손 존재 자체는 약한 고리 원칙에
+    따라 candidate_score에도 영향을 준다(assess_borrower_emission_quality 참고).
 
     "기타"(어느 연료 버킷에도 속하지 않는) 전표는 completeness matrix에 안 잡히는 것과
     동일하게 activity_basis_breakdown 집계에서도 제외한다 — 리포트에 안 보이는 전표가
     옵션 코드 선택에는 영향을 주는 근거-결과 불일치를 막기 위함(PR #25 리뷰).
     """
+    today = as_of or datetime.now(timezone.utc)
+    applicable_months = today.month if reporting_year == today.year else 12
+
     all_scope_fuels = [f for f, s in _FUEL_BUCKET_SCOPE.items() if s == scope_group]
     company = session.get(Company, company_id)
     selected = _selected_fuels(company.fuel_types_json if company else None)
@@ -227,12 +237,12 @@ def assess_inventory_completeness(
 
     missing: dict[str, list[int]] = {}
     covered_slots = 0
-    total_slots = len(fuels) * 12
+    total_slots = len(fuels) * applicable_months
     for fuel in fuels:
-        gaps = [m for m in range(1, 13) if not matrix[fuel][m]]
+        gaps = [m for m in range(1, applicable_months + 1) if not matrix[fuel][m]]
         if gaps:
             missing[fuel] = gaps
-        covered_slots += 12 - len(gaps)
+        covered_slots += applicable_months - len(gaps)
 
     return CompletenessAssessment(
         reporting_year=reporting_year,
@@ -390,7 +400,7 @@ def _select_quality_rule(
 
 
 def assess_borrower_emission_quality(
-    session: Session, company_id: int, reporting_year: int, scope_group: str
+    session: Session, company_id: int, reporting_year: int, scope_group: str, *, as_of: datetime | None = None
 ) -> dict:
     """PCAF 데이터 품질 후보 산정 — 원문 Table 10.1-2 옵션 체계를 그대로 적용.
 
@@ -425,7 +435,7 @@ def assess_borrower_emission_quality(
             "bank_review_required": True,
         }
 
-    completeness = assess_inventory_completeness(session, company_id, reporting_year, scope_group)
+    completeness = assess_inventory_completeness(session, company_id, reporting_year, scope_group, as_of=as_of)
     if not completeness.activity_basis_breakdown:
         return {
             "standard": "PCAF Part A Third Edition",

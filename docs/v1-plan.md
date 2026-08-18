@@ -2,7 +2,7 @@
 
 ```text
 Status: active-plan
-Last updated: 2026-08-18
+Last updated: 2026-08-17
 Scope: 2026년 8월 v1 구현·검증·시연 일정
 ```
 

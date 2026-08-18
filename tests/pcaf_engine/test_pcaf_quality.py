@@ -15,6 +15,8 @@ PCAF Standard Part A Third Edition, Table 10.1-2(Annex p.192) 원문 옵션 체�
   - 판정 근거(basis)는 DB(candidate_quality_basis_json)에 영구 저장되고 GET으로 복원된다
     (PR #25 리뷰 CONFIRMED 수정 — 이전에는 evaluate 응답에만 실리고 저장되지 않았다).
 """
+from datetime import datetime, timezone
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -143,12 +145,18 @@ def test_completeness_pct_separate_from_candidate_score(db):
 
 
 def test_missing_months_reported_by_fuel(db):
-    """일부 월만 채워진 경우 결손월이 연료별로 정확히 집계된다."""
+    """일부 월만 채워진 경우 결손월이 연료별로 정확히 집계된다.
+
+    as_of를 연말로 고정한다 — YEAR(2026)가 실행 시점의 달력상 올해와 같을 때
+    assess_inventory_completeness가 "아직 안 온 달"을 결손에서 빼는 로직(실측
+    2026-08-17)에 걸려, 실행하는 달에 따라 기대값이 달라지는 걸 막기 위함."""
     session, cid = db
     for m in (1, 2, 3):
         _add_voucher(session, cid, m, "도시가스", quantity=100)
 
-    completeness = assess_inventory_completeness(session, cid, YEAR, "scope_1")
+    completeness = assess_inventory_completeness(
+        session, cid, YEAR, "scope_1", as_of=datetime(YEAR, 12, 31, tzinfo=timezone.utc)
+    )
     assert completeness.missing_months["가스"] == list(range(4, 13))
 
 
@@ -244,12 +252,18 @@ def test_gap_alone_drags_scope_down_even_with_all_measured_data(db):
     """약한 고리 원칙 — 있는 데이터는 전부 실측(energy_consumption)이어도 결손월이
     있으면(9~12월 미연동) 전체 Scope가 revenue(3a) 수준으로 떨어진다. 완전성이
     16.7%여도 다수결로는 최고 등급이 나왔던 사례(구미정밀 실사용 중 발견)의 회귀
-    테스트다."""
+    테스트다.
+
+    as_of를 연말로 고정한다 — 9~12월을 "아직 안 온 달이라 결손 아님"이 아니라
+    "미연동 결손"으로 판정시키려면 연도가 이미 다 지난 시점이어야 한다(실측
+    2026-08-17 로직 변경 참고, assess_inventory_completeness 참고)."""
     session, cid = db
     for m in range(1, 9):  # 8개월만 존재, 전부 실측 — 9~12월은 결손
         _add_voucher(session, cid, m, "도시가스", quantity=100)
 
-    result = assess_borrower_emission_quality(session, cid, YEAR, "scope_1")
+    result = assess_borrower_emission_quality(
+        session, cid, YEAR, "scope_1", as_of=datetime(YEAR, 12, 31, tzinfo=timezone.utc)
+    )
     assert result["option_code"] == "3a"
     assert result["candidate_score"] == 4
     assert any("약한 고리" in lim for lim in result["limitations"])

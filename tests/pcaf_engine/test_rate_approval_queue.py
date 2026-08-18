@@ -8,6 +8,8 @@
   - 이미 처리된 요청은 재처리할 수 없다(멱등 조치 방지).
   - 원본문서 열람은 조회할 때마다 접근 로그에 남는다.
 """
+from datetime import datetime, timezone
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -33,7 +35,11 @@ from db.pcaf_engine.rate_approvals import (
     review_rate_request,
 )
 
-YEAR = 2025
+# create_rate_request(request_type="rate_upgrade")는 연도를 안 주면 이제
+# default_reporting_year()로 항상 달력상 올해를 쓴다(실측 2026-08-17) — 이
+# 픽스처도 "올해" 전표여야 그 경로를 태운다. emission_co2e를 직접 채워서
+# unit_prices 등 다른 연도 종속 데이터와는 무관하므로 그냥 오늘 연도를 쓰면 된다.
+YEAR = datetime.now(timezone.utc).year
 
 
 @pytest.fixture()
