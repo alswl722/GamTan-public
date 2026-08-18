@@ -92,11 +92,19 @@ def _monthly_coverage(session: Session, company_id: int, year: int, scope_group:
 
 
 def _supersede_active_goal(session: Session, company_id: int) -> None:
-    active = session.execute(
-        select(CompanyGoal).where(CompanyGoal.company_id == company_id, CompanyGoal.status == "active")
+    """이 기업의 "현재" 목표(활성 중이거나, 이미 달성해서 배지로 남아있는 것)를
+    superseded로 돌린다. status == "active"만 보면 이미 achieved로 넘어간 목표는
+    안 걸려서 그대로 남는데, get_active_goal이 achieved도 "현재 목표"로 취급하는
+    이상(아래) 새 목표를 만들 때 그것도 같이 정리해야 "현재 목표는 항상 1개"
+    불변식이 유지된다."""
+    current = session.execute(
+        select(CompanyGoal).where(
+            CompanyGoal.company_id == company_id,
+            CompanyGoal.status.in_(("active", "achieved")),
+        )
     ).scalars().first()
-    if active is not None:
-        active.status = "superseded"
+    if current is not None:
+        current.status = "superseded"
 
 
 def create_emission_reduction_goal(
@@ -189,8 +197,18 @@ def create_grade_upgrade_goal(
 
 
 def get_active_goal(session: Session, company_id: int) -> CompanyGoal | None:
+    """홈 화면에 지금 보여줄 목표 — active(진행 중)뿐 아니라 achieved(달성, 배지로
+    남아있어야 함)도 포함한다. status == "active"만 보면 get_active_goal_progress가
+    달성 판정과 동시에 status를 achieved로 바꾸는 순간부터 이 함수가 그 목표를
+    영영 못 찾게 되어, 카드가 "달성 배지 유지" 대신 목표 설정 프롬프트로 되돌아가
+    "목표가 사라졌다"로 보였다(실측 확인, 2026-08-19). 새 목표 생성 시
+    _supersede_active_goal이 achieved도 같이 정리하므로 이 둘 중 하나만 항상
+    최대 1건이다."""
     return session.execute(
-        select(CompanyGoal).where(CompanyGoal.company_id == company_id, CompanyGoal.status == "active")
+        select(CompanyGoal).where(
+            CompanyGoal.company_id == company_id,
+            CompanyGoal.status.in_(("active", "achieved")),
+        )
     ).scalars().first()
 
 

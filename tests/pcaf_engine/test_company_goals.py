@@ -193,6 +193,16 @@ def test_create_grade_upgrade_goal_eligible_creates_already_at_target(db):
     assert progress["achieved"] is True
     assert progress["status"] == "achieved"
 
+    # 회귀 방지(실측 신고 2026-08-19, "목표가 자꾸 사라지네") — achieved로 넘어간
+    # 뒤에도 다시 조회하면 여전히 이 목표가 나와야 한다. get_active_goal이
+    # status=="active"만 보면 여기서 None이 되어 홈 화면이 "목표 설정" 프롬프트로
+    # 되돌아간다(달성 배지가 계속 유지된다는 코드 의도와 반대).
+    progress_again = get_active_goal_progress(session, cid)
+    assert progress_again is not None
+    assert progress_again["id"] == progress["id"]
+    assert progress_again["status"] == "achieved"
+    assert progress_again["achieved"] is True
+
 
 def test_create_grade_upgrade_goal_custom_target_clears_product_name(db):
     """추천 목표와 다른 등급을 직접 고르면 그 등급에서 실제 자격이 열리는지 보장할 수
@@ -297,6 +307,33 @@ def test_new_goal_supersedes_existing_active_goal(db):
 
     progress = get_active_goal_progress(session, cid)
     assert progress["id"] == second.id
+
+
+def test_new_goal_supersedes_already_achieved_goal(db):
+    """achieved로 넘어간 목표는 status가 더 이상 "active"가 아니라서, 새 목표를
+    만들 때 _supersede_active_goal이 status=="active"만 보면 achieved 목표를
+    못 찾고 안 건드린 채 지나간다 — 그러면 achieved 1건 + 새 active 1건이 동시에
+    "현재 목표"로 남아 get_active_goal(.first())이 어느 쪽을 돌려줄지 DB 행
+    순서에 좌우되는 불안정한 상태가 된다. 새 목표 생성이 achieved 목표도 같이
+    superseded로 정리하는지 확인."""
+    session, cid = db
+    _fill_scope_1_measured(session, cid)
+
+    first = create_grade_upgrade_goal(session, cid, scope_group="scope_1")  # 이미 eligible → 즉시 achieved
+    progress = get_active_goal_progress(session, cid)
+    assert progress["status"] == "achieved"
+    session.refresh(first)
+    assert first.status == "achieved"
+
+    second = create_emission_reduction_goal(session, cid, target_reduction_pct=10)
+
+    session.refresh(first)
+    assert first.status == "superseded"
+    assert second.status == "active"
+
+    progress = get_active_goal_progress(session, cid)
+    assert progress["id"] == second.id
+    assert progress["status"] == "active"
 
 
 # ── 목표 없음 / 취소 ──────────────────────────────────────────────────────────
