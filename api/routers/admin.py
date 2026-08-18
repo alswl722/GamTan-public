@@ -16,6 +16,7 @@
 - GET   /admin/documents/{id}/file            원본문서 파일 바이너리 (PDF, 조회 시 접근 로그 자동 기록)
 - GET   /admin/documents/access-log           원본문서 접근 감사 로그 목록 (page/page_size/company_name)
 - GET   /admin/audit-package                  감사 대응 근거 패키지 — 기업·기간 지정 시계열 원자료(JSON/CSV/PDF)
+- GET   /admin/climate-risk-report            기후리스크 — 금감원 4단계 구조 포트폴리오 리포트(JSON/PDF, 재계산 없음)
 
 여신 결정·스코어링은 하지 않는다(CLAUDE.md §9). AI가 1차 스크리닝한 저신뢰 건을
 사람이 최종 확정하는 HITL 마감만 담당 — 금융분야 AI 가이드라인의 보조수단성 구현.
@@ -616,3 +617,60 @@ def audit_package(
         )
 
     return package
+
+
+# ── 기후리스크 (v1 Tier 2, owner-admin-flow-spec.md §6, docs/tasks.md) ──────────
+
+@router.get("/climate-risk-report")
+def climate_risk_report(format: str = "json", session: Session = Depends(get_session)):
+    """금감원 「기후리스크 관리 지침서」 4단계 구조 리포트 — portfolio_summary()를
+    재계산 없이 4단계(거버넌스·전략·리스크평가·공시) 틀로 재배열한다.
+
+    검증 오차율은 회계 담당 미착수라 "산정 예정"으로, 시계열 금융배출량은
+    business_loan_exposures가 0건(은행 내부 여신 시스템 연동 필요)이라
+    "예시 데이터"로 명시한다 — 실측인 것처럼 꾸미지 않는다(실패 가시성 원칙).
+    """
+    portfolio = portfolio_summary(session)
+    institution = session.execute(select(FinancialInstitution)).scalars().first()
+    institution_name = institution.name if institution else "감탄 데모 금융기관"
+
+    if format == "pdf":
+        pdf_bytes = build_climate_risk_report_pdf(portfolio, institution_name)
+        return StreamingResponse(
+            iter([pdf_bytes]),
+            media_type="application/pdf",
+            headers={"Content-Disposition": 'attachment; filename="climate-risk-report.pdf"'},
+        )
+
+    return {
+        "institution_name": institution_name,
+        "governance": {
+            "description": (
+                f"{institution_name}은 이사회 산하 여신·ESG팀이 기후리스크 관리를 "
+                "담당하며, 포트폴리오 단위 PCAF 데이터 품질 현황을 정기 보고한다."
+            ),
+        },
+        "strategy": {
+            "company_count": portfolio["company_count"],
+            "before_grade": 5,
+            "avg_grade": portfolio["avg_grade"],
+        },
+        "risk_assessment": {
+            "grade_distribution": portfolio["grade_distribution"],
+        },
+        "disclosure": {
+            "measured_coverage_pct": portfolio["measured_coverage_pct"],
+            "hitl_total": portfolio["hitl_total"],
+            "reviewed_today": portfolio["reviewed_today"],
+            "verification_error_rate": {"status": "pending", "note": "산정 예정 — 회계 담당 미착수"},
+        },
+        "financed_emissions_timeline": {
+            "is_example": True,
+            "note": (
+                "대출잔액(business_loan_exposures)은 은행 내부 여신 시스템 연동이 "
+                "필요해 현재 0건입니다. 아래는 산식 검증용 예시 값이며 실제 "
+                "금융배출량이 아닙니다."
+            ),
+            "years": EXAMPLE_FINANCED_EMISSIONS_TIMELINE,
+        },
+    }

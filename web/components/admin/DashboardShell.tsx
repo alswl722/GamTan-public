@@ -5,6 +5,7 @@ import type { HitlItem, PortfolioResponse, TraceRunItem } from "@/lib/admin-type
 import { cn } from "@/lib/utils";
 import { AuditLog } from "@/components/admin/AuditLog";
 import { AuditPackage } from "@/components/admin/AuditPackage";
+import { ClimateRiskReport } from "@/components/admin/ClimateRiskReport";
 import { CompanyDetail } from "@/components/admin/CompanyDetail";
 import { DocumentAccessLog } from "@/components/admin/DocumentAccessLog";
 import { HitlWorkspace } from "@/components/admin/HitlWorkspace";
@@ -16,6 +17,7 @@ const TABS = [
   { id: "trace", label: "실행 이력" },
   { id: "audit", label: "변경 이력" },
   { id: "audit-package", label: "감사 대응" },
+  { id: "climate-risk", label: "기후리스크" },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -91,6 +93,12 @@ export function DashboardShell({ portfolio, hitlQueue, traceRuns }: DashboardShe
         {activeTab === "audit-package" && (
           <div className="h-full p-4">
             <AuditPackage companies={portfolio.companies} />
+          </div>
+        )}
+
+        {activeTab === "climate-risk" && (
+          <div className="h-full p-4">
+            <ClimateRiskReport />
           </div>
         )}
       </div>

@@ -149,3 +149,32 @@ export interface DocumentAccessLogEntry {
   accessed_by: string;
   accessed_at: string | null;
 }
+
+/** 기후리스크 리포트 — GET /admin/climate-risk-report 응답. portfolio_summary()를
+ * 재계산 없이 금감원 4단계(거버넌스/전략/리스크평가/공시) 틀로 재배열한 값. */
+export interface ClimateRiskReport {
+  institution_name: string;
+  governance: { description: string };
+  strategy: {
+    company_count: number;
+    before_grade: number;
+    avg_grade: number | null;
+  };
+  risk_assessment: {
+    grade_distribution: Record<string, number>;
+  };
+  disclosure: {
+    measured_coverage_pct: number;
+    hitl_total: number;
+    reviewed_today: number;
+    /** 회계 담당 미착수 — 항상 status: "pending"(산정 예정)만 온다. 실측값 없음. */
+    verification_error_rate: { status: "pending"; note: string };
+  };
+  financed_emissions_timeline: {
+    /** 항상 true — business_loan_exposures가 0건이라 실측 금융배출량이 없다.
+     * 대출잔액이 은행 내부 여신 시스템과 연동되기 전까지는 예시 값만 내려온다. */
+    is_example: true;
+    note: string;
+    years: { year: number; grade_label: string }[];
+  };
+}
