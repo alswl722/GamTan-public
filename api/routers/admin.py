@@ -48,9 +48,10 @@ from db.calc_engine import CalcDataGap, ClassifiedItemInput, compute_emission, \
     index_emission_factors, index_unit_prices
 from db.audit_package import build_audit_package
 from db.reports.audit_report_pdf import build_audit_report_pdf
-from db.reports.climate_risk_report_pdf import EXAMPLE_FINANCED_EMISSIONS_TIMELINE, build_climate_risk_report_pdf
+from db.reports.climate_risk_report_pdf import build_climate_risk_report_pdf
 from db.document.document_access_log import access_history, record_access, recent_access_log
-from db.models import Classification, Company, FinancialInstitution, OwnerNotification, SourceDocument, TraceLog, Voucher
+from db.models import Classification, Company, FinancialInstitution, OwnerNotification, Portfolio, SourceDocument, TraceLog, Voucher
+from db.pcaf_engine.financed_emissions import portfolio_financed_emissions_by_year
 from db.pcaf_engine.pcaf import company_pcaf_summary, portfolio_summary
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -627,16 +628,24 @@ def climate_risk_report(format: str = "json", session: Session = Depends(get_ses
     """금감원 「기후리스크 관리 지침서」 4단계 구조 리포트 — portfolio_summary()를
     재계산 없이 4단계(거버넌스·전략·리스크평가·공시) 틀로 재배열한다.
 
-    검증 오차율은 회계 담당 미착수라 "산정 예정"으로, 시계열 금융배출량은
-    business_loan_exposures가 0건(은행 내부 여신 시스템 연동 필요)이라
-    "예시 데이터"로 명시한다 — 실측인 것처럼 꾸미지 않는다(실패 가시성 원칙).
+    검증 오차율은 회계 담당 미착수라 "산정 예정"으로 표시한다. 시계열
+    금융배출량은 db/pcaf_engine/financed_emissions.py의 산식 함수로 실제
+    계산하지만, 입력값(대출잔액)이 은행 내부 여신 시스템 연동 없이 채운
+    mock이라 "예시 데이터"로 명시한다 — 실측인 것처럼 꾸미지 않는다(실패
+    가시성 원칙). 시딩된 포트폴리오가 없으면(portfolio_id 미존재) 빈
+    타임라인을 반환한다.
     """
     portfolio = portfolio_summary(session)
     institution = session.execute(select(FinancialInstitution)).scalars().first()
     institution_name = institution.name if institution else "감탄 데모 금융기관"
 
+    loan_portfolio = session.execute(select(Portfolio)).scalars().first()
+    financed_years = (
+        portfolio_financed_emissions_by_year(session, loan_portfolio.id) if loan_portfolio else []
+    )
+
     if format == "pdf":
-        pdf_bytes = build_climate_risk_report_pdf(portfolio, institution_name)
+        pdf_bytes = build_climate_risk_report_pdf(portfolio, institution_name, financed_years)
         return StreamingResponse(
             iter([pdf_bytes]),
             media_type="application/pdf",
@@ -668,10 +677,10 @@ def climate_risk_report(format: str = "json", session: Session = Depends(get_ses
         "financed_emissions_timeline": {
             "is_example": True,
             "note": (
-                "대출잔액(business_loan_exposures)은 은행 내부 여신 시스템 연동이 "
-                "필요해 현재 0건입니다. 아래는 산식 검증용 예시 값이며 실제 "
-                "금융배출량이 아닙니다."
+                "대출잔액(business_loan_exposures)은 은행 내부 여신 시스템 "
+                "연동이 필요해 실측이 아닌 예시 값으로 채워져 있습니다. "
+                "산식(귀속계수×차주배출량)은 실제 계산 결과입니다."
             ),
-            "years": EXAMPLE_FINANCED_EMISSIONS_TIMELINE,
+            "years": financed_years,
         },
     }

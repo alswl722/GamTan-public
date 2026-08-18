@@ -161,29 +161,36 @@ export function ClimateRiskReport() {
                   대출잔액 연동 전
                 </span>
               </div>
-              <div className="mb-3 flex items-end gap-6">
-                {report.financed_emissions_timeline.years.map((y) => (
-                  <div
-                    key={y.year}
-                    className="flex flex-col items-center gap-1.5"
-                  >
-                    <div className="flex h-[90px] w-16 items-end rounded bg-bg">
-                      <div
-                        className="w-full rounded-t bg-scope1"
-                        style={{
-                          height: `${Math.min(100, (y.year - 2023) * 25)}%`,
-                        }}
-                      />
-                    </div>
-                    <span className="text-[11px] font-semibold text-ink">
-                      {y.year}
-                    </span>
-                    <span className="text-[10px] text-muted">
-                      {y.grade_label}
-                    </span>
-                  </div>
-                ))}
-              </div>
+              {report.financed_emissions_timeline.years.length === 0 ? (
+                <p className="text-[11px] text-faint">
+                  시딩된 포트폴리오 대출 데이터가 없습니다.
+                </p>
+              ) : (
+                <div className="mb-3 flex items-end gap-6">
+                  {(() => {
+                    const maxValue = Math.max(
+                      ...report.financed_emissions_timeline.years.map((y) => y.financed_emission_tco2e),
+                    );
+                    return report.financed_emissions_timeline.years.map((y) => (
+                      <div key={y.year} className="flex flex-col items-center gap-1.5">
+                        <div className="flex h-[90px] w-16 items-end rounded bg-bg">
+                          <div
+                            className="w-full rounded-t bg-scope1"
+                            style={{
+                              height: `${maxValue > 0 ? Math.max(4, (y.financed_emission_tco2e / maxValue) * 100) : 0}%`,
+                            }}
+                          />
+                        </div>
+                        <span className="text-[11px] font-semibold text-ink">{y.year}</span>
+                        <span className="text-[10px] text-muted">
+                          {y.financed_emission_tco2e.toFixed(2)} tCO2e
+                        </span>
+                        <span className="text-[10px] text-faint">{y.company_count}개사</span>
+                      </div>
+                    ));
+                  })()}
+                </div>
+              )}
             </div>
 
             <p className="border-t border-line pt-3 text-[10px] text-faint">

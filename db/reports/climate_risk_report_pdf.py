@@ -5,11 +5,11 @@ db/pcaf.py::portfolio_summary()가 이미 집계한 값을 4단계(거버넌스�
 리스크평가·공시) 틀로 재배열한다 — 새 계산·조회 로직 없음(감사 대응 근거
 패키지 PDF와 같은 원칙: "이 모듈은 재계산하지 않는다").
 
-검증 오차율(분류 정확도·트랙A MAPE·트랙B 실물대조 오차)과 시계열
-금융배출량은 실제 데이터가 없다(전자는 회계 담당 미착수, 후자는 은행 내부
-여신 시스템 연동이 필요해 business_loan_exposures가 0건) — 화면과 동일하게
-"산정 예정"/"예시 데이터"로 명시하고 실측인 것처럼 꾸미지 않는다(CLAUDE.md
-§6 실패 가시성 원칙과 같은 결).
+검증 오차율(분류 정확도·트랙A MAPE·트랙B 실물대조 오차)은 회계 담당
+미착수라 실제 데이터가 없다 — "산정 예정"으로 명시한다. 시계열 금융배출량은
+db/pcaf_engine/financed_emissions.py로 실제 계산하지만 대출잔액이 은행 내부
+여신 시스템 연동 없이 채운 mock이라 "예시 데이터"로 명시한다 — 실측인
+것처럼 꾸미지 않는다(CLAUDE.md §6 실패 가시성 원칙과 같은 결).
 
 한글 폰트 등록은 db/audit_report_pdf.py와 동일한 CID 폰트 패턴을 재사용한다.
 """
@@ -25,14 +25,6 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 
 pdfmetrics.registerFont(UnicodeCIDFont("HYGothic-Medium"))
 _FONT = "HYGothic-Medium"
-
-# 시계열 금융배출량 — 대출잔액(business_loan_exposures) 연동 전까지 산식
-# 검증용 예시값. 실제 데이터가 아님을 화면·PDF 양쪽에 동일하게 명시한다.
-EXAMPLE_FINANCED_EMISSIONS_TIMELINE = [
-    {"year": 2024, "grade_label": "5.0등급(추정)"},
-    {"year": 2025, "grade_label": "3.2등급"},
-    {"year": 2026, "grade_label": "2.4등급"},
-]
 
 
 def _styles():
@@ -76,11 +68,19 @@ def _table_style(*, header_rows: int = 1) -> TableStyle:
     ])
 
 
-def build_climate_risk_report_pdf(portfolio: dict, institution_name: str) -> bytes:
-    """portfolio_summary() 반환값 + 기관명을 받아 4단계 구조 PDF 바이트를 반환한다.
+def build_climate_risk_report_pdf(
+    portfolio: dict, institution_name: str, financed_emissions_years: list[dict] | None = None
+) -> bytes:
+    """portfolio_summary() 반환값 + 기관명 + 연도별 금융배출량을 받아 4단계
+    구조 PDF 바이트를 반환한다.
 
-    portfolio의 어떤 값도 재계산하지 않는다 — 그대로 표에 옮겨 적는다.
+    portfolio·financed_emissions_years 어떤 값도 재계산하지 않는다 — 그대로
+    표에 옮겨 적는다. financed_emissions_years는
+    db/pcaf_engine/financed_emissions.py::portfolio_financed_emissions_by_year()
+    의 반환 형태([{"year", "financed_emission_tco2e", "company_count"}])를
+    그대로 받는다. 시딩된 대출 익스포저가 없으면 빈 리스트.
     """
+    financed_emissions_years = financed_emissions_years or []
     styles = _styles()
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -146,12 +146,24 @@ def build_climate_risk_report_pdf(portfolio: dict, institution_name: str) -> byt
 
     story.append(Spacer(1, 5 * mm))
     story.append(Paragraph("시계열 금융배출량 (포트폴리오 전체 추이) — 예시 데이터", styles["h2"]))
-    fin_rows = [["연도", "예시 등급"]]
-    for row in EXAMPLE_FINANCED_EMISSIONS_TIMELINE:
-        fin_rows.append([str(row["year"]), row["grade_label"]])
-    t = Table(fin_rows, colWidths=[70 * mm, 90 * mm])
-    t.setStyle(_table_style())
-    story.append(t)
+    story.append(Paragraph(
+        "대출잔액(business_loan_exposures)은 은행 내부 여신 시스템 연동이 필요해 "
+        "실측이 아닌 예시 값으로 채워져 있습니다. 산식(귀속계수×차주배출량)은 "
+        "실제 계산 결과입니다.",
+        styles["warn"],
+    ))
+    story.append(Spacer(1, 2 * mm))
+    if financed_emissions_years:
+        fin_rows = [["연도", "금융배출량(tCO2e)", "계산된 기업 수"]]
+        for row in financed_emissions_years:
+            fin_rows.append([
+                str(row["year"]), f"{row['financed_emission_tco2e']:.2f}", f"{row['company_count']}개사",
+            ])
+        t = Table(fin_rows, colWidths=[50 * mm, 60 * mm, 50 * mm])
+        t.setStyle(_table_style())
+        story.append(t)
+    else:
+        story.append(Paragraph("시딩된 포트폴리오 대출 데이터가 없습니다.", styles["body"]))
 
     story.append(Spacer(1, 4 * mm))
     story.append(Paragraph(
