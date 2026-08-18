@@ -1,35 +1,40 @@
 """사장님 목표 설정 — 5단계 위저드 완료 후 홈 화면 박스가 목표 카드로 바뀔 때 쓰는 서비스 레이어.
 
 goal_type 2종:
-  - emission_reduction: 배출량 N% 감축 목표. 기준값은 목표 설정 시점 Scope1+2 총
-    배출량(null인 Scope는 합산 제외, 원칙7과 같은 결) — db/routers/owner_quality.py의
-    총 배출량 계산과 같은 방식(aggregate_scope_emissions 재사용).
+  - emission_reduction: 배출량 N% 감축 목표. 기준값은 목표 설정월부터 롤링 12개월의
+    Scope1+2 총 배출량(null인 Scope는 합산 제외, 원칙7과 같은 결). 달력년도가 아니라
+    "설정월부터 12개월"을 쓰는 이유: 8월에 목표를 세우면 달력년도 기준값은 8개월치인데
+    그걸 다음 해 12개월치와 비교하면 월수가 안 맞는다(사용자 지적, 2026-08-19) —
+    시작월은 사용자가 고르지 않고 설정 시점(지금)을 자동으로 쓴다("입력 제로" 원칙).
   - grade_upgrade: PCAF 데이터 품질 등급 상승 목표. 내부적으로 우대금리 상품 매칭과
     완전히 같은 엔진(rate_products.py::rate_product_status_for_scope)을 쓴다 — 목표
     등급이 실제 상품 조건과 맞아떨어지면 target_product_name에 남는다. 등급 상승과
     "혜택 조건 채우기"를 별도 탭으로 나누지 않고 한 흐름으로 다루기로 한 기획 결정.
+    이쪽은 % 감축이 아니라 데이터 완전성/등급 기준이라 롤링 윈도우 대상이 아니고
+    달력년도(default_reporting_year) 그대로 쓴다.
 
 기업당 활성(status='active') 목표는 항상 최대 1개다 — 새 목표를 만들면 기존 활성
 목표는 덮어쓰지 않고 superseded로 전환한다(원칙8과 같은 결).
 
 진행률·체크리스트는 CompanyGoal에 저장하지 않고 조회할 때마다 다시 계산한다
 (quality-report·progress 엔드포인트와 같은 이 프로젝트의 관례) — CompanyGoal 행
-자체는 "무엇을 목표로 했는지"의 스냅숏만 갖는다. 배출량 감축 목표는 같은 보고연도
-안에서는 비교 대상이 없다(결손월이 채워질수록 총량은 늘어나는 게 정상이라 "감축"
-판단 근거가 못 된다) — 보고연도가 넘어가 다음 해 데이터가 잡힐 때부터 실제로
-비교한다(가짜 진행률을 보여주지 않는다, 실패 가시성 원칙과 같은 결).
+자체는 "무엇을 목표로 했는지"의 스냅숏만 갖는다. 배출량 감축 목표는 기준 윈도우
+(설정월부터 12개월) 안에서는 비교 대상이 없다(결손월이 채워질수록 총량은 늘어나는
+게 정상이라 "감축" 판단 근거가 못 된다) — 그 다음 12개월(비교 윈도우)에 데이터가
+잡힐 때부터 실제로 비교한다(가짜 진행률을 보여주지 않는다, 실패 가시성 원칙과 같은 결).
 """
 from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from db.models import Company, CompanyGoal
+from db.models import Classification, Company, CompanyGoal, Voucher
 from db.pcaf_engine.pcaf import monthly_by_fuel
 from db.pcaf_engine.pcaf_quality import (
-    aggregate_scope_emissions,
+    FUEL_BUCKET_SCOPE,
     assess_inventory_completeness,
     default_reporting_year,
+    fuel_bucket,
 )
 from db.pcaf_engine.rate_products import rate_product_status_for_scope
 
@@ -61,11 +66,54 @@ class InvalidTargetGradeError(Exception):
     """목표 등급이 현재 등급보다 나쁘거나(숫자가 같거나 크거나) 1~5 범위를 벗어날 때."""
 
 
-def _total_emission(session: Session, company_id: int, year: int) -> float | None:
-    """Scope1+2 총 배출량 — null인 Scope는 합산에서 제외한다(원칙7, owner_quality.py 라우터의
-    벤치마크 계산과 동일 규칙: 둘 다 null이면 None, 하나라도 있으면 나머지는 0으로 취급)."""
-    e1 = aggregate_scope_emissions(session, company_id, year, "scope_1")["emission_tco2e"]
-    e2 = aggregate_scope_emissions(session, company_id, year, "scope_2")["emission_tco2e"]
+def _now_year_month() -> tuple[int, int]:
+    """지금이 몇 년 몇 월인지 — 이름 붙은 함수로 분리해 테스트가
+    default_reporting_year와 같은 방식으로 monkeypatch할 수 있게 한다."""
+    now = datetime.now(timezone.utc)
+    return now.year, now.month
+
+
+def _window_months(start_year: int, start_month: int, *, offset: int = 0, count: int = 12) -> list[tuple[int, int]]:
+    """(start_year, start_month)부터 count개월치 (연, 월) 리스트 — 달력년도가 아니라
+    목표 설정월을 시작으로 삼는 롤링 윈도우(2026-08-19, 사용자 지적: 8월에 목표를
+    세우면 기준값이 8개월치인데 다음 달력년도 12개월치와 비교돼 월수가 안 맞았다).
+    offset=12를 주면 바로 다음 윈도우(비교 구간)를 얻는다."""
+    base_index = start_year * 12 + (start_month - 1) + offset
+    return [(idx // 12, idx % 12 + 1) for idx in range(base_index, base_index + count)]
+
+
+def _emission_in_window(session: Session, company_id: int, start_year: int, start_month: int) -> float | None:
+    """Scope1+2 총 배출량 — 달력년도가 아니라 (start_year, start_month)부터 롤링
+    12개월 윈도우로 집계한다. aggregate_scope_emissions + _total_emission과 정확히
+    같은 판정 규칙(원칙7: Scope 하나라도 매칭되는 전표가 있으면 있는 것으로 취급,
+    반려·미산정 건은 0으로 더함 — "전표가 아예 없는 Scope"만 None)을 롤링 윈도우로
+    적용한다. aggregate_scope_emissions는 연도 전체만 필터할 수 있어 재사용 불가,
+    같은 fuel_bucket/FUEL_BUCKET_SCOPE 매핑(pcaf_quality.py에서 공개, 2026-08-19)
+    으로 독립 집계한다."""
+    start_index = start_year * 12 + start_month
+    end_index = start_index + 11
+    rows = session.execute(
+        select(Classification.fuel_type, Classification.status, Classification.emission_co2e)
+        .join(Voucher, Classification.voucher_id == Voucher.id)
+        .where(
+            Voucher.company_id == company_id,
+            (Voucher.year * 12 + Voucher.month).between(start_index, end_index),
+        )
+    ).all()
+
+    totals_kg = {"scope_1": 0.0, "scope_2": 0.0}
+    has_any = {"scope_1": False, "scope_2": False}
+    for fuel_type, status, emission in rows:
+        scope_group = FUEL_BUCKET_SCOPE.get(fuel_bucket(fuel_type))
+        if scope_group not in totals_kg:
+            continue
+        has_any[scope_group] = True
+        if status == "rejected" or not emission:
+            continue
+        totals_kg[scope_group] += float(emission)
+
+    e1 = round(totals_kg["scope_1"] / 1000.0, 2) if has_any["scope_1"] else None
+    e2 = round(totals_kg["scope_2"] / 1000.0, 2) if has_any["scope_2"] else None
     if e1 is None and e2 is None:
         return None
     return round((e1 or 0) + (e2 or 0), 2)
@@ -110,16 +158,18 @@ def _supersede_active_goal(session: Session, company_id: int) -> None:
 def create_emission_reduction_goal(
     session: Session, company_id: int, *, target_reduction_pct: float
 ) -> CompanyGoal:
-    """배출량 N% 감축 목표를 확정한다. 기준값(baseline_value)은 지금 이 보고연도의
-    Scope1+2 총 배출량 — 분류가 아직 안 끝나 배출량 자체가 없으면 세울 수 없다."""
+    """배출량 N% 감축 목표를 확정한다. 기준값(baseline_value)은 지금 이 달부터
+    롤링 12개월의 Scope1+2 총 배출량 — 분류가 아직 안 끝나 배출량 자체가 없으면
+    세울 수 없다. 시작월은 목표 설정 시점(지금)을 자동으로 쓴다 — 사용자가
+    고르게 하지 않는다("입력 제로" 원칙, CLAUDE.md)."""
     company = session.get(Company, company_id)
     if company is None:
         raise CompanyNotFoundError(f"company_id={company_id} 없음")
     if not (0 < target_reduction_pct < 100):
         raise ValueError(f"target_reduction_pct는 0~100 사이여야 함(전달값: {target_reduction_pct})")
 
-    year = default_reporting_year(session, company_id)
-    baseline = _total_emission(session, company_id, year)
+    start_year, start_month = _now_year_month()
+    baseline = _emission_in_window(session, company_id, start_year, start_month)
     if baseline is None:
         raise NoEmissionDataError(f"company_id={company_id} 배출량 기준값 없음 — 분류 실행 필요")
 
@@ -127,7 +177,8 @@ def create_emission_reduction_goal(
     goal = CompanyGoal(
         company_id=company_id,
         goal_type="emission_reduction",
-        baseline_reporting_year=year,
+        baseline_reporting_year=start_year,
+        baseline_start_month=start_month,
         baseline_value=baseline,
         target_value=round(baseline * (1 - target_reduction_pct / 100), 2),
         target_reduction_pct=target_reduction_pct,
@@ -155,7 +206,7 @@ def create_grade_upgrade_goal(
     if company is None:
         raise CompanyNotFoundError(f"company_id={company_id} 없음")
 
-    year = default_reporting_year(session, company_id)
+    year = default_reporting_year(session, company_id)  # 등급 목표는 롤링 윈도우 대상 아님 — 달력년도 그대로
     status = rate_product_status_for_scope(session, company_id, year, scope_group)
     if status is None:
         raise NoActivityDataError(
@@ -187,6 +238,8 @@ def create_grade_upgrade_goal(
         goal_type="grade_upgrade",
         scope_group=scope_group,
         baseline_reporting_year=year,
+        # baseline_start_month은 emission_reduction 전용 개념이라 여기선 안 씀 —
+        # 컬럼 기본값(1)이 그대로 채워진다(db/models.py::CompanyGoal 주석 참고).
         baseline_value=current_grade,
         target_value=target_grade,
         target_product_name=target_product_name,
@@ -213,22 +266,38 @@ def get_active_goal(session: Session, company_id: int) -> CompanyGoal | None:
 
 
 def _emission_reduction_progress(session: Session, goal: CompanyGoal) -> dict:
-    current_year = default_reporting_year(session, goal.company_id)
-    # 홈 박스의 월별 차트는 "비교가 성립하는지"와 무관하게 항상 최근 활동 현황을
-    # 보여준다 — 같은 보고연도 안이면 올해 쌓이는 데이터, 넘어갔으면 비교 대상 연도.
-    # 리포트 화면(web/components/ScenePcaf.tsx)의 "월별 배출 추이"와 완전히 같은
-    # 차트(web/components/MonthlyTrendChart.tsx)를 그대로 재사용하기로 해(사용자
-    # 요청, 2026-08-18) 같은 재료 함수(monthly_by_fuel)를 그대로 가져다 쓴다 —
-    # 연료별 분해가 이 카드에도 그대로 필요해졌기 때문.
-    monthly_emission_detail = monthly_by_fuel(session, goal.company_id, year=current_year)
+    """기준 윈도우(baseline_reporting_year, baseline_start_month부터 롤링 12개월)와
+    바로 다음 12개월(비교 윈도우)을 비교한다 — 달력년도가 아니라 목표 설정월
+    기준이라, 몇 월에 목표를 세웠든 항상 12개월 대 12개월로 공정하게 비교된다
+    (2026-08-19, 이전엔 "달력년도 vs 달력년도"라 8월에 세운 목표는 8개월치
+    기준값이 다음 해 12개월치와 비교되는 월수 불일치가 있었다)."""
+    start_year, start_month = goal.baseline_reporting_year, goal.baseline_start_month
+    baseline_window = _window_months(start_year, start_month)
+    last_year, last_month = baseline_window[-1]
+    now_year, now_month = _now_year_month()
+    # "지금이 기준 윈도우의 마지막 달 이전이냐"를 (year*12+month) 하나의 값으로
+    # 비교한다 — month를 그대로 쓰므로(0-based로 안 바꿈) 두 값이 같은 산식으로
+    # 나온 이상 어긋날 일이 없다(_window_months 내부는 별도의 0-based 산식을 쓰므로
+    # 그 결과값(연,월)만 여기서 재조합한다 — 산식을 섞어 쓰면 경계에서 하루 어긋나는
+    # off-by-one이 난다, 구현 중 실측 확인).
+    still_in_baseline = (now_year * 12 + now_month) <= (last_year * 12 + last_month)
 
-    if current_year == goal.baseline_reporting_year:
+    # 홈 박스의 월별 차트는 "비교가 성립하는지"와 무관하게 항상 최근 활동 현황을
+    # 보여준다 — 기준 윈도우 안이면 그 윈도우가 쌓이는 데이터, 넘어갔으면 비교
+    # 윈도우. 리포트 화면(web/components/ScenePcaf.tsx)의 "월별 배출 추이"와
+    # 완전히 같은 차트(web/components/MonthlyTrendChart.tsx)를 재사용하기로 해
+    # (사용자 요청, 2026-08-18) 같은 재료 함수(monthly_by_fuel)를 그대로 쓴다.
+    chart_months = _window_months(start_year, start_month, offset=0 if still_in_baseline else 12)
+    monthly_emission_detail = monthly_by_fuel(session, goal.company_id, months=chart_months)
+
+    if still_in_baseline:
         return {
             "achieved": False, "measured": False, "current_value": None,
             "progress_pct": 0.0, "monthly_emission_detail": monthly_emission_detail,
         }
 
-    current_value = _total_emission(session, goal.company_id, current_year)
+    comparison_start_year, comparison_start_month = _window_months(start_year, start_month, offset=12)[0]
+    current_value = _emission_in_window(session, goal.company_id, comparison_start_year, comparison_start_month)
     if current_value is None:
         return {
             "achieved": False, "measured": False, "current_value": None,

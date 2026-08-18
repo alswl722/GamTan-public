@@ -618,7 +618,15 @@ class CompanyGoal(Base):
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
     goal_type = Column(String(30), nullable=False)  # emission_reduction | grade_upgrade
     scope_group = Column(String(10))  # grade_upgrade 필수(scope_1|scope_2), emission_reduction은 null(총량)
-    baseline_reporting_year = Column(Integer, nullable=False)
+    baseline_reporting_year = Column(Integer, nullable=False)  # emission_reduction: 롤링 12개월 시작 연도
+    # emission_reduction 전용 — baseline_reporting_year와 합쳐 롤링 12개월 시작월을
+    # 이룬다(목표 설정 시점=지금 이 달을 자동으로 씀, 입력 제로 유지 — 사용자가 고르지
+    # 않음). 예: 8월에 목표를 세우면 (year, 8) — 기준값은 그 해 8월~다음 해 7월,
+    # 비교값은 그다음 12개월(다음 해 8월~그다음 해 7월)이다. 예전엔 "달력년도"로
+    # 고정해 8월에 세운 목표가 "8개월치 vs 다음 해 12개월치"로 월수가 안 맞았다
+    # (사용자 지적, 2026-08-19). grade_upgrade는 이 개념이 없어 그냥 1로 채운다
+    # (0028 마이그레이션에서 기존 행도 기본값 1 — "1월~12월"과 동일해 동작 안 바뀜).
+    baseline_start_month = Column(SmallInteger, nullable=False, default=1)
     baseline_value = Column(Float, nullable=False)   # 감축: tCO2e 총량 / 등급: 시작 등급
     target_value = Column(Float, nullable=False)     # 감축: 목표 tCO2e / 등급: 목표 등급
     target_reduction_pct = Column(Float)              # emission_reduction 전용 — 사용자가 고른 원래 %
