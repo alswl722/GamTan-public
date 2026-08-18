@@ -51,7 +51,7 @@ function smoothLinePath(pts: { x: number; y: number }[]): string {
 
 export function MonthlyTrendChart({
   monthly,
-  title = "월별 배출 추이",
+  title,
 }: {
   monthly: MonthlyRow[];
   title?: string;
@@ -72,10 +72,10 @@ export function MonthlyTrendChart({
 
   return (
     <div className="mt-3 rounded-2xl bg-surface p-5">
-      <div className="text-[13px] font-semibold text-ink">{title}</div>
+      {title && <div className="text-[13px] font-semibold text-ink">{title}</div>}
 
       <div
-        className="relative mt-4 flex items-end justify-between gap-1"
+        className={`relative flex items-end justify-between gap-1 ${title ? "mt-4" : ""}`}
         style={{ height: CHART_HEIGHT_PX }}
       >
         {monthly.map((m, i) => (

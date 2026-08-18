@@ -558,7 +558,7 @@ export function ScenePcaf({ showHeading = true }: { showHeading?: boolean } = {}
         <CompletenessCard scope1={scope_1} scope2={scope_2} />
       </div>
 
-      {monthly && <MonthlyTrendChart monthly={monthly} />}
+      {monthly && <MonthlyTrendChart monthly={monthly} title="월별 배출 추이" />}
 
       {alerts.length > 0 && (
         <div className="mt-3 rounded-2xl bg-surface p-5">
