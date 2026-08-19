@@ -577,6 +577,10 @@ export interface MonthlyBriefing {
   has_previous_month: boolean;
   paragraphs: string[];
   fuel_stats: BriefingFuelStat[];
+  // "llm" | "llm_cache" | "template" — 문장이 실제 Gemini 생성인지 폴백
+  // 템플릿인지 구분(서버 로그·디버깅용). 화면에는 노출하지 않는다 —
+  // 사용자에게는 "AI 생성" vs "폴백" 구분 없이 편지로만 보이면 된다.
+  generated_by: "llm" | "llm_cache" | "template";
 }
 
 export function getOwnerBriefing(

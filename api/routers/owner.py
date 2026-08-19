@@ -56,7 +56,7 @@ from api.queries import (
     get_owner_progress,
     get_pending_anomaly_checks,
 )
-from db.owner_briefing import FuelMonthStat, build_briefing_paragraphs, compute_fuel_deltas
+from db.owner_briefing import FuelMonthStat, compute_fuel_deltas, get_briefing_paragraphs
 from db.alerts import detect_alerts
 from db.document.document_coverage import (
     delete_source_document,
@@ -225,9 +225,10 @@ def owner_briefing(
 ):
     """월간 AI 브리핑 — 이번 달 vs 지난달 연료별 활동을 편지 문단으로 조립.
 
-    계산(compute_fuel_deltas)과 문장 템플릿(build_briefing_paragraphs)은
-    db/owner_briefing.py의 순수 함수 — LLM을 쓰지 않는다(CLAUDE.md 원칙1과
-    같은 결, 이 라우터는 DB 조회 결과를 그 함수들에 넘기기만 한다).
+    증감률 계산(compute_fuel_deltas)은 항상 결정론적 코드다(CLAUDE.md 원칙1
+    "LLM 산수 금지"). 문장 표현만 Gemini가 맡고(db/owner_briefing.py::
+    get_briefing_paragraphs), LLM 실패 시 템플릿으로 자동 폴백한다 —
+    generated_by 필드로 실제 생성 경로를 노출한다(실패를 감추지 않음).
     """
     today = datetime.now(timezone.utc)
     y = year or today.year
@@ -252,7 +253,9 @@ def owner_briefing(
         }
         for f in fuel_month_stats
     ]
-    paragraphs = build_briefing_paragraphs(fuel_deltas, has_previous_month=stats["has_previous_month"])
+    paragraphs, generated_by = get_briefing_paragraphs(
+        session, fuel_deltas, has_previous_month=stats["has_previous_month"]
+    )
 
     return {
         "year": y,
@@ -260,6 +263,7 @@ def owner_briefing(
         "has_previous_month": stats["has_previous_month"],
         "paragraphs": paragraphs,
         "fuel_stats": fuel_deltas,
+        "generated_by": generated_by,  # "llm" | "llm_cache" | "template" — 실패 가시성
     }
 
 

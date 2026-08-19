@@ -8,6 +8,13 @@
   - 브리핑: 지난달 데이터가 없으면 has_previous_month=False, 비교 없이
     시작 안내 문단만 온다.
   - 브리핑: 지난달 대비 증감이 실제 emission_co2e 합계 비율과 일치한다.
+
+이 파일은 GEMINI_API_KEY를 비워 항상 템플릿 경로(generated_by="template")로
+돈다 — 실제 LLM 호출은 네트워크·비용이 드는 별도 관심사라 여기 통합
+테스트에서는 검증하지 않는다(LLM 문장 생성 자체의 동작은
+db/owner_briefing.py::generate_briefing_paragraphs_llm을 직접 호출해
+수동으로 확인함). 여기서는 "증감 계산이 맞는가", "그 계산값이 어떤 경로로든
+편지에 반영되는가"만 검증한다.
 """
 import pytest
 from fastapi.testclient import TestClient
@@ -19,6 +26,13 @@ from api.main import app
 from db.models import Base, Classification, Company, TraceLog, Voucher
 
 YEAR = 2026
+
+
+@pytest.fixture(autouse=True)
+def _no_llm_key(monkeypatch):
+    """이 파일의 모든 테스트는 템플릿 폴백 경로만 검증 — LLM 호출 자체를 막아
+    네트워크 의존 없이 결정론적으로 돈다."""
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
 
 
 @pytest.fixture()
@@ -132,6 +146,7 @@ def test_briefing_delta_matches_emission_ratio(db, client):
     fuel_stat = next(f for f in body["fuel_stats"] if f["fuel_type"] == "경유")
     assert fuel_stat["direction"] == "up"
     assert fuel_stat["delta_pct"] == 18.0
+    assert body["generated_by"] == "template"  # GEMINI_API_KEY 없어 폴백
     assert any("경유" in p and "18%" in p for p in body["paragraphs"])
 
 

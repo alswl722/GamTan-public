@@ -1,11 +1,34 @@
 """사장님 앱 "월간 AI 브리핑" — 이번 달 vs 지난달 연료별 활동을 편지 문단으로
-조립하는 순수 함수. GET /owner/{company_id}/briefing (api/routers/owner.py)이
-DB에서 가져온 값을 여기 넘겨 문단·통계를 만든다.
+조립. GET /owner/{company_id}/briefing (api/routers/owner.py)이 DB에서
+가져온 값을 여기 넘겨 문단·통계를 만든다.
 
-CLAUDE.md 원칙1(LLM 산수 금지)과 같은 결 — 증감률은 결정론적 계산이고,
-문장은 미리 정한 템플릿에 그 값을 끼워 넣을 뿐이다. LLM은 쓰지 않는다.
+CLAUDE.md 원칙1(LLM 산수 금지)과 같은 결 — 증감률(compute_fuel_deltas)은
+항상 결정론적 계산이고, LLM은 그 계산된 숫자를 문장으로 "표현"하는 역할만
+한다(db/gov_support/evidence.py와 같은 패턴 — 결정론적으로 이미 확정된
+사실을 자연스러운 문장으로 설명). LLM이 새로운 숫자를 만들어내는 경로는
+없다 — 프롬프트가 이미 계산된 값만 문장에 쓰라고 명시하고, 응답에 값
+필드 자체가 없다(evidence 생성과 동일한 방어 논리, CLAUDE.md 원칙1).
+
+LLM 호출이 실패하면(키 없음·API 오류·타임아웃) build_briefing_paragraphs()
+템플릿으로 폴백한다 — 편지가 아예 안 뜨는 것보다는 낫지만, 실패를
+감추지는 않는다(응답의 generated_by로 "llm"|"template" 구분, CLAUDE.md
+§6 실패 가시성).
 """
+import hashlib
+import json
+import os
 from dataclasses import dataclass
+from datetime import datetime, timezone
+
+from google import genai
+from google.genai import types
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from db.models import LlmCache
+
+MODEL = "gemini-3.5-flash"
 
 
 @dataclass(frozen=True)
@@ -109,3 +132,121 @@ def build_briefing_paragraphs(fuel_deltas: list[dict], *, has_previous_month: bo
 
     paragraphs.append("아래에서 이번 달 숫자들을 자세히 볼 수 있어요. 궁금한 게 있으면 언제든 눌러서 확인해 보세요.")
     return paragraphs
+
+
+_SYSTEM_PROMPT = """너는 "우디"라는 나무 캐릭터로, 대구·경북 소부장 중소기업 \
+사장님에게 매달 탄소 배출 데이터를 편지 형식으로 전해주는 도우미다.
+
+너에게는 이미 계산이 끝난 연료별 증감 통계가 주어진다. 너의 역할은 그 통계를 \
+읽고 사람이 쓴 것처럼 자연스럽고 따뜻한 편지 문단으로 표현하는 것뿐이다.
+
+절대 규칙:
+- 주어진 숫자(this_month_co2e, last_month_co2e, delta_pct)를 그대로만 인용한다. \
+새로운 숫자를 계산하거나 어림잡아 만들어내지 않는다.
+- 주어지지 않은 연료·사실을 지어내지 않는다.
+- 존댓말(해요체)을 쓴다. 과장하거나 불안을 조성하지 않는다.
+- 사용량이 늘었으면(direction=up) 왜 늘었을지 가볍게 되물어도 좋다(예: 지게차를 \
+더 쓰셨는지, 난방을 더 썼는지 등 연료 특성에 맞게). 줄었으면(direction=down) \
+짧게 칭찬한다.
+- 마지막 문단은 "아래에서 자세히 볼 수 있다"는 취지로 자연스럽게 마무리한다.
+
+지난달 데이터가 아예 없는 첫 달(has_previous_month=false)이면 비교하지 말고 \
+"이제부터 함께 기록을 시작한다"는 취지로 짧게 안내한다."""
+
+_RESPONSE_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "paragraphs": {
+            "type": "ARRAY",
+            "items": {"type": "STRING"},
+            "description": "편지 문단 목록. 각 항목이 한 문단.",
+        },
+    },
+    "required": ["paragraphs"],
+}
+
+
+def _build_llm_input(fuel_deltas: list[dict], *, has_previous_month: bool) -> str:
+    payload = {
+        "has_previous_month": has_previous_month,
+        "fuel_deltas": fuel_deltas,
+    }
+    return (
+        "아래는 이미 계산된 이번 달 연료별 탄소 배출 통계다. 이 값만 참고해서 "
+        "편지 문단을 써줘 (새 숫자를 만들지 말 것):\n\n"
+        f"{json.dumps(payload, ensure_ascii=False)}"
+    )
+
+
+def generate_briefing_paragraphs_llm(fuel_deltas: list[dict], *, has_previous_month: bool) -> list[str] | None:
+    """LLM으로 편지 문단 생성. 실패 시 None — 호출부가 build_briefing_paragraphs()
+    템플릿으로 폴백한다(db/gov_support/evidence.py와 동일한 실패 처리 방식).
+
+    fuel_deltas는 compute_fuel_deltas()의 출력을 그대로 받는다 — 이 함수는
+    증감 계산을 하지 않고 이미 계산된 값만 문장으로 표현한다.
+    """
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        return None
+    if not has_previous_month or not fuel_deltas:
+        # 첫 달·데이터 없음은 LLM에 물을 내용 자체가 없다 — 템플릿이 이미
+        # 정확한 안내 문구를 갖고 있으므로 여기서는 굳이 호출하지 않는다.
+        return None
+
+    prompt = _build_llm_input(fuel_deltas, has_previous_month=has_previous_month)
+    try:
+        client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=10_000))
+        resp = client.models.generate_content(
+            model=MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=_SYSTEM_PROMPT,
+                response_mime_type="application/json",
+                response_schema=_RESPONSE_SCHEMA,
+            ),
+        )
+        data = json.loads(resp.text)
+        paragraphs = data.get("paragraphs")
+        if not paragraphs or not isinstance(paragraphs, list):
+            return None
+        return [str(p) for p in paragraphs]
+    except Exception:
+        return None
+
+
+def _briefing_hash(fuel_deltas: list[dict]) -> str:
+    """같은 달의 같은 증감 통계면 같은 편지를 재사용 — 새로고침마다 다시 물어
+    비용·지연을 만들지 않는다(db/gov_support/evidence.py와 동일 이유,
+    llm_cache 테이블 재사용 — CLAUDE.md "llm_cache는 비용·재현성 정식 기능")."""
+    combined = json.dumps(fuel_deltas, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(f"owner_briefing|{combined}".encode("utf-8")).hexdigest()
+
+
+def get_briefing_paragraphs(
+    session: Session, fuel_deltas: list[dict], *, has_previous_month: bool
+) -> tuple[list[str], str]:
+    """편지 문단을 캐시→LLM→템플릿 순으로 확보. 반환: (paragraphs, generated_by)
+    generated_by는 "llm"|"llm_cache"|"template" — 프론트/운영이 실제로 AI가
+    썼는지 템플릿 폴백인지 구분할 수 있게(실패를 감추지 않음, CLAUDE.md §6).
+    """
+    if not has_previous_month or not fuel_deltas:
+        return build_briefing_paragraphs(fuel_deltas, has_previous_month=has_previous_month), "template"
+
+    text_hash = _briefing_hash(fuel_deltas)
+    cached = session.execute(select(LlmCache).where(LlmCache.text_hash == text_hash)).scalar_one_or_none()
+    if cached is not None:
+        cached.hit_count = (cached.hit_count or 0) + 1
+        cached.last_used_at = datetime.now(timezone.utc)
+        session.commit()
+        return cached.llm_response["paragraphs"], "llm_cache"
+
+    llm_paragraphs = generate_briefing_paragraphs_llm(fuel_deltas, has_previous_month=has_previous_month)
+    if llm_paragraphs is None:
+        return build_briefing_paragraphs(fuel_deltas, has_previous_month=has_previous_month), "template"
+
+    session.add(LlmCache(text_hash=text_hash, item_description="owner_briefing", llm_response={"paragraphs": llm_paragraphs}))
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()  # 동시 요청 등으로 이미 캐시됨 — 이번 응답은 그대로 반환
+    return llm_paragraphs, "llm"

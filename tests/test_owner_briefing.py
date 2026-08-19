@@ -6,8 +6,32 @@
     없는 지난달과 억지로 %를 비교하지 않는다.
   - 지난달 대비 계산은 새 배출량 계산이 아니라 기존 값(this_month_co2e,
     last_month_co2e)을 그대로 나눈 것뿐이다(파생값 검증).
+  - get_briefing_paragraphs(): LLM 성공 시 캐시에 기록되고, 같은 입력이면
+    재호출 없이 캐시를 재사용한다(db/gov_support/evidence.py와 동일 패턴).
+    LLM 실패 시 템플릿으로 폴백하고, 폴백 여부는 generated_by로 구분된다
+    (실패를 감추지 않음). 저수준 generate_briefing_paragraphs_llm을
+    monkeypatch로 갈아끼워 실제 네트워크 호출 없이 검증한다.
 """
-from db.owner_briefing import FuelMonthStat, build_briefing_paragraphs, compute_fuel_deltas
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+
+from db import owner_briefing
+from db.models import Base, LlmCache
+from db.owner_briefing import (
+    FuelMonthStat,
+    build_briefing_paragraphs,
+    compute_fuel_deltas,
+    get_briefing_paragraphs,
+)
+
+
+@pytest.fixture()
+def session(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path/'t.db'}", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    with Session(engine) as s:
+        yield s
 
 
 def test_direction_up_down_flat_new():
@@ -76,3 +100,62 @@ def test_closing_sentence_only_when_some_fuel_decreased():
     ])
     paragraphs_down = build_briefing_paragraphs(down_included, has_previous_month=True)
     assert any("목표 달성" in p for p in paragraphs_down)
+
+
+def test_get_briefing_paragraphs_uses_llm_when_available(session, monkeypatch):
+    monkeypatch.setattr(
+        owner_briefing, "generate_briefing_paragraphs_llm",
+        lambda deltas, has_previous_month: ["우디가 만든 문장이에요."],
+    )
+    fuel_deltas = compute_fuel_deltas([FuelMonthStat(fuel_type="경유", this_month_co2e=2.36, last_month_co2e=2.0)])
+
+    paragraphs, generated_by = get_briefing_paragraphs(session, fuel_deltas, has_previous_month=True)
+
+    assert generated_by == "llm"
+    assert paragraphs == ["우디가 만든 문장이에요."]
+
+
+def test_get_briefing_paragraphs_falls_back_to_template_on_llm_failure(session, monkeypatch):
+    monkeypatch.setattr(
+        owner_briefing, "generate_briefing_paragraphs_llm",
+        lambda deltas, has_previous_month: None,  # API 오류·키 없음 등 실패 시그니처
+    )
+    fuel_deltas = compute_fuel_deltas([FuelMonthStat(fuel_type="경유", this_month_co2e=2.36, last_month_co2e=2.0)])
+
+    paragraphs, generated_by = get_briefing_paragraphs(session, fuel_deltas, has_previous_month=True)
+
+    assert generated_by == "template"
+    assert paragraphs == build_briefing_paragraphs(fuel_deltas, has_previous_month=True)
+
+
+def test_get_briefing_paragraphs_caches_llm_result(session, monkeypatch):
+    calls = []
+
+    def _fake_llm(deltas, has_previous_month):
+        calls.append(deltas)
+        return ["첫 호출 결과"]
+
+    monkeypatch.setattr(owner_briefing, "generate_briefing_paragraphs_llm", _fake_llm)
+    fuel_deltas = compute_fuel_deltas([FuelMonthStat(fuel_type="경유", this_month_co2e=2.36, last_month_co2e=2.0)])
+
+    first_paragraphs, first_source = get_briefing_paragraphs(session, fuel_deltas, has_previous_month=True)
+    second_paragraphs, second_source = get_briefing_paragraphs(session, fuel_deltas, has_previous_month=True)
+
+    assert first_source == "llm"
+    assert second_source == "llm_cache"
+    assert first_paragraphs == second_paragraphs == ["첫 호출 결과"]
+    assert len(calls) == 1  # 두 번째 호출은 캐시 적중, LLM 재호출 없음
+    assert session.query(LlmCache).count() == 1
+
+
+def test_get_briefing_paragraphs_does_not_call_llm_for_first_month(session, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        owner_briefing, "generate_briefing_paragraphs_llm",
+        lambda deltas, has_previous_month: calls.append(1) or ["안 불려야 함"],
+    )
+
+    paragraphs, generated_by = get_briefing_paragraphs(session, [], has_previous_month=False)
+
+    assert generated_by == "template"
+    assert calls == []  # 비교할 지난달이 없으면 LLM에 물을 내용 자체가 없음
