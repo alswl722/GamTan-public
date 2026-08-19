@@ -127,13 +127,10 @@ export default function CarbonCalendarPage() {
         <p className="mt-4 text-[13px] text-faint">불러오는 중…</p>
       ) : (
         <div className="mt-4 flex flex-col gap-4">
-          {/* 이번 달 브리핑 축약 카드 — btn-cta는 호버 시 배경을 brand-ink로
-              바꾸는데, 이 카드는 글자색이 이미 brand-ink라 호버하면 글자가
-              배경에 파묻혀 안 보였다(2026-08-19 사용자 피드백). 연한 배경
-              카드는 옅은 밝기 변화만 주는 별도 호버로 처리 */}
+          {/* 이번 달 브리핑 축약 카드 */}
           <Link
             href="/owner/briefing"
-            className="flex items-center gap-2.5 rounded-2xl bg-brand-soft px-3.5 py-3 transition-opacity hover:opacity-80"
+            className="btn-cta flex items-center gap-2.5 rounded-2xl bg-brand-soft px-3.5 py-3"
           >
             <span className="text-2xl leading-none">🌳</span>
             <span className="flex-1">

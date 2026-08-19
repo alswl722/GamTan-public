@@ -110,20 +110,32 @@ body {
 }
 
 /* 주 CTA 버튼 공용 — 랜딩 페이지 CTA와 동일한 "살짝 떠오르는" 인터랙션을
-   /owner 마법사 내부 버튼에도 통일 적용 (기존엔 배경색만 바뀌는 밋밋한 버튼). */
+   /owner 마법사 내부 버튼에도 통일 적용 (기존엔 배경색만 바뀌는 밋밋한 버튼).
+
+   호버 시 배경을 무조건 brand-ink로 바꾸던 이전 버전은, bg-surface/
+   bg-brand-soft 같은 옅은 배경에 text-brand-ink 라벨을 쓰는 카드(홈
+   탄소측정 유도 카드, 2×2 기능 카드, 목표 설정 카드 등)에서 호버 시
+   글자색과 배경색이 같아져 텍스트가 사라지는 버그를 냈다(2026-08-19
+   사용자 피드백 — "호버를 쓰는 모든 카드가 그 문제를 겪고 있다"). 배경색은
+   그대로 두고 그림자만 민트 톤으로 진하게 키운다 — 브랜드 컬러(민트)가
+   여전히 느껴지면서도 어떤 배경·텍스트 조합에서도 글자를 가리지 않는다
+   (사용자 피드백: "회색 별로고 민트로갈까" → 무채색 밝기 조정 대신 브랜드
+   컬러 글로우로 교체). shadow-float 자체가 이미 brand-ink 톤(rgba(0,
+   150, 127, ...))이라 호버 시 그 강도만 키우면 자연스럽게 이어진다. */
 .btn-cta {
   box-shadow: var(--shadow-float);
   transition:
     transform 0.2s cubic-bezier(0.16, 1, 0.3, 1),
-    background-color 0.2s ease-out,
+    box-shadow 0.2s ease-out,
     opacity 0.2s ease-out;
 }
 .btn-cta:hover:not(:disabled) {
   transform: translateY(-2px);
-  background-color: var(--color-brand-ink);
+  box-shadow: 0 16px 36px -8px rgba(0, 150, 127, 0.32);
 }
 .btn-cta:active:not(:disabled) {
   transform: translateY(0);
+  box-shadow: 0 8px 20px -8px rgba(0, 150, 127, 0.28);
 }
 .btn-cta:disabled {
   cursor: not-allowed;
