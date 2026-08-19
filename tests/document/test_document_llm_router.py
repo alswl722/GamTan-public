@@ -250,3 +250,23 @@ def test_route_fields_tax_invoice_without_item_fails_instead_of_null(monkeypatch
     )
     with pytest.raises(DocumentParseError):
         router.route_fields(_session(), b"fake-bytes-12", ELECTRIC_ROWS_NO_ITEM_LABEL, "tax_invoice")
+
+
+def test_route_fields_tax_invoice_fills_issue_date_from_exact_day(monkeypatch):
+    """세금계산서는 셀 텍스트에 정확한 일자가 있으면(ROWS의 "2025-02-11")
+    issue_date를 그대로 채운다 — 예전엔 연/월만 쓰고 일자를 버려 issue_date가
+    항상 null로 남았다(2026-08-19 실측: 탄소 캘린더가 항상 비어 보이는 원인)."""
+    monkeypatch.setattr(router, "_call_gemini", lambda images, cells, doc_type: _gemini_response())
+    parsed, _ = router.route_fields(_session(), b"fake-bytes-14", ROWS, "tax_invoice")
+    assert parsed["issue_date"] == "2025-02-11"
+
+
+def test_route_fields_electric_bill_falls_back_to_month_end_issue_date(monkeypatch):
+    """전기고지서는 셀 텍스트("2025-07")에 일자가 없으면 그 달 말일로 issue_date를
+    채운다(세금계산서와 달리 실패시키지 않음 — "그 달 청구서"라는 개념만 있는
+    문서, 2026-08-19 사용자 확인)."""
+    monkeypatch.setattr(
+        router, "_call_gemini", lambda images, cells, doc_type: _gemini_response_no_item(),
+    )
+    parsed, _ = router.route_fields(_session(), b"fake-bytes-15", ELECTRIC_ROWS_NO_ITEM_LABEL, "electric_bill")
+    assert parsed["issue_date"] == "2025-07-31"

@@ -33,6 +33,8 @@ from db.document.document_text_extractor import (
     DocumentTypeMismatchError,
     OcrRow,
     find_supplier_name_best_effort,
+    issue_date_str,
+    month_end_issue_date_str,
     parse_amount_from_cell_text,
     parse_year_month_from_cell_text,
 )
@@ -197,12 +199,18 @@ def _resolve_cell_id(raw_id, valid_ids: set) -> int | None:
     return cid if cid in valid_ids else None
 
 
-def _resolve_fields(result: dict, cells: list[dict], row_texts: list[str]) -> dict:
+def _resolve_fields(result: dict, cells: list[dict], row_texts: list[str], document_type: str | None) -> dict:
     """LLM이 가리킨 셀 id → 실제 셀 원문 → 기존 결정론적 파서로 값 추출.
 
     result(LLM 응답)에서는 *_cell_id만 읽는다 — 값 자체(금액·날짜 등)를 담는 키가
     스키마에 없으므로 여기서 읽을 수도 없다. 값은 전부 cells(OCR 원문)에서
     parse_amount_from_cell_text/parse_year_month_from_cell_text로 다시 얻는다.
+
+    document_type은 issue_date 폴백 규칙을 가르기 위해서만 쓴다 — 세금계산서는
+    셀에서 일자를 못 찾으면 issue_date를 비워 상위 호출부가 실패시키고(계산에
+    실질적인 필드라 대충 채우지 않음), 전기·도시가스는 말일로 채운다(그 달
+    청구서라는 개념만 있는 문서, 2026-08-19 사용자 확인 — db/document_text_
+    extractor.py::_month_end_issue_date_str와 동일 원칙).
     """
     by_id = {c["id"]: c for c in cells}
     valid_ids = set(by_id)
@@ -219,9 +227,14 @@ def _resolve_fields(result: dict, cells: list[dict], row_texts: list[str]) -> di
             raise DocumentParseError(
                 "실제 청구월이 아니라 예상·추정치로 보여요 — 정식 청구서로 다시 올려 주세요"
             )
-        ym = parse_year_month_from_cell_text(by_id[date_id]["text"])
-        if ym is not None:
-            parsed["year"], parsed["month"] = ym
+        ymd = parse_year_month_from_cell_text(by_id[date_id]["text"])
+        if ymd is not None:
+            year, month, day = ymd
+            parsed["year"], parsed["month"] = year, month
+            if day is not None:
+                parsed["issue_date"] = issue_date_str(year, month, day)
+            elif document_type in ("electric_bill", "gas_bill"):
+                parsed["issue_date"] = month_end_issue_date_str(year, month)
 
     amount_id = _resolve_cell_id(result.get("amount_cell_id"), valid_ids)
     if amount_id is not None:
@@ -307,7 +320,7 @@ def route_fields(
     if resolved_type is None:
         raise DocumentParseError("문서 종류를 판별하지 못했어요 — 더 선명한 사진으로 다시 올려 주세요")
 
-    parsed = _resolve_fields(result, cells, _row_texts(rows or []))
+    parsed = _resolve_fields(result, cells, _row_texts(rows or []), resolved_type)
     if parsed.get("year") is None or parsed.get("month") is None:
         raise DocumentParseError("문서에서 날짜를 읽어내지 못했어요 — 더 선명한 사진으로 다시 올려 주세요")
     if parsed.get("supply_amount_krw") is None:

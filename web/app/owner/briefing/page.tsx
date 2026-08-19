@@ -111,7 +111,7 @@ export default function MonthlyBriefingPage() {
           </div>
 
           <div className="overflow-hidden rounded-3xl bg-surface shadow-card">
-            <div className="flex items-start gap-2.5 px-5 pb-1 pt-5">
+            <div className="flex items-start gap-2.5 px-5 pb-4 pt-5">
               <span className="text-[40px] leading-none">🌳</span>
               <div className="flex-1 rounded-2xl bg-brand-soft px-3.5 py-2.5">
                 <p className="text-[13px] font-bold text-brand-ink">안녕하세요, 사장님!</p>
