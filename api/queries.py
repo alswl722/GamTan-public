@@ -494,6 +494,117 @@ def get_distribution(
     }
 
 
+def _owner_visible_classification_filter():
+    """사장님 화면에 노출 가능한 분류 건 조건 — get_classifications()와 동일 기준.
+
+    review_required(HITL 대기)나 confirmed인데 아직 전송 안 한 건은 제외한다.
+    캘린더·브리핑도 사장님 화면이므로 이 필터를 그대로 따른다(다른 원칙 없음,
+    기존 get_classifications()의 필터를 재사용)."""
+    return (Classification.status == "auto") | (
+        (Classification.status == "confirmed") & Classification.sent_to_owner_at.isnot(None)
+    )
+
+
+def get_calendar_events(session: Session, company_id: int, year: int, month: int) -> list[dict]:
+    """탄소 캘린더용 — 그 달의 날짜별 이벤트(전표 + 에이전트 트레이스).
+
+    전표는 issue_date가 있고(nullable — 없으면 정확한 날짜에 못 꽂으므로 제외,
+    실패 가시성 원칙) 사장님에게 노출 가능한 분류(_owner_visible_classification_filter)가
+    붙은 건만 반환한다. 트레이스는 별도 노출 제한이 없다 — trace_logs는 애초에
+    HITL 여부와 무관한 에이전트 활동 일지라 confirmed/pending 구분이 없다.
+
+    정렬: 날짜 오름차순, 같은 날짜 안에서는 voucher가 trace보다 앞.
+    """
+    voucher_rows = session.execute(
+        select(Voucher, Classification)
+        .join(Classification, Classification.voucher_id == Voucher.id)
+        .where(Voucher.company_id == company_id)
+        .where(Voucher.issue_date.isnot(None))
+        .where(func.extract("year", Voucher.issue_date) == year)
+        .where(func.extract("month", Voucher.issue_date) == month)
+        .where(_owner_visible_classification_filter())
+        .order_by(Voucher.issue_date)
+    ).all()
+
+    trace_rows = session.execute(
+        select(TraceLog)
+        .where(TraceLog.company_id == company_id)
+        .where(func.extract("year", TraceLog.created_at) == year)
+        .where(func.extract("month", TraceLog.created_at) == month)
+        .order_by(TraceLog.created_at)
+    ).scalars().all()
+
+    events = []
+    for v, c in voucher_rows:
+        events.append({
+            "date": v.issue_date.date().isoformat(),
+            "entry_type": "voucher",
+            "voucher_id": v.id,
+            "scope": c.scope,
+            "fuel_type": c.fuel_type,
+            "item_description": v.item_description,
+            "supply_amount_krw": int(v.supply_amount_krw) if v.supply_amount_krw is not None else None,
+            "source": v.source,
+        })
+    for t in trace_rows:
+        events.append({
+            "date": t.created_at.date().isoformat(),
+            "entry_type": "trace",
+            "step_type": t.step_type,
+            "tool_name": t.tool_name,
+            "message": t.message,
+        })
+
+    events.sort(key=lambda e: (e["date"], e["entry_type"] != "voucher"))
+    return events
+
+
+def get_monthly_briefing_stats(session: Session, company_id: int, year: int, month: int) -> dict:
+    """월간 AI 브리핑용 — 이번 달 vs 지난달 연료별 tCO2e 합계.
+
+    편지 문단 조립(db/owner_briefing.py)에 넘길 원자료만 만든다 — 문장 생성은
+    이 함수의 책임이 아니다(계산과 문장 템플릿 분리).
+
+    반환: {has_previous_month, fuel_totals: [{fuel_type, this_month_co2e,
+           last_month_co2e}]}
+    직전월에 사장님 노출 가능 분류가 하나도 없으면 has_previous_month=False —
+    "첫 달"로 취급해 비교 문장 대신 시작 안내를 쓰게 한다(db/owner_briefing.py
+    참고).
+    """
+    prev_year, prev_month = (year - 1, 12) if month == 1 else (year, month - 1)
+
+    def _fuel_totals(y: int, m: int) -> dict[str, float]:
+        rows = session.execute(
+            select(Classification.fuel_type, func.sum(Classification.emission_co2e))
+            .join(Voucher, Classification.voucher_id == Voucher.id)
+            .where(Voucher.company_id == company_id)
+            .where(Voucher.year == y)
+            .where(Voucher.month == m)
+            .where(Classification.fuel_type.isnot(None))
+            .where(Classification.emission_co2e.isnot(None))
+            .where(_owner_visible_classification_filter())
+            .group_by(Classification.fuel_type)
+        ).all()
+        # emission_co2e는 kgCO2e로 저장 — 표시 단위(tCO2e)로 환산(모델 주석 관례)
+        return {fuel: float(total) / 1000 for fuel, total in rows}
+
+    this_month_totals = _fuel_totals(year, month)
+    last_month_totals = _fuel_totals(prev_year, prev_month)
+    has_previous_month = len(last_month_totals) > 0
+
+    fuel_types = sorted(set(this_month_totals) | set(last_month_totals))
+    fuel_stats = [
+        {
+            "fuel_type": f,
+            "this_month_co2e": this_month_totals.get(f, 0.0),
+            "last_month_co2e": last_month_totals.get(f) if has_previous_month else None,
+        }
+        for f in fuel_types
+    ]
+
+    return {"has_previous_month": has_previous_month, "fuel_totals": fuel_stats}
+
+
 def get_owner_notifications(session: Session, company_id: int, *, unread_only: bool = False) -> list[dict]:
     """사장님 메인 화면 배너용 — 확정 전송 알림 목록 (v1 §6-2, docs/tasks.md).
 
