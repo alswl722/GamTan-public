@@ -520,4 +520,75 @@ export function cancelCompanyGoal(
   return apiPost(`/owner/${companyId}/goal/${goalId}/cancel`);
 }
 
+// GET /owner/{company_id}/calendar — 탄소 캘린더. 그 달의 날짜별 이벤트
+// (전표 + 에이전트 활동)를 반환. 사장님에게 노출 가능한 분류만 포함
+// (담당자 확정·전송 완료 건 — HITL 대기 중인 건은 안 보임).
+export interface CalendarVoucherEvent {
+  date: string; // YYYY-MM-DD
+  entry_type: "voucher";
+  voucher_id: number;
+  scope: number | null;
+  fuel_type: string | null;
+  item_description: string | null;
+  supply_amount_krw: number | null;
+  source: string;
+}
+export interface CalendarTraceEvent {
+  date: string; // YYYY-MM-DD
+  entry_type: "trace";
+  step_type: string;
+  tool_name: string | null;
+  message: string;
+}
+export type CalendarEvent = CalendarVoucherEvent | CalendarTraceEvent;
+
+export interface CalendarResponse {
+  year: number;
+  month: number;
+  events: CalendarEvent[];
+}
+
+export function getOwnerCalendar(
+  companyId: number,
+  year?: number,
+  month?: number,
+): Promise<CalendarResponse> {
+  const params = new URLSearchParams();
+  if (year) params.set("year", String(year));
+  if (month) params.set("month", String(month));
+  const q = params.toString() ? `?${params.toString()}` : "";
+  return apiGet(`/owner/${companyId}/calendar${q}`);
+}
+
+// GET /owner/{company_id}/briefing — 월간 AI 브리핑. 이번 달 vs 지난달
+// 연료별 활동을 편지 문단(paragraphs)으로 조립해 반환. 문장은 백엔드가
+// 결정론적으로 조립한 것 — 프론트는 그대로 렌더만 한다(LLM 미사용).
+export interface BriefingFuelStat {
+  fuel_type: string;
+  this_month_co2e: number;
+  last_month_co2e: number | null;
+  delta_pct: number | null;
+  direction: "up" | "down" | "flat" | "new";
+}
+
+export interface MonthlyBriefing {
+  year: number;
+  month: number;
+  has_previous_month: boolean;
+  paragraphs: string[];
+  fuel_stats: BriefingFuelStat[];
+}
+
+export function getOwnerBriefing(
+  companyId: number,
+  year?: number,
+  month?: number,
+): Promise<MonthlyBriefing> {
+  const params = new URLSearchParams();
+  if (year) params.set("year", String(year));
+  if (month) params.set("month", String(month));
+  const q = params.toString() ? `?${params.toString()}` : "";
+  return apiGet(`/owner/${companyId}/briefing${q}`);
+}
+
 export { BASE_URL };
