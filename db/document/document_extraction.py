@@ -118,11 +118,12 @@ def extract_document(
                 # 좌표 기반으로 재시도(db/document_text_extractor.py::parse_tax_invoice_date_table).
                 date_result = parse_tax_invoice_date_table(ocr_result.rows)
                 if date_result is not None:
-                    year, month = date_result
+                    year, month, day = date_result
                     header = {
                         "supplier_name": find_supplier_name_best_effort(ocr_result.text),
                         "year": year,
                         "month": month,
+                        "issue_date": f"{year:04d}-{month:02d}-{day:02d}",
                     }
             if header is not None:
                 item = parse_tax_invoice_table_rows(ocr_result.rows)

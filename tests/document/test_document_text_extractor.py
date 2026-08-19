@@ -393,6 +393,7 @@ def test_tax_invoice_tolerates_letter_spaced_date_label():
     ]))
     result = parse_document_text(text, "tax_invoice")
     assert result["year"] == 2025 and result["month"] == 2
+    assert result["issue_date"] == "2025-02-11"
 
 
 def test_date_sep_tolerates_space_after_separator():
@@ -402,7 +403,7 @@ def test_date_sep_tolerates_space_after_separator():
         [(0.0, 80.0, "작성일자"), (150.0, 220.0, "공급가액")],
         [(0.0, 90.0, "2025- 02-11"), (150.0, 220.0, "420, 833")],
     ]
-    assert parse_tax_invoice_date_table(rows) == (2025, 2)
+    assert parse_tax_invoice_date_table(rows) == (2025, 2, 11)
 
 
 def test_parse_tax_invoice_date_table_tolerates_letter_spaced_header_cell():
@@ -411,7 +412,7 @@ def test_parse_tax_invoice_date_table_tolerates_letter_spaced_header_cell():
         [(0.0, 80.0, "작 성 일 자"), (150.0, 220.0, "공급가액")],
         [(0.0, 90.0, "2025-03-05"), (150.0, 220.0, "300,000")],
     ]
-    assert parse_tax_invoice_date_table(rows) == (2025, 3)
+    assert parse_tax_invoice_date_table(rows) == (2025, 3, 5)
 
 
 def test_parse_tax_invoice_table_rows_tolerates_letter_spaced_header_cell():
@@ -617,7 +618,7 @@ def test_parse_tax_invoice_date_table_matches_real_kepco_style_layout():
         [(0.0, 60.0, "품목"), (150.0, 220.0, "공급가액")],  # 품목행 헤더 — 여기 걸리면 안 됨
         [(0.0, 55.0, "경유"), (150.0, 220.0, "420,833")],
     ]
-    assert parse_tax_invoice_date_table(rows) == (2025, 1)
+    assert parse_tax_invoice_date_table(rows) == (2025, 1, 11)
 
 
 def test_parse_tax_invoice_date_table_accepts_issue_date_label_synonym():
@@ -625,7 +626,7 @@ def test_parse_tax_invoice_date_table_accepts_issue_date_label_synonym():
         [(0.0, 80.0, "발급일자"), (150.0, 220.0, "공급가액")],
         [(0.0, 90.0, "2025.07.10"), (150.0, 220.0, "420,000")],
     ]
-    assert parse_tax_invoice_date_table(rows) == (2025, 7)
+    assert parse_tax_invoice_date_table(rows) == (2025, 7, 10)
 
 
 def test_parse_tax_invoice_date_table_without_header_returns_none():
@@ -663,6 +664,7 @@ def test_parse_tax_invoice_header_reads_official_form_date_row():
     ]))
     result = parse_document_text(text, "tax_invoice")
     assert result["year"] == 2025 and result["month"] == 1
+    assert result["issue_date"] == "2025-01-08"
 
 
 def test_parse_tax_invoice_item_row_reads_official_form_row_with_memo():

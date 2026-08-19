@@ -244,6 +244,7 @@ def test_tax_invoice_table_row_fallback_when_linear_text_row_unmatched(monkeypat
     assert result["supply_amount_krw"] == 420_833
     assert result["quantity"] == 301 and result["quantity_unit"] == "L"
     assert result["extraction_method"] == "ocr"
+    assert result["issue_date"] == "2025-07-15"
 
 
 def test_tax_invoice_date_table_fallback_when_no_colon_label_at_all(monkeypatch, session):
@@ -272,6 +273,7 @@ def test_tax_invoice_date_table_fallback_when_no_colon_label_at_all(monkeypatch,
     result = extract_document(session, b"fake jpeg bytes", "tax_invoice")
     assert result["document_type"] == "tax_invoice"
     assert result["year"] == 2025 and result["month"] == 1
+    assert result["issue_date"] == "2025-01-11"
     assert result["item_description"] == "경유"
     assert result["supply_amount_krw"] == 460_617
     assert result["extraction_method"] == "ocr"

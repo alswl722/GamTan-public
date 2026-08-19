@@ -424,7 +424,7 @@ def parse_tax_invoice_header(text: str) -> dict:
         text,
     )
     if date_m:
-        year, month = int(date_m.group(1)), int(date_m.group(2))
+        year, month, day = int(date_m.group(1)), int(date_m.group(2)), int(date_m.group(3))
     else:
         # 실측(2026-08-18, data/fixtures/tax_invoices — 별지 제11호 국세청 표준
         # 수기 세금계산서): "작성일자:" 콜론이 아니라 "작성" 헤더 행 아래 데이터행에
@@ -440,10 +440,17 @@ def parse_tax_invoice_header(text: str) -> dict:
             raise DocumentParseError("작성일자를 찾지 못했어요")
         year = 2000 + int(table_date_m.group(1))
         month = int(table_date_m.group(2))
+        day = int(table_date_m.group(3))
     return {
         "supplier_name": find_supplier_name_best_effort(text),
         "year": year,
         "month": month,
+        # 버그 수정(2026-08-19): 두 분기 모두 정규식이 일(day)까지 이미 캡처하는데
+        # 여태 dict에 안 넣어서 버렸다 — api/document_ingestion.py::_parse_issue_date가
+        # 기대하는 "issue_date" 키가 OCR 업로드 경로에선 항상 None이라 Voucher.
+        # issue_date가 통째로 비어 있었다(엑셀 업로드 경로는 parse_hometax_excel이
+        # 별도로 issue_date를 채워 이 버그의 영향을 안 받았음).
+        "issue_date": f"{year:04d}-{month:02d}-{day:02d}",
     }
 
 
@@ -547,7 +554,7 @@ def _cell_for_column(row: OcrRow, col_range: tuple[float, float]) -> str | None:
     return best_text
 
 
-def parse_tax_invoice_date_table(rows: list[OcrRow]) -> tuple[int, int] | None:
+def parse_tax_invoice_date_table(rows: list[OcrRow]) -> tuple[int, int, int] | None:
     """세금계산서 날짜가 "작성일자:" 콜론 형식이 아니라 헤더행/데이터행 표 구조일
     때 좌표 기반으로 찾는다 — 실측 확인(2026-08-16, 사용자 제공 합성 세금계산서
     사진): 실제 국세청 표준 세금계산서 서식은 "작성일자·공급가액·세액·비고" 헤더
@@ -573,7 +580,9 @@ def parse_tax_invoice_date_table(rows: list[OcrRow]) -> tuple[int, int] | None:
             if cell:
                 m = re.search(rf"(\d{{4}}){_DATE_SEP}(\d{{2}}){_DATE_SEP}(\d{{2}})", cell)
                 if m:
-                    return int(m.group(1)), int(m.group(2))
+                    # 버그 수정(2026-08-19): 일(day)까지 캡처해놓고 여태 버렸다 — 아래
+                    # parse_tax_invoice_header()와 같은 결.
+                    return int(m.group(1)), int(m.group(2)), int(m.group(3))
         return None  # 헤더는 찾았는데 값을 못 찾으면 더 이상 시도 안 함
     return None
 

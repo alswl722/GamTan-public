@@ -283,6 +283,23 @@ def test_institution_attribution_is_filled_when_backfilled(db_with_institution):
     assert doc.financial_institution_id == inst_id
 
 
+def test_tax_invoice_upload_persists_exact_issue_date(db_with_institution):
+    """회귀 방지(2026-08-19): parse_tax_invoice_header()가 정규식으로 일(day)까지
+    캡처해놓고도 반환 dict엔 year/month만 넣어서, api/document_ingestion.py::
+    _parse_issue_date(row.get("issue_date"))가 항상 None을 받아 Voucher.issue_date가
+    OCR 업로드 경로에서 통째로 비어 있던 버그. year/month뿐 아니라 실제 day까지
+    맞는지 DB에 저장된 값으로 확인한다."""
+    session, company_id, _inst_id, _ib_id = db_with_institution
+    _run_upload(
+        session, company_id, _tax_invoice_pdf(day="07-10"), "invoice.pdf",
+        "tax_invoice", mode="ocr",
+    )
+    voucher = session.execute(select(Voucher)).scalars().first()
+    assert voucher.year == 2025 and voucher.month == 7
+    assert voucher.issue_date is not None
+    assert (voucher.issue_date.year, voucher.issue_date.month, voucher.issue_date.day) == (2025, 7, 10)
+
+
 # ── extraction_method/extraction_confidence 영속화 (0021) ────────────────────
 
 def test_text_layer_upload_records_extraction_method(db_with_institution):
