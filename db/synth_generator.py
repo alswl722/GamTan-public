@@ -60,6 +60,13 @@ _QTY_UNIT = {"경유": "L", "도시가스": "m3", "전기": "kWh"}
 GAS_SEASON = {1: 1.5, 2: 1.4, 3: 1.1, 4: 0.8, 5: 0.6, 6: 0.4,
               7: 0.4, 8: 0.4, 9: 0.5, 10: 0.8, 11: 1.2, 12: 1.5}
 
+# 발행일(day-of-month) 배정 — db/seed_mock.py의 기존 시연 전표(○○정밀 33건, 이미 공유 DB에
+# 적재돼 운영 중인 실제 관행)와 같은 패턴을 그대로 따른다: kepco 전기요금고지서는 매월 25일
+# 고정, hometax 세금계산서(경유·도시가스)는 중순(11~20일)에 발급되는 경향 — 두 소스 모두
+# 항상 유효한 일자라 월별 말일 보정이 필요 없다(2월 포함 1~28일 어떤 달에도 안전).
+KEPCO_ISSUE_DAY = 25
+HOMETAX_ISSUE_DAY_RANGE = (10, 22)
+
 # 시연 기업들 (이름, 규모배수) — 규모배수로 금액 스케일 다양화. 0번이 데모 기업 ○○정밀
 COMPANIES = [
     ("○○정밀", 1.0), ("대성표면처리", 1.4), ("구미정공", 0.7), ("한빛금속", 1.3),
@@ -93,6 +100,9 @@ def generate(cfg: GenConfig, expressions: dict | None = None) -> list[dict]:
     for ci in range(max(1, cfg.companies)):
         name, size = _company(ci)
         crnd = random.Random(cfg.seed + ci * 1009)  # 기업별 독립 난수(재현성 유지)
+        # 발행일 전용 별도 스트림 — crnd에서 뽑으면 draw 순서가 밀려 기존에 이미 문서화된
+        # expr/amount/expected_hitl 값까지 통째로 바뀐다(회귀). 완전히 분리된 시드로 격리.
+        day_rnd = random.Random(cfg.seed + ci * 1009 + 500_000)
         scenario = ci == 0  # 결손·이상치는 데모 기업(0번)에만 — 나머지는 정상 12개월
         for month in range(1, 13):
             for fuel in ("전기", "도시가스", "경유"):
@@ -114,11 +124,17 @@ def generate(cfg: GenConfig, expressions: dict | None = None) -> list[dict]:
 
                 # 실측 수량 — 애매 표현(HITL 기대)은 사용량 미기재로 두어 사람검토 흐름을 살린다
                 qty = None if expr in info["ambiguous"] else round(amount / _REPR_PRICE[fuel])
+
+                # 발행일 — kepco는 25일 고정, hometax는 중순 범위에서 기업·월별로 결정론적 배정
+                day = KEPCO_ISSUE_DAY if fuel == "전기" else day_rnd.randint(*HOMETAX_ISSUE_DAY_RANGE)
+                issue_date = f"{cfg.year}-{month:02d}-{day:02d}"
+
                 records.append({
                     "company": name,
                     "source": SOURCE[fuel],
                     "year": cfg.year,
                     "month": month,
+                    "issue_date": issue_date,
                     "item_description": expr,
                     "supply_amount_krw": amount,
                     "quantity": qty,
@@ -143,6 +159,7 @@ def _flatten(recs):
         rows.append({
             "company": r.get("company", ""),
             "source": r["source"], "year": r["year"], "month": r["month"],
+            "issue_date": r.get("issue_date", ""),
             "item_description": r["item_description"],
             "supply_amount_krw": r["supply_amount_krw"],
             "scope": lab.get("scope"), "category": lab.get("category"),
