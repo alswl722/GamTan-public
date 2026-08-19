@@ -63,9 +63,11 @@ const FEATURE_CARDS = [
     imageVariant: "center",
   },
   {
-    href: "/owner/report",
-    caption: "이상 신호",
-    title: "이상 신호 확인하기",
+    href: "/owner/calendar",
+    caption: "탄소 캘린더",
+    title: "이번 달 활동\n한눈에 보기",
+    // Figma 시안(App 페이지 "홈" 프레임)에서 도트 그리드로 대체됨 — 캐릭터
+    // 이미지는 추후 직접 업로드 예정. 그 전까지는 기존 파일을 임시로 재사용.
     image: "/alert_icon.png",
     width: 313,
     height: 334,

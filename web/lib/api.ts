@@ -520,4 +520,75 @@ export function cancelCompanyGoal(
   return apiPost(`/owner/${companyId}/goal/${goalId}/cancel`);
 }
 
+// GET /owner/{company_id}/calendar — 탄소 캘린더. 그 달의 날짜별 구매·탄소
+// 배출 내역(전표 기준)을 반환. 사장님에게 노출 가능한 분류만 포함
+// (담당자 확정·전송 완료 건 — HITL 대기 중인 건은 안 보임). 에이전트 트레이스
+// (결손 감지·이상치 검증 등 내부 판단 로그)는 포함하지 않는다 — 사장님이
+// 보고 싶은 건 "이날 뭘 샀고 탄소가 얼마나 나왔는지"이지 AI 활동 일지가
+// 아니다.
+export interface CalendarEvent {
+  date: string; // YYYY-MM-DD
+  entry_type: "voucher";
+  voucher_id: number;
+  scope: number | null;
+  fuel_type: string | null;
+  item_description: string | null;
+  supply_amount_krw: number | null;
+  emission_tco2e: number | null;
+  source: string;
+}
+
+export interface CalendarResponse {
+  year: number;
+  month: number;
+  events: CalendarEvent[];
+}
+
+export function getOwnerCalendar(
+  companyId: number,
+  year?: number,
+  month?: number,
+): Promise<CalendarResponse> {
+  const params = new URLSearchParams();
+  if (year) params.set("year", String(year));
+  if (month) params.set("month", String(month));
+  const q = params.toString() ? `?${params.toString()}` : "";
+  return apiGet(`/owner/${companyId}/calendar${q}`);
+}
+
+// GET /owner/{company_id}/briefing — 월간 AI 브리핑. 이번 달 vs 지난달
+// 연료별 활동을 편지 문단(paragraphs)으로 조립해 반환. 문장은 백엔드가
+// 결정론적으로 조립한 것 — 프론트는 그대로 렌더만 한다(LLM 미사용).
+export interface BriefingFuelStat {
+  fuel_type: string;
+  this_month_co2e: number;
+  last_month_co2e: number | null;
+  delta_pct: number | null;
+  direction: "up" | "down" | "flat" | "new";
+}
+
+export interface MonthlyBriefing {
+  year: number;
+  month: number;
+  has_previous_month: boolean;
+  paragraphs: string[];
+  fuel_stats: BriefingFuelStat[];
+  // "llm" | "llm_cache" | "template" — 문장이 실제 Gemini 생성인지 폴백
+  // 템플릿인지 구분(서버 로그·디버깅용). 화면에는 노출하지 않는다 —
+  // 사용자에게는 "AI 생성" vs "폴백" 구분 없이 편지로만 보이면 된다.
+  generated_by: "llm" | "llm_cache" | "template";
+}
+
+export function getOwnerBriefing(
+  companyId: number,
+  year?: number,
+  month?: number,
+): Promise<MonthlyBriefing> {
+  const params = new URLSearchParams();
+  if (year) params.set("year", String(year));
+  if (month) params.set("month", String(month));
+  const q = params.toString() ? `?${params.toString()}` : "";
+  return apiGet(`/owner/${companyId}/briefing${q}`);
+}
+
 export { BASE_URL };

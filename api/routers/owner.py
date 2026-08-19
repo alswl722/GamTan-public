@@ -7,6 +7,8 @@
                                                  — 202 즉시 응답 + job_id, 실제 추출은 백그라운드(아래 jobs 참고)
 - GET   /owner/{company_id}/documents/jobs/{job_id}  업로드 잡 단건 상태 폴링(처리 중/완료/실패)
 - GET   /owner/{company_id}/documents/jobs      최근 업로드 잡 목록(?status=processing 등)
+- GET   /owner/{company_id}/calendar            탄소 캘린더 — 그 달 날짜별 이벤트(전표+AI 활동)
+- GET   /owner/{company_id}/briefing            월간 AI 브리핑 — 이번 달 vs 지난달 연료별 요약 편지
 - GET   /owner/{company_id}/documents/grid      데이터 업로드 탭 — 문서종류 × 월 그리드
 - GET   /owner/{company_id}/documents           그리드 한 칸의 업로드 파일 목록
 - DELETE /owner/{company_id}/documents/{id}     업로드 파일 삭제(전표·분류까지 연쇄 삭제)
@@ -46,7 +48,15 @@ from api.document_ingestion import (
     create_upload_job,
     process_upload_job,
 )
-from api.queries import get_coverage, get_owner_notifications, get_owner_progress, get_pending_anomaly_checks
+from api.queries import (
+    get_calendar_events,
+    get_coverage,
+    get_monthly_briefing_stats,
+    get_owner_notifications,
+    get_owner_progress,
+    get_pending_anomaly_checks,
+)
+from db.owner_briefing import FuelMonthStat, compute_fuel_deltas, get_briefing_paragraphs
 from db.alerts import detect_alerts
 from db.document.document_coverage import (
     delete_source_document,
@@ -185,6 +195,77 @@ def owner_coverage(company_id: int, session: Session = Depends(get_session)):
     이건 voucher 존재 여부만 보는 훨씬 이른 신호라 업로드 직후에도 바로 쓸 수 있다.
     """
     return get_coverage(session, company_id)
+
+
+@router.get("/{company_id}/calendar")
+def owner_calendar(
+    company_id: int,
+    year: int | None = None,
+    month: int | None = None,
+    session: Session = Depends(get_session),
+):
+    """탄소 캘린더 — 그 달의 날짜별 구매·탄소 배출 내역(전표 기준).
+
+    year/month 생략 시 서버 기준 이번 달. 사장님에게 노출 가능한 분류가 붙은
+    전표만 포함한다(get_classifications()와 동일 필터 — api/queries.py::
+    _owner_visible_classification_filter). 에이전트 트레이스(활동 로그)는
+    포함하지 않는다 — api/queries.py::get_calendar_events 참고.
+    """
+    today = datetime.now(timezone.utc)
+    y = year or today.year
+    m = month or today.month
+    return {"year": y, "month": m, "events": get_calendar_events(session, company_id, y, m)}
+
+
+@router.get("/{company_id}/briefing")
+def owner_briefing(
+    company_id: int,
+    year: int | None = None,
+    month: int | None = None,
+    session: Session = Depends(get_session),
+):
+    """월간 AI 브리핑 — 이번 달 vs 지난달 연료별 활동을 편지 문단으로 조립.
+
+    증감률 계산(compute_fuel_deltas)은 항상 결정론적 코드다(CLAUDE.md 원칙1
+    "LLM 산수 금지"). 문장 표현만 Gemini가 맡고(db/owner_briefing.py::
+    get_briefing_paragraphs), LLM 실패 시 템플릿으로 자동 폴백한다 —
+    generated_by 필드로 실제 생성 경로를 노출한다(실패를 감추지 않음).
+    """
+    today = datetime.now(timezone.utc)
+    y = year or today.year
+    m = month or today.month
+
+    stats = get_monthly_briefing_stats(session, company_id, y, m)
+    fuel_month_stats = [
+        FuelMonthStat(
+            fuel_type=f["fuel_type"],
+            this_month_co2e=f["this_month_co2e"],
+            last_month_co2e=f["last_month_co2e"],
+        )
+        for f in stats["fuel_totals"]
+    ]
+    fuel_deltas = compute_fuel_deltas(fuel_month_stats) if stats["has_previous_month"] else [
+        {
+            "fuel_type": f.fuel_type,
+            "this_month_co2e": round(f.this_month_co2e, 2),
+            "last_month_co2e": None,
+            "delta_pct": None,
+            "direction": "new",
+        }
+        for f in fuel_month_stats
+    ]
+    paragraphs, generated_by = get_briefing_paragraphs(
+        session, fuel_deltas, has_previous_month=stats["has_previous_month"]
+    )
+
+    return {
+        "year": y,
+        "month": m,
+        "has_previous_month": stats["has_previous_month"],
+        "paragraphs": paragraphs,
+        "fuel_stats": fuel_deltas,
+        "generated_by": generated_by,  # "llm" | "llm_cache" | "template" — 실패 가시성
+    }
 
 
 @router.get("/{company_id}/progress")

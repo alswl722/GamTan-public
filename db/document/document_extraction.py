@@ -48,6 +48,7 @@ from db.document.document_text_extractor import (
     detect_document_type,  # noqa: F401 — 하위 호환용 재노출(과거 호출부가 여기서 import)
     extract_pdf_text,  # noqa: F401 — 하위 호환용 재노출
     find_supplier_name_best_effort,
+    issue_date_str,
     parse_document_text,
     parse_tax_invoice_date_table,
     parse_tax_invoice_header,
@@ -123,7 +124,7 @@ def extract_document(
                         "supplier_name": find_supplier_name_best_effort(ocr_result.text),
                         "year": year,
                         "month": month,
-                        "issue_date": f"{year:04d}-{month:02d}-{day:02d}",
+                        "issue_date": issue_date_str(year, month, day),
                     }
             if header is not None:
                 item = parse_tax_invoice_table_rows(ocr_result.rows)

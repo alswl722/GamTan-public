@@ -65,6 +65,9 @@ def test_electric_bill_parses_date_amount_quantity():
         "quantity_unit": "kWh",
         "year": 2025,
         "month": 1,
+        # 전기고지서는 "그 달 청구서"일 뿐 특정 일자가 없어 말일로 채운다
+        # (db/document_text_extractor.py::month_end_issue_date_str).
+        "issue_date": "2025-01-31",
         "document_type": "electric_bill",
     }
 
@@ -499,10 +502,11 @@ def test_real_kepco_bill_date_without_bun_suffix_parses():
 def test_parse_year_month_from_cell_text_accepts_korean_year_month():
     """db/document_llm_router.py가 LLM이 가리킨 셀 원문을 재파싱할 때 쓰는 공개
     진입점 — -./ 구분자 없이 "년/월"만 쓴 셀 텍스트도 인식해야 한다(위 테스트와
-    같은 실측 근거)."""
-    assert parse_year_month_from_cell_text("2021년 1월") == (2021, 1)
-    assert parse_year_month_from_cell_text("2021년 01월 06일") == (2021, 1)
-    assert parse_year_month_from_cell_text("2025-02-11") == (2025, 2)  # 기존 경로 회귀 방지
+    같은 실측 근거). 3번째 값(day)은 셀에 일자가 있으면 채워지고, 없으면 None —
+    호출부가 issue_date 폴백(세금계산서는 실패, 전기·가스는 말일) 여부를 가른다."""
+    assert parse_year_month_from_cell_text("2021년 1월") == (2021, 1, None)
+    assert parse_year_month_from_cell_text("2021년 01월 06일") == (2021, 1, 6)
+    assert parse_year_month_from_cell_text("2025-02-11") == (2025, 2, 11)  # 기존 경로 회귀 방지
 
 
 def test_real_kepco_bill_title_recognized_without_slot():

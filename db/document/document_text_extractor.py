@@ -20,8 +20,10 @@ OCR 재구성 텍스트는 합성 PDF 텍스트보다 훨씬 지저분하다(라
 `DocumentParseError`로 명확히 실패한다(실패 가시성 원칙, CLAUDE.md §6). OCR
 경로까지 실패하면 더 이상 폴백이 없다(100% 로컬 결정 — Gemini 비전 폴백은 제거됨).
 """
+import calendar
 import io
 import re
+from datetime import date
 
 import pdfplumber
 
@@ -147,6 +149,24 @@ def _looks_like_management_fee_bill(text: str) -> bool:
     return any(_MANAGEMENT_FEE_TITLE_KEYWORD_NO_WS in _strip_ws(line) for line in lines)
 
 
+def issue_date_str(year: int, month: int, day: int) -> str:
+    """세금계산서처럼 정확한 일자가 문서에 찍혀 있는 경우 — ISO 문자열로.
+    유효하지 않은 날짜(OCR 오독 등으로 day=31인데 2월인 경우 등)는 예외를
+    던지지 않고 그 달의 마지막 날로 보정한다 — year/month는 이미 신뢰하고
+    쓰고 있으니(날짜 파싱 실패로 문서 전체를 재업로드시키는 대신), day만
+    문서가 속한 달 안으로 클램프."""
+    day = min(day, calendar.monthrange(year, month)[1])
+    return date(year, month, day).isoformat()
+
+
+def month_end_issue_date_str(year: int, month: int) -> str:
+    """전기·도시가스 고지서처럼 원래 "그 달 청구서"라는 개념만 있고 특정 일자가
+    없는 문서는 말일로 issue_date를 채운다(2026-08-19 사용자 확인) — "그달 청구서"
+    라는 의미가 캘린더에서도 자연스럽게 전달되고, 월말 정산 관례와도 맞는다."""
+    last_day = calendar.monthrange(year, month)[1]
+    return date(year, month, last_day).isoformat()
+
+
 def _parse_amount(raw: str, *, field_label: str) -> int:
     """콤마 섞인 숫자 문자열 → int. "▨"·"판독 불가" 표시가 있으면 명확히 실패시킨다
     (저품질 스캔 시나리오 — 값을 지어내는 대신 재업로드를 요청해야 하는 케이스)."""
@@ -175,9 +195,9 @@ def parse_amount_from_cell_text(text: str) -> int | None:
         return None
 
 
-def parse_year_month_from_cell_text(text: str) -> tuple[int, int] | None:
-    """셀 원문에서 연/월만 뽑는다(일자는 있어도 무시 — 기존 파서들과 동일하게
-    년/월까지만 쓴다). 구분자 앞뒤 공백은 `_DATE_SEP`과 동일하게 허용.
+def parse_year_month_from_cell_text(text: str) -> tuple[int, int, int | None] | None:
+    """셀 원문에서 연/월(+가능하면 일)을 뽑는다. 구분자 앞뒤 공백은 `_DATE_SEP`과
+    동일하게 허용.
 
     db/document_llm_router.py 전용 공개 진입점 — parse_amount_from_cell_text와
     같은 이유(LLM 응답의 값이 아니라 셀 원문을 항상 재파싱).
@@ -187,13 +207,18 @@ def parse_year_month_from_cell_text(text: str) -> tuple[int, int] | None:
     한글 구분자만 쓰였다 — LLM이 정확한 날짜 셀을 가리켜도 재파싱이 실패해 문서
     전체가 거부됐다. _parse_management_fee_date가 이미 쓰던 2번째 패턴과 동일하게
     년/월 표기도 시도한다.
-    """
-    m = re.search(rf"(\d{{4}}){_DATE_SEP}(\d{{2}})(?:{_DATE_SEP}\d{{2}})?", text)
+
+    반환의 3번째 값(day)은 셀에 일자가 없으면 None — 예전엔 일자를 캡처해도
+    버렸다(2026-08-19 실측: 탄소 캘린더가 항상 비어 보이는 원인 중 하나로 발견).
+    호출부(document_llm_router.py)가 day=None이면 말일로 issue_date를 채운다."""
+    m = re.search(rf"(\d{{4}}){_DATE_SEP}(\d{{2}})(?:{_DATE_SEP}(\d{{2}}))?", text)
     if m:
-        return int(m.group(1)), int(m.group(2))
-    m = re.search(r"(\d{4})\s*년\s*(\d{1,2})\s*월", text)
+        day = int(m.group(3)) if m.group(3) else None
+        return int(m.group(1)), int(m.group(2)), day
+    m = re.search(r"(\d{4})\s*년\s*(\d{1,2})\s*월(?:\s*(\d{1,2})\s*일)?", text)
     if m:
-        return int(m.group(1)), int(m.group(2))
+        day = int(m.group(3)) if m.group(3) else None
+        return int(m.group(1)), int(m.group(2)), day
     return None
 
 
@@ -343,12 +368,16 @@ def _parse_electric_bill(text: str) -> dict:
         _line_value(text, _label_pattern("청구금액") + f"(?:{_label_pattern('(원)')})?", field_label="청구금액"),
         field_label="청구금액",
     )
+    bill_year, bill_month = int(date_m.group(1)), int(date_m.group(2))
     result = {
         "supplier_name": "한국전력공사",
         "item_description": "전기요금 (산업용 을)",
         "supply_amount_krw": amount,
-        "year": int(date_m.group(1)),
-        "month": int(date_m.group(2)),
+        "year": bill_year,
+        "month": bill_month,
+        # 전기고지서는 "그 달 청구서"일 뿐 특정 일자가 없다 — 말일로 채운다
+        # (2026-08-19 사용자 확인, month_end_issue_date_str 참고).
+        "issue_date": month_end_issue_date_str(bill_year, bill_month),
     }
     if quantity is not None:
         result["quantity"] = quantity
@@ -391,12 +420,15 @@ def _parse_gas_bill(text: str) -> dict:
         _line_value(text, _label_pattern("청구금액") + f"(?:{_label_pattern('(원)')})?", field_label="청구금액"),
         field_label="청구금액",
     )
+    bill_year, bill_month = int(date_m.group(1)), int(date_m.group(2))
     result = {
         "supplier_name": "도시가스",
         "item_description": "도시가스",
         "supply_amount_krw": amount,
-        "year": int(date_m.group(1)),
-        "month": int(date_m.group(2)),
+        "year": bill_year,
+        "month": bill_month,
+        # 도시가스 고지서도 전기고지서와 동일하게 말일로 채운다.
+        "issue_date": month_end_issue_date_str(bill_year, bill_month),
     }
     if quantity is not None:
         result["quantity"] = quantity
@@ -417,7 +449,13 @@ def find_supplier_name_best_effort(text: str) -> str:
 def parse_tax_invoice_header(text: str) -> dict:
     """세금계산서의 날짜·공급자만 뽑는다(품목행과 분리 — db/document_ocr_extractor.py의
     표 재구성 경로가 품목행은 좌표 기반 parse_tax_invoice_table_rows()로 따로 뽑고
-    날짜·공급자는 이 함수로 공유해서 쓴다)."""
+    날짜·공급자는 이 함수로 공유해서 쓴다).
+
+    "작성일자"는 연·월·일까지 정규식이 이미 캡처하는데, 예전엔 year/month만 쓰고
+    day를 버려 issue_date가 항상 null로 남는 버그가 있었다(2026-08-19 실측 —
+    탄소 캘린더에 날짜별 이벤트가 하나도 안 뜨는 원인으로 발견). day도 결과에
+    담아 호출부(api/document_ingestion.py)가 Voucher.issue_date를 정확히
+    채울 수 있게 한다."""
     date_m = re.search(
         rf"(?:{_label_pattern('작성일자')}|{_label_pattern('발급일자')})"
         rf"\s*:\s*(\d{{4}}){_DATE_SEP}(\d{{2}}){_DATE_SEP}(\d{{2}})",
@@ -450,7 +488,7 @@ def parse_tax_invoice_header(text: str) -> dict:
         # 기대하는 "issue_date" 키가 OCR 업로드 경로에선 항상 None이라 Voucher.
         # issue_date가 통째로 비어 있었다(엑셀 업로드 경로는 parse_hometax_excel이
         # 별도로 issue_date를 채워 이 버그의 영향을 안 받았음).
-        "issue_date": f"{year:04d}-{month:02d}-{day:02d}",
+        "issue_date": issue_date_str(year, month, day),
     }
 
 
@@ -563,7 +601,10 @@ def parse_tax_invoice_date_table(rows: list[OcrRow]) -> tuple[int, int, int] | N
     "품목" 대신 "작성일자"/"발급일자"를 찾는다 — 같은 문서 안에 공급가액 컬럼을
     가진 표가 두 개(작성일자 요약행, 품목행) 있을 수 있어 헤더 판별 키워드를
     다르게 둔다(둘을 혼동하지 않음). 헤더나 값을 못 찾으면 None(예외 대신 —
-    호출부가 다른 경로를 계속 시도할 수 있게)."""
+    호출부가 다른 경로를 계속 시도할 수 있게).
+
+    반환은 (year, month, day) — 예전엔 day를 버리고 (year, month)만
+    반환해 issue_date가 항상 null로 남는 버그가 있었다(2026-08-19 실측)."""
     for i, row in enumerate(rows):
         date_col = next(
             (
