@@ -82,29 +82,42 @@ def compute_fuel_deltas(stats: list[FuelMonthStat]) -> list[dict]:
 # 연료별로 "무엇을 더 썼는지" 되묻는 톤을 다르게 — 편지가 사람이 쓴 것처럼
 # 읽히게 하는 최소한의 분기. 새 연료가 추가돼도 기본 문구로 자연 처리된다.
 _FUEL_HINT = {
-    "경유": "지게차를 더 쓰셨나요?",
-    "휘발유": "차량 운행이 늘었나요?",
-    "도시가스": "난방을 더 쓰셨나요?",
-    "LPG": "설비 가동이 늘었나요?",
-    "전기": "설비를 더 돌리셨나요?",
+    "경유": "지게차를 더 쓰셨나요",
+    "휘발유": "차량 운행이 늘었나요",
+    "도시가스": "난방을 더 쓰셨나요",
+    "LPG": "설비 가동이 늘었나요",
+    "전기": "설비를 더 돌리셨나요",
 }
 
 
-def _paragraph_for_fuel(stat: dict) -> str:
+def _clause_for_fuel(stat: dict) -> str:
+    """한 연료의 증감을 문단 안의 한 '절'로 표현(접속사 없이) — 여러 절을
+    build_briefing_paragraphs()가 쉼표·"그리고"로 자연스럽게 엮는다."""
     fuel = stat["fuel_type"]
     direction = stat["direction"]
 
     if direction == "new":
-        return f"이번 달 {fuel} 사용이 처음 확인됐어요."
+        return f"이번 달엔 {fuel} 사용이 새로 확인됐어요"
     if direction == "flat":
-        return f"{fuel} 사용량은 지난달과 비슷하게 유지됐어요."
+        return f"{fuel} 사용량은 지난달과 비슷하게 유지됐어요"
 
     pct = abs(stat["delta_pct"])
     if direction == "up":
-        hint = _FUEL_HINT.get(fuel, "")
-        hint_part = f" {hint}" if hint else ""
-        return f"이번 달 {fuel} 사용량이 지난달보다 {pct:.0f}% 늘었어요.{hint_part}"
-    return f"반가운 소식이에요 — {fuel} 사용량은 지난달보다 {pct:.0f}% 줄었어요."
+        hint = _FUEL_HINT.get(fuel)
+        hint_part = f", {hint}" if hint else ""
+        return f"{fuel} 사용량이 지난달보다 {pct:.0f}% 늘었어요{hint_part}"
+    return f"{fuel} 사용량은 지난달보다 {pct:.0f}% 줄었어요"
+
+
+def _join_clauses(clauses: list[str]) -> str:
+    """절 목록을 자연스러운 한국어 나열로 연결. 2개는 "A, 그리고 B", 3개
+    이상은 "A, B, 그리고 C"처럼 마지막 절 앞에만 "그리고"를 붙인다 —
+    "그리고"가 매 절마다 반복되지 않게."""
+    if len(clauses) == 1:
+        return clauses[0]
+    if len(clauses) == 2:
+        return f"{clauses[0]}. 그리고 {clauses[1]}"
+    return ". ".join(clauses[:-1]) + f". 그리고 {clauses[-1]}"
 
 
 def build_briefing_paragraphs(fuel_deltas: list[dict], *, has_previous_month: bool) -> list[str]:
@@ -113,6 +126,10 @@ def build_briefing_paragraphs(fuel_deltas: list[dict], *, has_previous_month: bo
     직전월 데이터 자체가 없는 첫 달은 비교 문장 대신 시작 안내로 대체한다 —
     없는 지난달과 억지로 비교해 %를 만들지 않는다(원칙: 없는 데이터를 있는
     것처럼 보여주지 않음, CLAUDE.md §6 실패 가시성).
+
+    연료가 여럿이면 "반가운 소식이에요 — A는 줄었어요. 반가운 소식이에요 —
+    B도 줄었어요."처럼 도입구가 반복되지 않도록, 절(clause)을 하나의 문단으로
+    자연스럽게 엮는다(_join_clauses).
     """
     if not has_previous_month:
         return [
@@ -124,10 +141,15 @@ def build_briefing_paragraphs(fuel_deltas: list[dict], *, has_previous_month: bo
     if not fuel_deltas:
         return ["이번 달엔 새로 확인된 전표가 없어요. 데이터가 들어오면 바로 알려드릴게요."]
 
-    paragraphs = [_paragraph_for_fuel(s) for s in fuel_deltas]
+    clauses = [_clause_for_fuel(s) for s in fuel_deltas]
+    has_down = any(s["direction"] == "down" for s in fuel_deltas)
+    has_up = any(s["direction"] == "up" for s in fuel_deltas)
 
-    closing_candidates = [s for s in fuel_deltas if s["direction"] == "down"]
-    if closing_candidates:
+    lead_in = "반가운 소식이에요 — " if (has_down and not has_up) else "이번 달 소식을 전해드릴게요. "
+    body = lead_in + _join_clauses(clauses) + "."
+    paragraphs = [body]
+
+    if has_down:
         paragraphs.append("이대로면 목표 달성에 한 걸음 더 가까워질 것 같아요.")
 
     paragraphs.append("아래에서 이번 달 숫자들을 자세히 볼 수 있어요. 궁금한 게 있으면 언제든 눌러서 확인해 보세요.")
@@ -140,18 +162,30 @@ _SYSTEM_PROMPT = """너는 "우디"라는 나무 캐릭터로, 대구·경북 �
 너에게는 이미 계산이 끝난 연료별 증감 통계가 주어진다. 너의 역할은 그 통계를 \
 읽고 사람이 쓴 것처럼 자연스럽고 따뜻한 편지 문단으로 표현하는 것뿐이다.
 
+분량 규칙(반드시 지킬 것):
+- 전체 2~3문단, 총 4~6문장을 넘기지 않는다. 사장님은 바쁘다 — 편지가 길면 안 읽는다.
+- 첫 문단(서론)은 인사 없이, 그날 가장 눈에 띄는 연료 소식으로 바로 시작하는 \
+한 문장이면 충분하다. "안녕하세요, 사장님. 지난 한 달 동안 고생 많으셨어요" \
+같은 인사말은 쓰지 않는다 — 매달 반복되면 지루하다.
+- 본론은 연료별 숫자를 담되, 연료마다 별도 문단을 쓰지 않고 한 문단 안에서 \
+자연스럽게 이어 말한다.
+- 마지막 문단(결론)은 "아래에서 자세히 볼 수 있다"는 한 문장으로 짧게 끝낸다. \
+"이렇게 하나씩 기록을 쌓아가다 보면..." 같은 여운을 남기는 마무리 문장을 \
+따로 덧붙이지 않는다.
+
 절대 규칙:
 - 주어진 숫자(this_month_co2e, last_month_co2e, delta_pct)를 그대로만 인용한다. \
 새로운 숫자를 계산하거나 어림잡아 만들어내지 않는다.
 - 주어지지 않은 연료·사실을 지어내지 않는다.
 - 존댓말(해요체)을 쓴다. 과장하거나 불안을 조성하지 않는다.
 - 사용량이 늘었으면(direction=up) 왜 늘었을지 가볍게 되물어도 좋다(예: 지게차를 \
-더 쓰셨는지, 난방을 더 썼는지 등 연료 특성에 맞게). 줄었으면(direction=down) \
-짧게 칭찬한다.
-- 마지막 문단은 "아래에서 자세히 볼 수 있다"는 취지로 자연스럽게 마무리한다.
+더 쓰셨는지, 난방을 더 썼는지 등 연료 특성에 맞게) — 단, 여러 연료가 늘었어도 \
+되묻는 질문은 편지 전체에서 최대 1번만 쓴다. 줄었으면(direction=down) 짧게 \
+칭찬하되, 연료마다 매번 칭찬하지 않는다.
 
 지난달 데이터가 아예 없는 첫 달(has_previous_month=false)이면 비교하지 말고 \
-"이제부터 함께 기록을 시작한다"는 취지로 짧게 안내한다."""
+"이제부터 함께 기록을 시작한다"는 취지로 짧게 안내한다(이때도 2문장을 넘기지 \
+않는다)."""
 
 _RESPONSE_SCHEMA = {
     "type": "OBJECT",
@@ -195,7 +229,11 @@ def generate_briefing_paragraphs_llm(fuel_deltas: list[dict], *, has_previous_mo
 
     prompt = _build_llm_input(fuel_deltas, has_previous_month=has_previous_month)
     try:
-        client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=10_000))
+        # 분량 규칙이 담긴 시스템 프롬프트가 길어 응답 생성이 10초 안팎으로
+        # 걸릴 때가 있다(실측 9.7초) — 10초 타임아웃은 경계선에서 실패하므로
+        # 여유를 둔다. 어차피 이 경로는 llm_cache로 결과가 재사용되니(매 요청
+        # 마다 다시 기다리지 않음) 느긋하게 기다려도 손해가 없다.
+        client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=25_000))
         resp = client.models.generate_content(
             model=MODEL,
             contents=prompt,
