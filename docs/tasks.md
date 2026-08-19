@@ -158,36 +158,49 @@ export async function getOwnerBriefing(companyId: number, year: number, month: n
   단, TestClient 통합 테스트(`GET /owner/{id}/calendar` 등 라우터 테스트)는
   기존 관례대로 `tests/` 루트의 owner 통합 테스트 파일에 추가.
 
-## 결정 필요 (착수 전 확인 필요)
+## 결정 필요 (구현 중 자연 해소됨)
 
-- [ ] **하단 탭바 소스 위치 확정** — 현재 4탭 하단바가 코드 어디에 정의돼
-  있는지(레이아웃 공통 컴포넌트인지, 각 페이지 개별 렌더인지) 확인 후 계획
-  갱신 필요. Figma는 5탭으로 이미 반영됐으나 코드 쪽 실제 파일은 미조사.
-- [ ] **홈 화면 "이상 신호→탄소 캘린더" 카드 이미지** — Figma에서 사용자가
-  직접 정리한 최종 카드 디자인을 구현 직전에 다시 확인.
-- [ ] 캘린더 이벤트가 하루에 4개 이상 몰릴 때 점 표시 상한(Figma는 최대 3개
-  가정) — 실데이터로 이보다 많은 날이 나오는지 사전 확인 필요(다건 전표
-  발행일이 겹치는 달 존재 가능성, 예: 세금계산서+전기고지서 같은 날 도착).
-- [ ] 브리핑 문장 템플릿의 문구 톤(존댓말 어미, 이모지 사용 여부 등) 최종
-  확정 — 이 문서의 예시 문장은 Figma 시안 그대로 가져온 초안.
+- [x] **하단 탭바 소스 위치 확정** — `web/components/OwnerBottomNav.tsx`
+  (lucide-react 아이콘 기반, `web/app/owner/layout.tsx`가 공통 렌더). 순서
+  홈→데이터 업로드→**탄소 캘린더**→탄소 리포트→맞춤 혜택으로 반영 완료.
+- [x] **홈 화면 카드 이미지** — 사용자가 Figma에서 직접 정리(도트 그리드).
+  코드에서는 캐릭터 이미지를 추후 직접 교체하기로 확인(현재 기존
+  `alert_icon.png` 임시 재사용, 주석으로 표시해둠).
+- [x] 하루 이벤트 과다 시 점 표시 상한 — 프론트에서 `events.slice(0, 3)`으로
+  최대 3개만 점 표시, 나머지는 하단 상세 리스트에서 전부 확인 가능하게 구현.
+- [x] 브리핑 문장 톤 — `db/owner_briefing.py`의 템플릿으로 확정(반말 아닌
+  해요체, 연료별 되묻기 힌트 포함). 실데이터로 렌더 확인 완료.
 
-## 진행 상태 — 착수 전 (Figma 시안만 완료)
+## 진행 상태 — 백엔드·프론트 구현 완료, 브라우저 실측 일부 남음
 
 - [x] Figma: 월간 AI 브리핑 화면(App 페이지, "⑧ 월간 AI 브리핑")
 - [x] Figma: 탄소 캘린더 화면(App 페이지, "⑨ 탄소 캘린더")
 - [x] Figma: 하단 탭바 5탭 반영 + 캘린더 아이콘 스타일 통일
 - [x] Figma: 홈 화면 기능 카드 "이상 신호"→"탄소 캘린더" 교체(사용자 직접 수정)
-- [ ] 백엔드: `db/owner_briefing.py` 신규(문장 조립 순수 함수)
-- [ ] 백엔드: `api/queries.py::get_calendar_events()`,
-  `get_monthly_briefing()` 신규
-- [ ] 백엔드: `api/routers/owner.py`에 `GET /calendar`, `GET /briefing`
+- [x] 백엔드: `db/owner_briefing.py` 신규(문장 조립 순수 함수)
+- [x] 백엔드: `api/queries.py::get_calendar_events()`,
+  `get_monthly_briefing_stats()` 신규 — 사장님 노출 필터
+  (`_owner_visible_classification_filter`, `get_classifications()`와 동일
+  기준) 적용
+- [x] 백엔드: `api/routers/owner.py`에 `GET /calendar`, `GET /briefing`
   엔드포인트 추가
-- [ ] 프론트: `web/lib/api.ts`에 타입·호출 함수 추가
-- [ ] 프론트: `web/app/owner/calendar/page.tsx` 신규
-- [ ] 프론트: `web/app/owner/briefing/page.tsx` 신규
-- [ ] 프론트: 홈 화면 기능 카드 링크 교체
-- [ ] 프론트: 하단 탭바에 "탄소 캘린더" 추가(소스 위치 확인 후)
-- [ ] 테스트: 문장 조립 단위 테스트, 캘린더/브리핑 쿼리 테스트, 라우터
-  통합 테스트
-- [ ] 브라우저 실측 확인: 캘린더 날짜 탭 → 상세 시트, 브리핑 이전/다음 달
-  네비게이션 동작 확인
+- [x] 프론트: `web/lib/api.ts`에 타입·호출 함수 추가
+- [x] 프론트: `web/app/owner/calendar/page.tsx` 신규
+- [x] 프론트: `web/app/owner/briefing/page.tsx` 신규
+- [x] 프론트: 홈 화면 기능 카드 링크 교체
+- [x] 프론트: 하단 탭바에 "탄소 캘린더" 추가
+- [x] 테스트: 문장 조립 단위 테스트 6건 + 캘린더/브리핑 라우터 통합 테스트
+  6건, 전체 527 passed(기존 무관 실패 2건 제외 — alembic 경로 마운트 누락,
+  기존 세금계산서 fixture manifest 불일치, 베이스 커밋에서도 동일하게 실패
+  확인함)
+- [x] tsc --noEmit·eslint 확인 — 베이스라인(13 errors) 대비 신규 에러 없음
+- [x] API 실측: 구미정밀(company_id=4) 실데이터로 `/calendar`,
+  `/briefing` 응답 확인 — 8월에 트레이스 이벤트 36건 정상 반환, 아직
+  사장님 전송 완료된 분류가 없어 voucher 이벤트·연료 통계는 0건(설계대로
+  HITL 대기/미전송 건이 필터링된 것 — 정상 동작)
+- [ ] 브라우저 실측: 실제 화면에서 캘린더 날짜 탭 → 상세 시트 펼침, 브리핑
+  이전/다음 달 네비게이션, 홈 화면 카드→캘린더 진입 흐름 육안 확인 필요
+  (curl로 200/데이터 확인까지만 했고, 브라우저 렌더링 자체는 미확인)
+- [ ] 데이터: 사장님 화면에 실제로 voucher 이벤트가 보이려면 담당자가 해당
+  기업 분류를 확정+전송해야 함 — 데모/시연 전 최소 1개 기업 최근 월에
+  전송 완료 데이터 준비 필요
