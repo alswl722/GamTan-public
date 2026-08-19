@@ -4,7 +4,8 @@
   - 캘린더: issue_date가 없는 전표는 결과에서 빠진다(정확한 날짜에 못 꽂음).
   - 캘린더: review_required(HITL 대기)나 미전송 confirmed 건은 사장님에게
     노출되지 않는다(get_classifications()와 동일 원칙).
-  - 캘린더: 전표와 트레이스가 날짜 오름차순으로 섞여 반환된다.
+  - 캘린더: 에이전트 트레이스(활동 로그)는 완전히 제외되고, 구매·탄소
+    배출 내역(전표 + emission_tco2e)만 날짜 오름차순으로 반환된다.
   - 브리핑: 지난달 데이터가 없으면 has_previous_month=False, 비교 없이
     시작 안내 문단만 온다.
   - 브리핑: 지난달 대비 증감이 실제 emission_co2e 합계 비율과 일치한다.
@@ -85,9 +86,8 @@ def test_calendar_excludes_voucher_without_issue_date(db, client):
     res = client.get(f"/owner/{cid}/calendar?year={YEAR}&month=7")
     assert res.status_code == 200
     events = res.json()["events"]
-    voucher_events = [e for e in events if e["entry_type"] == "voucher"]
-    assert len(voucher_events) == 1
-    assert voucher_events[0]["date"] == f"{YEAR}-07-12"
+    assert len(events) == 1
+    assert events[0]["date"] == f"{YEAR}-07-12"
 
 
 def test_calendar_hides_pending_and_unsent_classifications(db, client):
@@ -98,27 +98,58 @@ def test_calendar_hides_pending_and_unsent_classifications(db, client):
 
     res = client.get(f"/owner/{cid}/calendar?year={YEAR}&month=7")
     events = res.json()["events"]
-    voucher_events = [e for e in events if e["entry_type"] == "voucher"]
-    assert len(voucher_events) == 1
-    assert voucher_events[0]["date"] == f"{YEAR}-07-10"
+    assert len(events) == 1
+    assert events[0]["date"] == f"{YEAR}-07-10"
 
 
-def test_calendar_mixes_voucher_and_trace_sorted_by_date(db, client):
+def test_calendar_excludes_trace_logs():
+    """사장님 캘린더는 구매·탄소 배출 내역만 보여준다 — 에이전트 활동 로그
+    (결손 감지·이상치 검증 등)는 완전히 제외한다(2026-08-19 사용자 피드백:
+    "이건 그냥 실행 이력을 가져온거잖아"). trace_logs가 아무리 쌓여 있어도
+    응답에 섞이지 않는지 확인."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session as SASession
+
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    with SASession(engine) as session:
+        c = Company(name="구미정밀", industry_code="C251", industry_name="구조용 금속제품 제조")
+        session.add(c)
+        session.commit()
+        _add_voucher(session, c.id, month=7, day=15)
+        session.add(TraceLog(
+            company_id=c.id, session_id="s1", step_type="관찰", tool_name="check_coverage_gaps",
+            message="3~5월 가스 결손 발견",
+        ))
+        session.commit()
+
+        from api.queries import get_calendar_events
+        events = get_calendar_events(session, c.id, YEAR, 7)
+
+    assert len(events) == 1  # trace 1건은 결과에서 완전히 빠짐, voucher 1건만
+    assert all("step_type" not in e for e in events)
+    assert all("message" not in e for e in events)
+
+
+def test_calendar_events_sorted_by_date(db, client):
     session, cid = db
+    _add_voucher(session, cid, month=7, day=20)
+    _add_voucher(session, cid, month=7, day=3)
     _add_voucher(session, cid, month=7, day=15)
-    session.add(TraceLog(
-        company_id=cid, session_id="s1", step_type="관찰", tool_name="check_coverage_gaps",
-        message="3~5월 가스 결손 발견",
-    ))
-    session.commit()
-    # created_at은 default=now라 오늘 날짜로 찍힘 — 같은 달 비교를 위해
-    # 트레이스도 이번 함수 호출 시점 기준 실제 오늘이 YEAR-07이 아닐 수 있으니
-    # 전표만 있는 경우로 순서를 검증(트레이스 날짜는 조회 대상 밖일 수 있음).
+
     res = client.get(f"/owner/{cid}/calendar?year={YEAR}&month=7")
     assert res.status_code == 200
-    events = res.json()["events"]
-    dates = [e["date"] for e in events]
+    dates = [e["date"] for e in res.json()["events"]]
     assert dates == sorted(dates)
+
+
+def test_calendar_includes_emission_tco2e(db, client):
+    session, cid = db
+    _add_voucher(session, cid, month=7, day=12, co2e=2360.0)  # kg → 2.36 tCO2e
+
+    res = client.get(f"/owner/{cid}/calendar?year={YEAR}&month=7")
+    events = res.json()["events"]
+    assert events[0]["emission_tco2e"] == 2.36
 
 
 def test_briefing_first_month_has_no_comparison(db, client):

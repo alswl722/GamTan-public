@@ -10,9 +10,12 @@ import {
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-// 탄소 캘린더 — Figma "⑨ 탄소 캘린더" 시안. 월 그리드에 그 달 이벤트를
-// 날짜별 점으로 표시하고, 날짜를 탭하면 아래에 그날 이벤트가 상세히 펼쳐진다.
-// 조회 전용 — 여기서 데이터를 수정하지 않는다(확정/반려는 여전히 담당자 HITL 몫).
+// 탄소 캘린더 — Figma "⑨ 탄소 캘린더" 시안. 월 그리드에 그 달 구매·탄소 배출
+// 내역을 날짜별 점으로 표시하고, 날짜를 탭하면 아래에 그날 전표가 상세히
+// 펼쳐진다. 조회 전용 — 여기서 데이터를 수정하지 않는다(확정/반려는 여전히
+// 담당자 HITL 몫). 에이전트 활동 로그(트레이스)는 여기 안 보여준다 — 사장님이
+// 보고 싶은 건 "이날 뭘 샀고 탄소가 얼마나 나왔는지"이지 AI 판단 과정이
+// 아니다(2026-08-19 사용자 피드백).
 
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
 
@@ -30,7 +33,6 @@ function buildWeeks(year: number, month: number): (number | null)[][] {
 }
 
 function eventDotColor(e: CalendarEvent): string {
-  if (e.entry_type === "trace") return "bg-brand";
   if (e.scope === 1) return "bg-scope1";
   if (e.scope === 2) return "bg-scope2";
   return "bg-muted";
@@ -125,10 +127,13 @@ export default function CarbonCalendarPage() {
         <p className="mt-4 text-[13px] text-faint">불러오는 중…</p>
       ) : (
         <div className="mt-4 flex flex-col gap-4">
-          {/* 이번 달 브리핑 축약 카드 */}
+          {/* 이번 달 브리핑 축약 카드 — btn-cta는 호버 시 배경을 brand-ink로
+              바꾸는데, 이 카드는 글자색이 이미 brand-ink라 호버하면 글자가
+              배경에 파묻혀 안 보였다(2026-08-19 사용자 피드백). 연한 배경
+              카드는 옅은 밝기 변화만 주는 별도 호버로 처리 */}
           <Link
             href="/owner/briefing"
-            className="btn-cta flex items-center gap-2.5 rounded-2xl bg-brand-soft px-3.5 py-3 transition-transform"
+            className="flex items-center gap-2.5 rounded-2xl bg-brand-soft px-3.5 py-3 transition-opacity hover:opacity-80"
           >
             <span className="text-2xl leading-none">🌳</span>
             <span className="flex-1">
@@ -228,10 +233,6 @@ export default function CarbonCalendarPage() {
                 <span className="h-1.5 w-1.5 rounded-full bg-scope2" />
                 전기(Scope2)
               </span>
-              <span className="flex items-center gap-1 text-[10px] font-medium text-muted">
-                <span className="h-1.5 w-1.5 rounded-full bg-brand" />
-                AI 측정 활동
-              </span>
             </div>
           </div>
 
@@ -247,7 +248,7 @@ export default function CarbonCalendarPage() {
                 </span>
               </div>
               {selectedEvents.length === 0 ? (
-                <p className="px-5 pb-4 text-[12.5px] text-faint">이날은 기록된 활동이 없어요.</p>
+                <p className="px-5 pb-4 text-[12.5px] text-faint">이날은 구매·측정 내역이 없어요.</p>
               ) : (
                 selectedEvents.map((e, i) => (
                   <div
@@ -259,29 +260,25 @@ export default function CarbonCalendarPage() {
                   >
                     <span className={cn("mt-1.5 h-2 w-2 shrink-0 rounded-full", eventDotColor(e))} />
                     <div className="min-w-0 flex-1">
-                      {e.entry_type === "voucher" ? (
-                        <>
-                          <span className="mb-1 inline-block rounded bg-bg px-1.5 py-0.5 text-[9px] font-bold text-muted">
-                            {e.source === "kepco" ? "전기고지서" : "세금계산서"}
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="inline-block rounded bg-bg px-1.5 py-0.5 text-[9px] font-bold text-muted">
+                          {e.source === "kepco" ? "전기고지서" : "세금계산서"}
+                        </span>
+                        {e.emission_tco2e != null && (
+                          <span className="text-[11px] font-bold text-brand-ink">
+                            {e.emission_tco2e.toFixed(3)} tCO2e
                           </span>
-                          <p className="text-[13px] font-bold text-ink">
-                            {e.item_description ?? "전표"}
-                            {e.supply_amount_krw != null &&
-                              ` · ${e.supply_amount_krw.toLocaleString("ko-KR")}원`}
-                          </p>
-                          {e.fuel_type && (
-                            <p className="text-[11px] text-faint">
-                              Scope {e.scope} · {e.fuel_type}
-                            </p>
-                          )}
-                        </>
-                      ) : (
-                        <>
-                          <span className="mb-1 inline-block rounded bg-bg px-1.5 py-0.5 text-[9px] font-bold text-muted">
-                            AI 활동 · {e.step_type}
-                          </span>
-                          <p className="text-[13px] font-bold text-ink">{e.message}</p>
-                        </>
+                        )}
+                      </div>
+                      <p className="mt-1 text-[13px] font-bold text-ink">
+                        {e.item_description ?? "전표"}
+                        {e.supply_amount_krw != null &&
+                          ` · ${e.supply_amount_krw.toLocaleString("ko-KR")}원`}
+                      </p>
+                      {e.fuel_type && (
+                        <p className="text-[11px] text-faint">
+                          Scope {e.scope} · {e.fuel_type}
+                        </p>
                       )}
                     </div>
                   </div>

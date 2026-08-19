@@ -520,10 +520,13 @@ export function cancelCompanyGoal(
   return apiPost(`/owner/${companyId}/goal/${goalId}/cancel`);
 }
 
-// GET /owner/{company_id}/calendar — 탄소 캘린더. 그 달의 날짜별 이벤트
-// (전표 + 에이전트 활동)를 반환. 사장님에게 노출 가능한 분류만 포함
-// (담당자 확정·전송 완료 건 — HITL 대기 중인 건은 안 보임).
-export interface CalendarVoucherEvent {
+// GET /owner/{company_id}/calendar — 탄소 캘린더. 그 달의 날짜별 구매·탄소
+// 배출 내역(전표 기준)을 반환. 사장님에게 노출 가능한 분류만 포함
+// (담당자 확정·전송 완료 건 — HITL 대기 중인 건은 안 보임). 에이전트 트레이스
+// (결손 감지·이상치 검증 등 내부 판단 로그)는 포함하지 않는다 — 사장님이
+// 보고 싶은 건 "이날 뭘 샀고 탄소가 얼마나 나왔는지"이지 AI 활동 일지가
+// 아니다.
+export interface CalendarEvent {
   date: string; // YYYY-MM-DD
   entry_type: "voucher";
   voucher_id: number;
@@ -531,16 +534,9 @@ export interface CalendarVoucherEvent {
   fuel_type: string | null;
   item_description: string | null;
   supply_amount_krw: number | null;
+  emission_tco2e: number | null;
   source: string;
 }
-export interface CalendarTraceEvent {
-  date: string; // YYYY-MM-DD
-  entry_type: "trace";
-  step_type: string;
-  tool_name: string | null;
-  message: string;
-}
-export type CalendarEvent = CalendarVoucherEvent | CalendarTraceEvent;
 
 export interface CalendarResponse {
   year: number;

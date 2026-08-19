@@ -506,14 +506,19 @@ def _owner_visible_classification_filter():
 
 
 def get_calendar_events(session: Session, company_id: int, year: int, month: int) -> list[dict]:
-    """탄소 캘린더용 — 그 달의 날짜별 이벤트(전표 + 에이전트 트레이스).
+    """탄소 캘린더용 — 그 달의 날짜별 구매·탄소 배출 내역(전표 기준).
 
     전표는 issue_date가 있고(nullable — 없으면 정확한 날짜에 못 꽂으므로 제외,
     실패 가시성 원칙) 사장님에게 노출 가능한 분류(_owner_visible_classification_filter)가
-    붙은 건만 반환한다. 트레이스는 별도 노출 제한이 없다 — trace_logs는 애초에
-    HITL 여부와 무관한 에이전트 활동 일지라 confirmed/pending 구분이 없다.
+    붙은 건만 반환한다.
 
-    정렬: 날짜 오름차순, 같은 날짜 안에서는 voucher가 trace보다 앞.
+    에이전트 트레이스(결손 감지·이상치 검증 등 내부 판단 로그)는 여기 포함하지
+    않는다 — 사장님이 캘린더에서 보고 싶은 건 "이날 뭘 샀고 탄소가 얼마나
+    나왔는지"이지 에이전트가 어떤 판단을 했는지가 아니다(2026-08-19 사용자
+    피드백). 트레이스는 여전히 관리자 실행 이력 탭(admin)에서 확인 가능 —
+    이 함수의 스코프에서만 뺀 것이지 데이터 자체를 지운 게 아니다.
+
+    정렬: 날짜 오름차순.
     """
     voucher_rows = session.execute(
         select(Voucher, Classification)
@@ -526,14 +531,6 @@ def get_calendar_events(session: Session, company_id: int, year: int, month: int
         .order_by(Voucher.issue_date)
     ).all()
 
-    trace_rows = session.execute(
-        select(TraceLog)
-        .where(TraceLog.company_id == company_id)
-        .where(func.extract("year", TraceLog.created_at) == year)
-        .where(func.extract("month", TraceLog.created_at) == month)
-        .order_by(TraceLog.created_at)
-    ).scalars().all()
-
     events = []
     for v, c in voucher_rows:
         events.append({
@@ -544,18 +541,13 @@ def get_calendar_events(session: Session, company_id: int, year: int, month: int
             "fuel_type": c.fuel_type,
             "item_description": v.item_description,
             "supply_amount_krw": int(v.supply_amount_krw) if v.supply_amount_krw is not None else None,
+            # emission_co2e는 kg 단위 저장 — 표시 단위(tCO2e)로 환산(모델 주석 관례,
+            # api/queries.py::get_monthly_briefing_stats와 동일)
+            "emission_tco2e": round(c.emission_co2e / 1000, 3) if c.emission_co2e is not None else None,
             "source": v.source,
         })
-    for t in trace_rows:
-        events.append({
-            "date": t.created_at.date().isoformat(),
-            "entry_type": "trace",
-            "step_type": t.step_type,
-            "tool_name": t.tool_name,
-            "message": t.message,
-        })
 
-    events.sort(key=lambda e: (e["date"], e["entry_type"] != "voucher"))
+    events.sort(key=lambda e: e["date"])
     return events
 
 
