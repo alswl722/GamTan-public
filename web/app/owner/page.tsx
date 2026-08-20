@@ -287,7 +287,7 @@ export default function OwnerHomePage() {
                 height={card.height}
                 className={`pointer-events-none absolute bottom-4 right-4 ${card.imgClassName}`}
               />
-            ) : card.imageVariant === "center" ? (
+            ) : (
               <Image
                 src={card.image}
                 alt=""
@@ -295,16 +295,6 @@ export default function OwnerHomePage() {
                 height={card.height}
                 className={`pointer-events-none absolute bottom-2 left-1/2 -translate-x-1/2 ${card.imgClassName}`}
               />
-            ) : (
-              <div className="flex justify-end">
-                <Image
-                  src={card.image}
-                  alt=""
-                  width={card.width}
-                  height={card.height}
-                  className={`${card.imgClassName} shrink-0`}
-                />
-              </div>
             )}
           </Link>
         ))}
