@@ -1,0 +1,490 @@
+# 소상공인·그린 서플라이 네트워크 확장 설계문서
+
+```text
+Status: draft (브레인스토밍 확정 전 — 설계 초안)
+Last updated: 2026-08-18
+Superseded by: 없음
+Scope: 대상을 "경북 영세기업"에서 "영세·중소·중견기업 + 소상공인"으로 넓히고,
+       iM샵/탄소중립포인트/그린 서플라이 네트워크를 감탄에 연결하기 위한
+       데이터·스키마·API·화면 설계
+```
+
+> 이 문서는 `docs/borrower-pcaf-data-plan.md`와 같은 형식의 설계문서다. 다만 그 문서가
+> "authoritative"(확정 정본)인 것과 달리, 이 문서는 **아직 확정되지 않은 브레인스토밍을
+> 구현 가능한 설계로 옮겨보는 초안**이다 — §14 열린 질문이 풀리기 전까지는 실행 계획이 아니라
+> 검토 자료로 취급한다.
+
+---
+
+## 1. 문서 목적
+
+사용자가 공유한 브레인스토밍(대상 확장 + iM샵 연계 + 탄소중립포인트 자동 판별·신청 +
+그린 서플라이 네트워크)을 감탄의 기존 아키텍처 위에 얹으려면 어떤 데이터 모델·API·화면이
+필요한지 정의한다. 이 문서는 두 개의 독립적인 신규 트랙을 다룬다.
+
+1. **소상공인 트랙** — 전기·수도·가스 감축 실적을 탄소중립포인트 신청으로 자동 연결
+2. **그린 서플라이 네트워크** — 감탄이 모은 기업들을 서로의 구매·공급 상대로 매칭
+
+두 트랙은 배지 시스템으로 느슨하게 연결되지만(§6-2), 독립적으로 켜고 끌 수 있도록 설계한다.
+
+---
+
+## 2. 배경과 현재 문제
+
+감탄은 지금 제조업(영세·중소기업)의 Scope 1·2 배출량 산정에만 집중돼 있다. 브레인스토밍이
+제안하는 확장은 다음 세 가지를 전제하는데, 실제 코드를 확인한 결과 **세 전제 모두 지금 스키마에
+자리가 없다.**
+
+| 전제 | 필요한 것 | 실제 코드 확인 결과 |
+|---|---|---|
+| "전기고지서 계약종별로 소상공인을 자동 판별한다" | 계약종별이 구조화된 필드여야 함 | `db/models.py`의 Company·Voucher·SourceDocument·Classification 어디에도 없음. "산업용 을" 같은 문구는 `Voucher.item_description` 자유텍스트에만 존재 |
+| "전기·수도·가스 감축률로 탄소중립포인트 자격을 계산한다" | 수도 사용량 데이터가 있어야 함 | `Company.fuel_types_json`엔 diesel/gasoline/city_gas/lpg/electricity뿐, water 개념 자체가 없음 |
+| "기업들을 구매·공급 상대로 매칭한다" | 공급망 프로필·매칭 테이블이 있어야 함 | 관련 테이블 전무. `RateApprovalRequest.matched_product_name`은 우대금리 상품 매칭이라 무관 |
+
+즉 이 확장은 "데이터를 더 만드는" 문제가 아니라 **먼저 스키마를 확장하고, 그 위에 데이터를
+채우는** 순서로 가야 한다. 아래 §7이 그 스키마 설계다.
+
+---
+
+## 3. 제품 범위 결정
+
+### 3.1 이번 설계가 다루는 범위
+
+- 전기고지서에서 계약종별을 추출해 소상공인/제조업을 자동 구분
+- 상수도 요금고지서 신규 문서유형 추가
+- 기준년도 대비 감축률 계산 및 탄소중립포인트 자격 판정
+- 탄소중립포인트 신청서 초안 자동 생성(마이데이터 KYB 필드 재사용)
+- 공급/구매 프로필 자기등록과 배지 시스템
+- 지역·카테고리 기반 매칭(순위 없는 후보 목록 + 추천 사유 태그)
+- iM뱅크를 구매 전용 참여자로 등록하는 구조
+
+### 3.2 이번 설계가 다루지 않는 범위
+
+- iM샵 앱 자체 연동(대구로페이 충전 API 등) — 감탄 쪽 데이터/백엔드 설계가 아니라 iM샵
+  쪽 마케팅·정산 시스템의 몫이라 이 문서 범위 밖
+- 대구시 탄소중립포인트 API의 실제 신청 접수 연동 — 신청서 "초안 생성"까지만, 접수는
+  사장님이 직접 제출(§3.3 참고)
+- 그린 서플라이 네트워크의 실거래(결제·계약) 기능 — 매칭 후보 노출까지만, 거래는 당사자 간
+- 대구시 정책 제안(지역화폐 전환 등)의 실제 추진 — 데이터/제품 설계와 무관한 대외 협상 영역
+
+### 3.3 안전한 표현 원칙 (그린워싱·과장 방지)
+
+브레인스토밍 자체에 달린 검토 코멘트를 설계 원칙으로 승격한다.
+
+```text
+- "친환경 인증 업체" (X) → "감탄 확인 배지 보유 업체" (O)
+- "iM뱅크가 감탄 인증 업체를 우선 구매한다" (X)
+  → "iM뱅크 지점 운영 수요를 등록하고, 조건에 맞는 사업자를 추천받는 후보풀로 활용한다" (O)
+- 매칭 결과는 순위를 매기지 않는다 — "추천 사유 태그"로만 설명한다 (원칙: 감시·채점 금지)
+- 배지는 전부 이미 계산 중인 값의 재사용이어야 한다 — 자기신고만으로 배지를 주지 않는다
+- 그린 서플라이 Phase 2(데모용 확장 카테고리)는 실제 파이프라인이 아니라는 사실을
+  화면에 명시한다 — "실제 구현은 Phase 1, 아래는 확장 시나리오 예시입니다" 식으로
+```
+
+---
+
+## 4. 목표 아키텍처
+
+```text
+[신규 입력]
+전기고지서(계약종별 추출) / 상수도 요금고지서(신규) / 공급 프로필 자기등록(신규 폼)
+        ↓
+[판별 계층 — 신규]
+계약종별 → business_scale_hint(소상공인/제조업 추정)
+연도별 사용량(전기+수도+가스) → 기준년도 대비 감축률 계산
+        ↓
+[자격 판정 계층 — 신규]
+감축률 ≥ 5% → 탄소중립포인트 자격 있음 → 신청서 초안 자동 생성
+              (사업자 정보는 기존 마이데이터 KYB 5종에서 재사용)
+        ↓
+[배지 계층 — 신규, 기존 데이터 재사용 다수]
+데이터 제출 배지(기존 문서제출 이력) / 품질우수 배지(기존 PCAF 등급) /
+탄소중립포인트 배지(신규) / 감축성과 배지(신규 YoY) / K택소노미 후보 배지(기존)
+        ↓
+[매칭 계층 — 신규]
+구매 프로필(Phase1: 기존 supplier_name 재사용 / 데모: mock 확장 카테고리)
+× 공급 프로필(자기등록) × 지역 하드필터(기존 Company.region 재사용)
+→ 순위 없는 후보 목록 + 추천 사유 태그
+        ↓
+[전달 계층]
+사장님 화면 GovSupportCard(신규) / SupplyNetworkCard ×2(신규)
+```
+
+기존 계층(홈택스 전표·전기고지서 파싱 → Scope 1·2 계산 → PCAF)은 건드리지 않는다 — 이번
+확장은 그 위에 병렬로 얹는 신규 계층이다.
+
+---
+
+## 5. 핵심 용어 정리
+
+| 용어 | 정의 | 이번에 신규 정의? |
+|---|---|---|
+| 영세기업 | 기존 감탄 코어 대상(제조업, Scope 1·2/PCAF) | 아니오(기존) |
+| 중소기업(중견) | 은행 상품(녹색여신/우대금리) 연계 대상 | 아니오(기존 K택소노미·RateProduct 로직 재사용) |
+| 소상공인 | 전기고지서 계약종별이 산업용이 아닌(일반용/주택용) 사업체 — **자동 판별**, 별도 라벨 저장 안 함 | 예 |
+| 구매 프로필 | 이 사업체가 정기적으로 사는 것 | 예 |
+| 공급 프로필 | 이 사업체가 파는 것(자기등록 필수) | 예 |
+| 감탄 확인 배지 | "친환경 인증"이 아니라 감탄이 보유한 데이터 기반 확인 표시(5종, §6-2) | 예 |
+
+**소상공인은 Company 테이블에 라벨로 저장하지 않는다** — 브레인스토밍 원문의 설계 의도
+("사업 규모 라벨이 아니라 계약종별로 코드가 자동 판별")를 그대로 따른다. 대신 최근
+전기고지서의 계약종별을 조회 시점에 해석해서 화면 분기에 쓴다. 이렇게 하면 한 사업체가
+사업장을 늘려 계약종별이 바뀌어도 마이그레이션 없이 자동으로 갱신된다.
+
+---
+
+## 6. 소상공인 트랙 설계
+
+### 6.1 판별 로직
+
+```text
+IF 최근 전기고지서의 계약종별 IN (산업용, 산업용(갑), 산업용(을)):
+    business_scale_hint = "제조업/산업체"
+ELIF 계약종별 IN (일반용, 일반용(갑), 일반용(을), 주택용):
+    business_scale_hint = "소상공인/상업시설"
+ELSE:
+    business_scale_hint = "미확인" → 계약종별 재확인 요청(HITL)
+```
+
+라벨은 저장하지 않고 조회마다 계산한다(§5). 계약종별 원문과 정규화값은 §7-1에 정의한
+`contract_type` / `contract_type_class` 컬럼에 저장한다.
+
+### 6.2 자격 판정 로직
+
+```text
+reduction_rate = (baseline_year_usage - target_year_usage) / baseline_year_usage
+
+IF business_scale_hint == "소상공인/상업시설" AND reduction_rate >= 0.05:
+    eligible = True
+ELSE:
+    eligible = False
+```
+
+브레인스토밍이 명시한 제약을 그대로 반영한다: **산업용 전기를 쓰는 제조공장은 탄소중립포인트
+에너지분야 신청 대상에서 원천 제외**된다(가정용·상업용 전기만 대상). 따라서 이 판정은
+`business_scale_hint == "소상공인/상업시설"`일 때만 수행하고, 제조업 기업에는 아예 노출하지
+않는다.
+
+### 6.3 신청서 초안 자동 생성
+
+마이데이터 KYB 5종(§0 확인 완료: 사업자등록증명·부가세과표증명·표준재무제표증명·
+중소기업확인서·전기요금납부내역) 중 사업자번호·주소·담당자 정보를 재사용한다. **실제
+서식(hwp 2종)의 필드 목록은 아직 확인 못 했다** — §14-1 열린 질문. 잠정 매핑안:
+
+```text
+서식 예상 항목          →  출처
+사업자명/대표자          →  마이데이터 사업자등록증명 (기존)
+사업자등록번호            →  마이데이터 사업자등록증명 (기존)
+사업장 주소              →  마이데이터 사업자등록증명 (기존)
+담당자 연락처             →  Company 또는 InstitutionBorrower (기존, 확인 필요)
+기준년도 사용량           →  신규 계산값(§6.2)
+감축년도 사용량           →  신규 계산값(§6.2)
+감축률                  →  신규 계산값(§6.2)
+계좌정보                →  마이데이터에 없음 — 사장님 직접 입력 필요(잔여 필드)
+```
+
+가입은 1회성이라 반복 계산 기능이 아니라 **온보딩 보조 기능**으로 설계한다(§9 API도 그렇게
+구성).
+
+---
+
+## 7. 데이터 모델 변경
+
+### 7.1 `source_documents` 보완 — 계약종별
+
+```text
+contract_type         String(50), nullable   -- 원문(예: "산업용(을) 고압A")
+contract_type_class   String(20), nullable   -- 정규화값: industrial | commercial | residential | unknown
+```
+
+전기고지서 파싱 단계(`db/document_extraction.py` 계열)에서 추출·정규화해 채운다. 기존
+`electric_bill` document_type에만 해당.
+
+### 7.2 `water_bills` 신규
+
+```text
+id
+company_id
+source_document_id       FK → source_documents
+provider                 지자체 상수도사업본부명 (예: 대구광역시상수도사업본부)
+customer_number
+site_addr
+period_start / period_end
+usage_amount_m3          당월 사용량
+prev_usage_amount_m3
+base_fee_krw
+usage_fee_krw
+sewage_fee_krw            하수도요금
+water_utilization_fee_krw 물이용부담금
+billed_amount_krw
+created_at
+```
+
+`document_type` enum(§0 기준 `tax_invoice`/`electric_bill`/`gas_bill` 3종)에 `water_bill`
+추가가 선행돼야 한다. **실제 고지서 서식 미검증** — §14-2.
+
+### 7.3 `carbon_neutral_point_applications` 신규
+
+```text
+id
+company_id
+application_type        business | household   -- 이번 범위는 business만
+baseline_year
+target_year
+baseline_usage_json      {"electricity_kwh": n, "water_m3": n, "city_gas_m3": n}
+target_usage_json        위와 동일 구조
+reduction_rate_pct
+eligible                 bool
+status                   draft | submitted | approved | rejected
+draft_document_url       자동 생성된 신청서 초안 파일 경로
+created_at
+```
+
+`status`는 감탄이 추적하지 않는 대구시 승인 결과까지 포함한다 — 실제로는 `draft`까지만
+감탄이 책임지고, `submitted` 이후는 사장님이 직접 갱신하는 수동 필드로 시작한다(§3.2 범위
+제한과 일치).
+
+### 7.4 `carbon_neutral_point_enrollments` 신규
+
+```text
+id
+company_id
+enrolled                 bool
+enrolled_at
+point_type                cash | green_card_point | local_currency(비전 단계, §12 참고)
+source                    self_reported | api_confirmed   -- 대구시 API 연동 전까지는 self_reported만
+```
+
+"탄소중립포인트 참여 배지"(§6-2 참고표)의 근거 테이블.
+
+### 7.5 `supply_profiles` 신규 (공급 프로필)
+
+```text
+id
+company_id
+category_raw              자기소개 자유텍스트
+category_normalized        LLM 정규화 표준 카테고리 (printing | catering | cleaning |
+                           parts_manufacturing | office_supplies | packaging | ... )
+description
+badges_json                {
+                              "data_submitted": bool,
+                              "quality_grade": "PCAF 등급 재사용 또는 null",
+                              "carbon_point_enrolled": bool,
+                              "reduction_confirmed": bool,
+                              "k_taxonomy_candidate": bool
+                            }
+created_at
+updated_at
+```
+
+배지 5개 중 3개(`quality_grade`, `reduction_confirmed`, `k_taxonomy_candidate`)는 기존
+PCAF·YoY(§7.3)·k_taxonomy_candidate 필드를 조회해 채우는 **파생값**이며 별도 저장 없이
+API 응답에서 합성해도 된다 — 저장은 캐시 목적일 때만.
+
+### 7.6 `purchase_profiles` 신규 (구매 프로필)
+
+```text
+id
+company_id
+category                  표준 카테고리(§7.5와 동일 체계)
+source                    auto_supplier_name | manual_mock | mydata_expanded(미래)
+supplier_name_ref          Phase1 자동추출 시 원천 상호명(자유텍스트 — 아직 공급자
+                           마스터 테이블이 없어 FK 아님)
+created_at
+```
+
+Phase 1은 `source = auto_supplier_name`으로 기존 `Voucher.supplier_name`을 배치 작업으로
+읽어 채운다(§9 API 불필요, ETL 성격). 데모용 확장 카테고리는 `source = manual_mock`으로
+명확히 구분해 화면에 "예시 데이터" 표시가 가능하게 한다(§3.3 원칙).
+
+### 7.7 `supply_matches` 신규 (매칭 결과)
+
+```text
+id
+purchase_profile_id       FK → purchase_profiles
+supply_profile_id         FK → supply_profiles
+match_reason_tags_json     ["같은 지역", "카테고리 일치", "감탄 데이터 제출 완료"]
+created_at
+```
+
+점수·순위 컬럼을 의도적으로 두지 않는다(§3.3).
+
+---
+
+## 8. 매칭 로직
+
+```text
+[구매 프로필] 카테고리 + 회사의 region
+   → region 하드 필터 먼저 적용 (기존 Company.region 재사용, 유사도 계산 없이 코드로 확정 배제)
+   → 남은 후보 중 category 일치 (표준 카테고리가 유한하므로 임베딩 유사도 대신 단순 코드
+     매칭 — 더 안전하고 설명 가능함)
+   → 순위 없이 조건에 맞는 후보 목록 반환 + match_reason_tags_json 생성
+```
+
+`match_reason_tags_json`은 매칭 성립 조건을 그대로 사람이 읽는 문장으로 나열한 것이라
+계산이 아니라 조건 나열이다 — LLM 개입 불필요, 결정론적 코드로 충분.
+
+---
+
+## 9. API 변경
+
+### 9.1 소상공인 트랙
+
+```text
+GET  /owner/{company_id}/carbon-point/eligibility
+     → business_scale_hint, reduction_rate_pct, eligible, missing_data(수도 데이터 없음 등)
+
+POST /owner/{company_id}/carbon-point/applications
+     → 신청서 초안 생성(§6.3), draft_document_url 반환
+
+GET  /owner/{company_id}/carbon-point/applications/{id}
+PATCH /owner/{company_id}/carbon-point/applications/{id}
+     → status를 submitted/approved/rejected로 사장님이 직접 갱신(§7.3)
+```
+
+### 9.2 그린 서플라이 네트워크
+
+```text
+POST /owner/{company_id}/supply-network/supply-profile
+     → 공급 프로필 자기등록(§7.5)
+
+GET  /owner/{company_id}/supply-network/purchase-matches
+     → "우리가 살 수 있는 곳" (내 구매 카테고리 → 공급 프로필 후보)
+
+GET  /owner/{company_id}/supply-network/supply-matches
+     → "우리를 필요로 하는 곳" (내 공급 프로필 → 구매 수요 후보)
+```
+
+두 GET 모두 §8 매칭 로직을 그대로 태우고, `match_reason_tags_json`을 포함해 반환한다.
+
+---
+
+## 10. 화면 변경
+
+### 10.1 `GovSupportCard` 신규
+
+`RateProductCard`/`KTaxonomyCard`와 동일한 자기완결형 패턴(`{ companyId }` props만 받고
+내부에서 자체 fetch)으로 신규 제작한다. `/owner/{company_id}/carbon-point/eligibility`를
+호출해 자격 여부·신청서 초안 생성 버튼을 노출한다. 제조업 기업(business_scale_hint =
+"제조업/산업체")에는 카드 자체를 숨긴다.
+
+### 10.2 `SupplyNetworkCard` ×2 신규
+
+기존 `benefits` 페이지의 자기완결형 카드 패턴을 그대로 따른다. 두 방향이라 카드도 둘로
+나눈다(§8):
+
+- "우리가 살 수 있는 곳" — `purchase-matches` 조회
+- "우리를 필요로 하는 곳" — `supply-matches` 조회
+
+공급 프로필이 아직 없는 기업에는 "공급 프로필 등록하기" 유도만 노출.
+
+---
+
+## 11. 파일별 예상 변경
+
+### 백엔드
+
+```text
+db/models.py                        — water_bills, carbon_neutral_point_applications,
+                                       carbon_neutral_point_enrollments, supply_profiles,
+                                       purchase_profiles, supply_matches 신규,
+                                       source_documents에 contract_type* 컬럼 추가
+alembic/                            — 위 변경 마이그레이션
+db/document_extraction.py           — 전기고지서 계약종별 추출 로직 추가
+db/water_bill_extraction.py         — 상수도 고지서 파싱 신규(document_text/vision extractor 패턴 재사용)
+db/carbon_neutral_point.py          — 감축률 계산, 자격 판정, 신청서 초안 생성 신규
+db/supply_network.py                — 매칭 로직(§8) 신규
+api/routers/carbon_neutral_point.py — §9.1 API
+api/routers/supply_network.py       — §9.2 API
+```
+
+### 프론트엔드
+
+```text
+web/components/GovSupportCard.tsx        — 신규
+web/components/SupplyNetworkCard.tsx     — 신규(방향 prop으로 구매/공급 분기)
+web/app/owner/benefits/page.tsx          — 신규 카드 편입
+web/app/owner/supply-network/page.tsx    — 공급 프로필 자기등록 폼 신규
+web/lib/api.ts                           — 신규 API 타입·호출
+```
+
+### 문서
+
+```text
+docs/small-business-green-supply-data-plan.md  — 이 문서
+docs/db-schema.md                              — 신규 테이블 반영
+CLAUDE.md                                      — 소상공인 대상 확장 정의 동기화
+```
+
+---
+
+## 12. 로드맵과 완료조건
+
+### Phase 0 — 공급 프로필 자기등록만 오픈 `[데이터 선행조건 없음]`
+- 작업: `supply_profiles` 테이블 + 자기등록 폼(§7.5, §10.2 등록 유도부만)
+- 완료조건: 기업이 자기 공급 프로필을 스스로 채워 넣을 수 있다(매칭은 아직 없어도 됨)
+
+### Phase 1 — 좁은 매칭 (연료 구매처만) `[기존 데이터 재사용]`
+- 작업: `purchase_profiles`에 `auto_supplier_name` 배치 적재, §8 매칭 로직, §10.2 카드 노출
+- 완료조건: 최소 1개 기업이 "우리가 살 수 있는 곳"에서 실제 매칭 후보를 본다
+- **데모 보완**: §7.6의 `manual_mock` 카테고리로 사무용품·청소·인쇄·포장재·케이터링·
+  설비유지보수 mock 구매 프로필을 병행 등록해 데모 빈약함을 보완(§3.3 원칙 — 출처 라벨로 구분)
+
+### Phase 2 — 전체 매입 마이데이터 신규 연동 `[별도 프로젝트급]`
+- 작업: 홈택스 매입세금계산서 전체 목록 연동 + LLM 카테고리 분류
+- 완료조건: `purchase_profiles.source = mydata_expanded`가 실제 데이터로 채워짐
+- 이 Phase는 이번 설계 범위 밖의 규모라 착수 여부를 별도로 결정해야 한다(§14-5)
+
+### Phase 3 — iM뱅크 앵커바이어 등록 `[사업적 결정 필요]`
+- 작업: iM뱅크를 `purchase_profiles`에 구매 전용 참여자로 등록(지점 운영 소모품·서비스)
+- 완료조건: iM뱅크 조달 수요가 매칭 후보 풀에 노출됨
+- 은행 내부 조달 프로세스와의 연결은 데이터 설계가 아니라 사업 결정이 선행돼야 한다
+
+### Phase A — 소상공인 계약종별 판별 `[스키마 선행 필요]`
+- 작업: §7.1 컬럼 추가 + 전기고지서 파싱 로직에 계약종별 추출 반영
+- 완료조건: 소상공인/제조업 판별이 저장된 라벨 없이 조회 시점에 정확히 갈린다
+
+### Phase B — 상수도 데이터 + 탄소중립포인트 자격 판정 `[실물 서식 확인 필요]`
+- 작업: §7.2, §7.3, §7.4 테이블 + §6.2 판정 로직 + §10.1 카드
+- 완료조건: 기준년도 대비 5% 이상 감축한 소상공인 기업에 신청 알림이 뜬다
+- **선행 조건**: §14-1, §14-2 열린 질문(hwp 서식·수도고지서 실물)이 먼저 풀려야 정확도가 보장됨
+
+---
+
+## 13. 재사용 가능한 기존 자산 (신규 제작 불필요)
+
+```text
+Company.region                → §8 매칭의 지역 하드 필터
+Voucher.supplier_name          → §7.6 Phase 1 구매 프로필의 원천
+PCAF 데이터품질등급            → §7.5 공급 프로필 "품질우수 배지"
+k_taxonomy_candidate 필드      → §7.5 공급 프로필 "K택소노미 후보 배지"
+마이데이터 KYB 5종             → §6.3 신청서 초안의 사업자정보 필드
+RateProductCard/KTaxonomyCard 패턴 → §10.1/§10.2 카드 컴포넌트 구조
+```
+
+---
+
+## 14. 열린 질문 (확정 전 반드시 풀어야 함)
+
+```text
+1. 탄소중립포인트 사업자/가구 참여신청서(hwp) 2종 실물 — §6.3 필드 매핑이 추정안 상태
+   → 실물을 보면 §7.3 스키마와 §9.1 API 응답 필드를 확정할 수 있음
+
+2. 상수도 요금고지서 실제 서식(세금계산서 때 준 것 같은 실물 캡처) — §7.2가 추정안 상태
+   → 지자체마다 서식이 다를 수 있어 최소 대구시 기준 실물이라도 필요
+
+3. 소상공인 mock 기업을 몇 개, 어떤 업종으로 만들 것인가
+   → 카페·식당·소매점 등에서 2~3곳 제안 가능, 확정되면 §6~7 스키마에 맞춰 fixture 제작 착수
+
+4. §7.1 계약종별 컬럼을 source_documents에 넣을지, 별도 테이블로 뺄지는 개발팀 검토 필요
+   → 이건 데이터 기획이 아니라 개발 쪽 스키마 리뷰가 선행돼야 함
+
+5. 그린 서플라이는 로드맵(Phase 0~3) 중 어디까지 이번에 준비할 것인가
+   → Phase 0만이면 §7.5만 있으면 됨, Phase 1 데모까지면 §7.6·§7.7·§8도 필요
+
+6. Phase 2(전체 매입 마이데이터 신규 연동)는 별도 프로젝트로 분리할지, 이번 로드맵에
+   포함할지 — 규모가 크므로 우선순위 결정 필요
+
+7. iM샵/대구로페이 연동(§3.2에서 범위 제외)은 이 문서와 완전히 별개 트랙으로 갈지,
+   추후 이 문서에 흡수할지
+```
