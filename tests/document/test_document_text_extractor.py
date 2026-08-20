@@ -18,7 +18,9 @@ from db.document.document_text_extractor import (
     DocumentTypeMismatchError,
     detect_document_type,
     extract_pdf_text,
+    find_tax_invoice_date_crop_box,
     parse_document_text,
+    parse_tax_invoice_date_crop_rows,
     parse_tax_invoice_date_table,
     parse_tax_invoice_table_rows,
     parse_year_month_from_cell_text,
@@ -645,6 +647,83 @@ def test_parse_tax_invoice_date_table_header_without_value_returns_none():
         [(0.0, 90.0, "판독불가"), (150.0, 220.0, "460,617")],
     ]
     assert parse_tax_invoice_date_table(rows) is None
+
+
+def test_parse_tax_invoice_date_table_reads_split_two_digit_year_cells():
+    """실측(2026-08-18, 사장님이 실제로 촬영한 별지 제11호 서식 세금계산서 사진) —
+    "작성" 헤더 아래 연(2자리)·월·일이 "2025-01-11"처럼 한 셀이 아니라 각각
+    독립된 칸("25"/"5"/"8")으로 찍힌다. 4자리 연도 한 셀 매칭이 실패해도
+    date_col~공급가액 컬럼 사이의 순수 숫자 칸들을 좌표 순으로 모아 연/월을
+    읽어야 한다."""
+    rows = [
+        [(618.0, 843.0, "작성"), (1808.0, 2191.0, "공급가액"), (3773.0, 4003.0, "세액")],
+        [(900.0, 950.0, "25"), (1150.0, 1180.0, "5"), (1400.0, 1420.0, "8")],
+    ]
+    assert parse_tax_invoice_date_table(rows) == (2025, 5, 8)
+
+
+def test_find_tax_invoice_date_crop_box_locates_header_and_expands_below():
+    """실측(2026-08-19) 좌표 재현 — "작성" 헤더 박스를 찾아 그 왼쪽·아래로 크롭 영역을
+    넓힌다. 오른쪽 경계는 같은 행의 다음 컬럼 헤더("공급가액") 시작점으로 잡는다 —
+    고정 배율이 아니라 실제 컬럼 경계를 써야, 크롭이 세액 등 엉뚱한 칸까지 넓게
+    걸쳐 그 칸의 숫자를 날짜로 잘못 줍는 사고(실측 2026-08-20, "2007년 8월" 오답)를
+    막을 수 있다."""
+    boxes = [
+        (698.0, 912.0, 100.0, 130.0, "업태"),
+        (618.0, 843.0, 300.0, 340.0, "작성"),
+        (1808.0, 2191.0, 300.0, 340.0, "공급가액"),
+    ]
+    box = find_tax_invoice_date_crop_box(boxes)
+    assert box is not None
+    x0, y0, x1, y1 = box
+    assert x0 < 618.0  # 헤더 왼쪽으로 여유
+    assert y0 < 300.0 and y1 > 340.0  # 헤더 위아래로 여유(아래로 더 넓게)
+    assert x1 == 1808.0  # 다음 컬럼("공급가액") 시작점 — 그 너머 숫자는 크롭에서 제외
+
+
+def test_find_tax_invoice_date_crop_box_falls_back_to_multiplier_without_next_column():
+    """같은 행에서 다음 컬럼 헤더를 못 찾으면(표 구조가 달라 인식이 안 된 경우 등)
+    헤더 행 높이의 15배로 폴백한다 — 예전 40배보다 보수적인 값(실측: 진짜 날짜
+    값은 1.8배 이내에 있었음)."""
+    boxes = [(618.0, 843.0, 300.0, 340.0, "작성")]
+    box = find_tax_invoice_date_crop_box(boxes)
+    assert box is not None
+    row_height = 340.0 - 300.0
+    assert box[2] == 618.0 + row_height * 15.0
+
+
+def test_find_tax_invoice_date_crop_box_without_header_returns_none():
+    boxes = [(0.0, 55.0, 250.0, 292.0, "경유")]
+    assert find_tax_invoice_date_crop_box(boxes) is None
+
+
+def test_parse_tax_invoice_date_crop_rows_reads_split_year_without_header_text():
+    """실측(2026-08-19) 좌표 재현 — 크롭 안에 "작성" 헤더 텍스트가 전혀 없어도
+    (크롭 상단 경계에서 잘려 재인식 안 됨) 분리 연/월 셀만으로 날짜를 읽어야 한다.
+    parse_tax_invoice_date_table()과 달리 헤더 키워드를 요구하지 않는 게 핵심. 세 번째
+    숫자('4', x=2672)는 월(x=150)과 훨씬 떨어져 있어(실제로는 세액 자릿수) day로
+    잘못 채택하지 않고 1일로 남아야 한다(_find_split_date_in_row의 간격 검증)."""
+    rows = [
+        [(10.0, 83.0, "25"), (150.0, 196.0, "5"), (911.0, 1667.0, "478"),
+         (2672.0, 2737.0, "4"), (2792.0, 2865.0, "√"), (2923.0, 2977.0, "8")],
+        [(32.0, 105.0, "일"), (1739.0, 1856.0, "단가"), (2145.0, 2340.0, "공급가액")],
+    ]
+    assert parse_tax_invoice_date_crop_rows(rows) == (2025, 5, 1)
+
+
+def test_parse_tax_invoice_date_crop_rows_without_date_returns_none():
+    rows = [[(0.0, 55.0, "품목"), (150.0, 220.0, "공급가액")]]
+    assert parse_tax_invoice_date_crop_rows(rows) is None
+
+
+def test_parse_tax_invoice_date_table_split_year_ignores_cells_outside_column():
+    """연/월/일 분리 칸 탐색은 date_col~다음 헤더 컬럼 사이로만 한정한다 — 옆
+    컬럼(품목행 등)의 숫자를 날짜로 잘못 주워오면 안 된다."""
+    rows = [
+        [(618.0, 843.0, "작성"), (1808.0, 2191.0, "공급가액")],
+        [(900.0, 950.0, "25"), (1150.0, 1180.0, "5"), (2200.0, 2230.0, "99")],
+    ]
+    assert parse_tax_invoice_date_table(rows) == (2025, 5, 1)  # "99"는 컬럼 밖이라 day로 안 씀
 
 
 # ── 별지 제11호 국세청 표준 수기 세금계산서(실측 2026-08-18, data/fixtures/

@@ -49,9 +49,9 @@ def _minimal_pdf(lines: list[str]) -> bytes:
     return buf.getvalue()
 
 
-def _stub_ocr(text: str, rows=None, confidence: float = 0.9):
+def _stub_ocr(text: str, rows=None, confidence: float = 0.9, skew_deg: float | None = None):
     """db.document_extraction.ocr_extract를 이 OcrResult를 반환하도록 대체할 때 쓴다."""
-    return OcrResult(text=text, rows=rows or [], confidence=confidence)
+    return OcrResult(text=text, rows=rows or [], confidence=confidence, skew_deg=skew_deg)
 
 
 # ── 텍스트 레이어 경로 (변경 없음) ────────────────────────────────────────────
@@ -215,6 +215,139 @@ def test_ocr_fallback_failure_propagates(session):
     바이트) 값을 지어내지 않고 DocumentParseError 그대로 던진다."""
     with pytest.raises(DocumentParseError):
         extract_document(session, b"not a pdf at all", "tax_invoice")
+
+
+# ── 기하 보정 재시도(원근변환 우선, 단순 회전은 폴백) ─────────────────────────
+
+def test_extract_document_prefers_perspective_correction_over_deskew(monkeypatch, session):
+    """실측(2026-08-19→08-20, IMG_3875): 카메라 각도로 인한 사다리꼴 원근 왜곡은
+    단순 회전으로 못 고친다 — perspective_correct_image_bytes(네 모서리 찾아
+    homography)를 먼저 시도하고, 성공하면 probe_skew_deg·deskew_image_bytes는
+    아예 안 부른다(호출 안 됐는지로 우선순위 확인)."""
+    warped_bytes = b"warped-fake-bytes"
+    tilted_result = _stub_ocr("알아볼 수 없는 텍스트", rows=[], confidence=0.6)
+    fixed_text = "전자세금계산서\n작성일자: 2025-05-08\n공급자: 칠곡주유소\n경유 L 35L 1,366 47,810"
+    fixed_result = _stub_ocr(fixed_text, rows=[], confidence=0.9)
+
+    def _fake_ocr_extract(file_bytes):
+        if file_bytes == warped_bytes:
+            return fixed_result
+        return tilted_result
+
+    calls = {"probe_skew_deg": 0, "deskew_image_bytes": 0}
+    monkeypatch.setattr(document_extraction, "ocr_extract", _fake_ocr_extract)
+    monkeypatch.setattr(document_extraction, "perspective_correct_image_bytes", lambda fb: warped_bytes)
+    monkeypatch.setattr(
+        document_extraction, "probe_skew_deg",
+        lambda fb: calls.__setitem__("probe_skew_deg", calls["probe_skew_deg"] + 1) or 8.0,
+    )
+    monkeypatch.setattr(
+        document_extraction, "deskew_image_bytes",
+        lambda fb, skew: calls.__setitem__("deskew_image_bytes", calls["deskew_image_bytes"] + 1) or b"unused",
+    )
+
+    result = extract_document(session, b"fake jpeg bytes", "tax_invoice")
+    assert result["year"] == 2025 and result["month"] == 5
+    assert calls["probe_skew_deg"] == 0
+    assert calls["deskew_image_bytes"] == 0
+
+
+def test_extract_document_falls_back_to_deskew_when_no_document_corners_found(monkeypatch, session):
+    """perspective_correct_image_bytes가 네 모서리를 못 찾으면(None) 기존 단순
+    회전 보정으로 폴백해야 한다."""
+    deskewed_bytes = b"deskewed-fake-bytes"
+    tilted_result = _stub_ocr("알아볼 수 없는 텍스트", rows=[], confidence=0.6)
+    fixed_text = "전자세금계산서\n작성일자: 2025-05-08\n공급자: 칠곡주유소\n경유 L 35L 1,366 47,810"
+    fixed_result = _stub_ocr(fixed_text, rows=[], confidence=0.9)
+
+    def _fake_ocr_extract(file_bytes):
+        if file_bytes == deskewed_bytes:
+            return fixed_result
+        return tilted_result
+
+    monkeypatch.setattr(document_extraction, "ocr_extract", _fake_ocr_extract)
+    monkeypatch.setattr(document_extraction, "perspective_correct_image_bytes", lambda fb: None)
+    monkeypatch.setattr(document_extraction, "probe_skew_deg", lambda fb: 8.0)
+    monkeypatch.setattr(document_extraction, "deskew_image_bytes", lambda fb, skew: deskewed_bytes)
+
+    result = extract_document(session, b"fake jpeg bytes", "tax_invoice")
+    assert result["year"] == 2025 and result["month"] == 5
+
+
+def test_extract_document_retries_after_deskewing_correctable_tilt(monkeypatch, session):
+    """실측(2026-08-19, 같은 세금계산서를 비스듬히 찍은 사진) — 텍스트 파싱·좌표
+    매칭·크롭 재시도가 전부 실패한 뒤, probe_skew_deg()로 잰 완만한 기울기(1.5~20도)
+    가 있으면 이미지를 반대로 돌려 파이프라인 전체를 한 번 더 돈다. 기울어진
+    원본으로는 실패하던 파싱이 보정된 이미지에서는 성공해야 한다.
+
+    probe_skew_deg는 메인 OCR pass가 돌려주는 (내부 원근보정으로 오염된)
+    OcrResult.skew_deg가 아니라 별도로 원본을 다시 재는 함수라 따로 스텁한다
+    (실측: unwarping 켜진 메인 엔진은 14도짜리 사진을 -1.1도로 잘못 잼)."""
+    tilted_bytes = b"tilted-fake-bytes"
+    deskewed_bytes = b"deskewed-fake-bytes"
+
+    tilted_result = _stub_ocr("알아볼 수 없는 텍스트", rows=[], confidence=0.6)
+    fixed_text = "전자세금계산서\n작성일자: 2025-05-08\n공급자: 칠곡주유소\n경유 L 35L 1,366 47,810"
+    fixed_result = _stub_ocr(fixed_text, rows=[], confidence=0.9)
+
+    def _fake_ocr_extract(file_bytes):
+        if file_bytes == tilted_bytes:
+            return tilted_result
+        if file_bytes == deskewed_bytes:
+            return fixed_result
+        raise AssertionError(f"unexpected file_bytes: {file_bytes!r}")
+
+    monkeypatch.setattr(document_extraction, "ocr_extract", _fake_ocr_extract)
+    monkeypatch.setattr(document_extraction, "probe_skew_deg", lambda fb: 8.0)
+    monkeypatch.setattr(document_extraction, "deskew_image_bytes", lambda fb, skew: deskewed_bytes)
+
+    result = extract_document(session, tilted_bytes, "tax_invoice")
+    assert result["year"] == 2025 and result["month"] == 5
+    assert result["supply_amount_krw"] == 47_810
+    assert result["issue_date"] == "2025-05-08"
+
+
+def test_extract_document_skips_deskew_when_skew_out_of_correctable_range(monkeypatch, session):
+    """probe_skew_deg가 아예 없거나(None) 90도급으로 너무 크면(20도 초과) 보정을
+    시도하지 않는다 — 극단적 회전은 재촬영을 요구하는 게 맞다(사용자 확인)."""
+    calls = {"deskew": 0}
+    monkeypatch.setattr(
+        document_extraction, "deskew_image_bytes",
+        lambda fb, skew: calls.__setitem__("deskew", calls["deskew"] + 1) or b"unused",
+    )
+    monkeypatch.setattr(document_extraction, "probe_skew_deg", lambda fb: 45.0)
+    monkeypatch.setattr(
+        document_extraction, "ocr_extract",
+        lambda file_bytes: _stub_ocr("알아볼 수 없는 텍스트", rows=[], confidence=0.5),
+    )
+    with pytest.raises(DocumentParseError):
+        extract_document(session, b"fake jpeg bytes", "tax_invoice")
+    assert calls["deskew"] == 0
+
+
+def test_extract_document_falls_back_to_original_when_deskew_retry_still_fails(monkeypatch, session):
+    """보정 시도 자체는 했지만 보정된 이미지도 결국 못 읽으면(DocumentParseError),
+    원본 경로로 계속 진행한다 — 무한 재귀 없이 한 번만 재시도(재귀 호출에서는
+    probe_skew_deg를 다시 안 부름)."""
+    calls = {"ocr_extract": 0, "probe_skew_deg": 0}
+
+    def _fake_ocr_extract(file_bytes):
+        calls["ocr_extract"] += 1
+        return _stub_ocr("알아볼 수 없는 텍스트", rows=[], confidence=0.5)
+
+    def _fake_probe(file_bytes):
+        calls["probe_skew_deg"] += 1
+        return 8.0
+
+    monkeypatch.setattr(document_extraction, "ocr_extract", _fake_ocr_extract)
+    monkeypatch.setattr(document_extraction, "probe_skew_deg", _fake_probe)
+    monkeypatch.setattr(document_extraction, "deskew_image_bytes", lambda fb, skew: b"deskewed-bytes")
+
+    with pytest.raises(DocumentParseError):
+        extract_document(session, b"fake jpeg bytes", "tax_invoice")
+    # 원본 1회 + 보정 재시도 1회 = 정확히 2번만 불려야 한다(무한 재귀 방지 확인).
+    assert calls["ocr_extract"] == 2
+    assert calls["probe_skew_deg"] == 1
 
 
 # ── 세금계산서 표(품목행) 좌표 기반 재시도 ────────────────────────────────────

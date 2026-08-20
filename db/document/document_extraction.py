@@ -41,21 +41,40 @@ from sqlalchemy.orm import Session
 
 from db.document.document_html_extractor import extract_html_text
 from db.document.document_llm_router import route_fields
-from db.document.document_ocr_extractor import ocr_extract
+from db.document.document_ocr_extractor import (
+    deskew_image_bytes,
+    ocr_extract,
+    ocr_retry_region,
+    perspective_correct_image_bytes,
+    probe_skew_deg,
+)
 from db.document.document_text_extractor import (
     DocumentParseError,
     DocumentTypeMismatchError,
     detect_document_type,  # noqa: F401 — 하위 호환용 재노출(과거 호출부가 여기서 import)
     extract_pdf_text,  # noqa: F401 — 하위 호환용 재노출
     find_supplier_name_best_effort,
+    find_tax_invoice_date_crop_box,
     issue_date_str,
     parse_document_text,
+    parse_tax_invoice_date_crop_rows,
     parse_tax_invoice_date_table,
     parse_tax_invoice_header,
     parse_tax_invoice_table_rows,
 )
 
 DocumentType = str  # "tax_invoice" | "electric_bill" | "gas_bill"
+
+# 완만하게 기울여 찍은 사진(예: 카메라를 비스듬히 든 경우)만 보정 대상으로 본다.
+# 1.5도 미만은 보정할 필요 없는 노이즈 수준. 20도 초과는 촬영 각도가 아니라
+# 문서 자체가 90도 등으로 회전됐을 가능성이 높아 손대지 않는다 — 이런 극단적
+# 회전은 억지로 되돌리기보다 재촬영을 요구하는 게 맞다(2026-08-19 사용자 확인).
+_MIN_CORRECTABLE_SKEW_DEG = 1.5
+_MAX_CORRECTABLE_SKEW_DEG = 20.0
+
+
+def _is_correctable_skew(skew_deg: float | None) -> bool:
+    return skew_deg is not None and _MIN_CORRECTABLE_SKEW_DEG <= abs(skew_deg) <= _MAX_CORRECTABLE_SKEW_DEG
 
 
 def _extract_deterministic_text(file_bytes: bytes) -> tuple[str | None, str]:
@@ -70,7 +89,10 @@ def _extract_deterministic_text(file_bytes: bytes) -> tuple[str | None, str]:
 
 
 def extract_document(
-    session: Session, file_bytes: bytes, document_type: DocumentType | None = None
+    session: Session,
+    file_bytes: bytes,
+    document_type: DocumentType | None = None,
+    _deskewed: bool = False,
 ) -> dict:
     """문서에서 실제로 날짜·금액을 읽어낸다.
 
@@ -78,7 +100,9 @@ def extract_document(
     대조 없이 판별된 종류를 그대로 신뢰한다. 반환 dict에는 항상 "document_type"
     (실제 판별값)이 포함된다. session은 최후 수단(LLM 라우팅)의 llm_cache 조회·
     저장에만 쓰인다 — 앞 세 단계는 DB에 손대지 않는다.
-    """
+
+    _deskewed는 내부 재귀 호출용(호출부가 직접 넘길 값 아님) — 완만한 기울기
+    보정 재시도가 무한 반복되지 않게 막는 가드다."""
     text, method = _extract_deterministic_text(file_bytes)
     if text is not None:
         try:
@@ -118,6 +142,24 @@ def extract_document(
                 # 아니라 헤더행/데이터행 표 구조라 위 콜론 기반 정규식이 아예 안 통한다 —
                 # 좌표 기반으로 재시도(db/document_text_extractor.py::parse_tax_invoice_date_table).
                 date_result = parse_tax_invoice_date_table(ocr_result.rows)
+                if date_result is None:
+                    # 실측 확인(2026-08-19): "작성"(년월일) 칸이 "공급가액·세액" 자릿수
+                    # 칸과 다닥다닥 붙어 있어, 전체 페이지를 한 번에 인식하면 이 구간의
+                    # 낱낱 숫자가 뭉개진다(감지모델 등급·리사이즈 한도를 올려도 재현 —
+                    # 병목은 격자 밀도 자체). 그 구간만 원본 해상도로 크롭·확대해
+                    # 재인식하는 2차 시도 — 크롭 대상이 없거나(헤더 자체를 못 찾음)
+                    # 크롭해서 다시 읽어도 안 되면 조용히 포기하고 기존 폴백(품목행
+                    # 좌표매칭 → LLM 최후수단)으로 넘어간다.
+                    crop_box = find_tax_invoice_date_crop_box(ocr_result.boxes)
+                    if crop_box is not None:
+                        try:
+                            crop_result = ocr_retry_region(file_bytes, crop_box)
+                            # parse_tax_invoice_date_table이 아니라 크롭 전용 파서를 쓴다 —
+                            # 이 크롭엔 "작성" 헤더 텍스트 자체가 안 남아있을 수 있어(실측
+                            # 2026-08-19), 헤더 재탐색을 요구하면 값을 정확히 읽어도 실패한다.
+                            date_result = parse_tax_invoice_date_crop_rows(crop_result.rows)
+                        except DocumentParseError:
+                            date_result = None
                 if date_result is not None:
                     year, month, day = date_result
                     header = {
@@ -136,9 +178,39 @@ def extract_document(
                         "extraction_confidence": ocr_result.confidence,
                     }
 
-    # 최후 수단 — 텍스트레이어·OCR·좌표매칭 다 실패. LLM은 "어느 셀이 어느
-    # 필드냐"만 판단하고, 값은 그 셀의 OCR 원문을 결정론적으로 재파싱해서 얻는다
-    # (db/document_llm_router.py 상단 docstring 참고 — 환각이 숫자에 개입할 경로 없음).
+    if not _deskewed and ocr_result is not None:
+        # 여기까지 다 실패 — LLM을 부르기 전에 기하 보정을 마지막으로 시도한다.
+        # 원근변환(perspective_correct_image_bytes)을 먼저 시도한다 — 실측
+        # (2026-08-19→08-20, IMG_3875): 카메라 각도로 찍힌 사진은 단순 회전이
+        # 아니라 사다리꼴 원근 왜곡이 낀 경우가 있어, 단순 회전 보정만으로는
+        # 메인 엔진이 재측정해도 잔차 기울기가 절반만 없어지는 등 불완전했다.
+        # 종이의 네 모서리를 찾아 homography로 펴면 회전·원근을 한 번에 없앤다.
+        corrected_bytes = perspective_correct_image_bytes(file_bytes)
+        if corrected_bytes is None:
+            # 원근변환은 종이의 네 모서리(4점 다각형)를 못 찾으면 포기한다
+            # (배경이 지저분하거나 대비가 약한 경우 등) — 그럴 때만 기존 단순
+            # 회전 보정으로 폴백한다. ocr_result.skew_deg는 메인 엔진(unwarping
+            # 켜짐)이 감지 *전에* 이미 상당 부분 펴버린 뒤의 잔차각이라 실제
+            # 기울기보다 훨씬 작게 나오므로(실측: 14도짜리 사진이 -1.1도로 측정됨)
+            # 여기서는 그 값을 믿지 않고 probe_skew_deg()로 원본을 다시 재서
+            # 진짜 기울기를 구한다(비용이 드는 추가 인식 패스라 여기까지 온
+            # 실패 케이스에서만 부른다).
+            true_skew = probe_skew_deg(file_bytes)
+            if _is_correctable_skew(true_skew):
+                corrected_bytes = deskew_image_bytes(file_bytes, true_skew)
+        if corrected_bytes is not None:
+            # 문서를 먼저 똑바로 펴서 파이프라인 전체(이 함수)를 한 번 더 돈다 —
+            # 보정해도 실패하면(DocumentParseError) 원본(왜곡된) 경로로 계속
+            # 진행한다(밑져야 본전 — 덧대는 것뿐 원래 동작을 해치지 않음).
+            try:
+                return extract_document(session, corrected_bytes, document_type, _deskewed=True)
+            except DocumentParseError:
+                pass
+
+    # 최후 수단 — 텍스트레이어·OCR·좌표매칭·기울기 보정 다 실패. LLM은 "어느 셀이
+    # 어느 필드냐"만 판단하고, 값은 그 셀의 OCR 원문을 결정론적으로 재파싱해서
+    # 얻는다(db/document_llm_router.py 상단 docstring 참고 — 환각이 숫자에 개입할
+    # 경로 없음).
     try:
         parsed, confidence = route_fields(
             session, file_bytes, ocr_result.rows if ocr_result is not None else None, document_type
