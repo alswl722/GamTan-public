@@ -592,6 +592,63 @@ def _cell_for_column(row: OcrRow, col_range: tuple[float, float]) -> str | None:
     return best_text
 
 
+_SHORT_NUMBER_RE = re.compile(r"^\d{1,2}$")
+
+
+def _find_split_date_in_row(row: OcrRow, left_bound: float, right_bound: float) -> tuple[int, int, int] | None:
+    """연(2자리)·월·일이 한 셀이 아니라 칸마다 따로 찍힌 표(실측 2026-08-18, 별지
+    제11호 국세청 표준 세금계산서 사진 — "작성" 헤더 밑에 "25 | 5 | 8"이 각각
+    독립된 박스로 인쇄됨)에서 좌표 기반으로 찾는다. parse_tax_invoice_header()의
+    텍스트 기반 폴백("작성" 다음 줄 맨 앞 숫자 3개)과 같은 발상을 OCR 좌표 셀에
+    적용한 버전 — date_col과 그다음 헤더 컬럼(공급가액 등) 사이 구간에서 순수
+    숫자 1~2자리 셀만 x좌표 순으로 모아 연·월로 쓴다.
+
+    일(day)은 세 번째 후보가 있고 월과의 x간격이 연-월 간격의 3배 이내일 때만
+    쓴다 — 실측(2026-08-19, ocr_retry_region() 크롭 재인식 결과)에서 세 번째
+    숫자가 실제로는 한참 떨어진 금액 자릿수(예: 세액 칸의 낱자리)였던 사례가
+    있었다. 신뢰 못 할 값을 day로 잘못 주워 쓰느니 1일로 둔다(issue_date_str가
+    어차피 유효 범위로 클램프하므로 문서 전체를 실패시키는 것보다 낫다)."""
+    candidates = sorted(
+        (x0, text.strip())
+        for x0, x1, text in row
+        if left_bound - _TABLE_COLUMN_MATCH_TOLERANCE <= x0 < right_bound
+        and _SHORT_NUMBER_RE.match(text.strip())
+    )
+    if len(candidates) < 2:
+        return None
+    year_x, year_raw = candidates[0]
+    month_x, month_raw = candidates[1]
+    day = 1
+    if len(candidates) >= 3:
+        day_x, day_raw = candidates[2]
+        year_month_gap = month_x - year_x
+        if year_month_gap > 0 and (day_x - month_x) <= year_month_gap * 3:
+            day = int(day_raw)
+    return 2000 + int(year_raw), int(month_raw), day
+
+
+def parse_tax_invoice_date_crop_rows(rows: list[OcrRow]) -> tuple[int, int, int] | None:
+    """find_tax_invoice_date_crop_box()로 잘라낸 크롭의 OCR 결과 전용 날짜 파서.
+
+    parse_tax_invoice_date_table()과 달리 "작성"/"작성일자" 헤더 키워드를 크롭
+    안에서 다시 찾지 않는다 — 실측(2026-08-19) 확인: 이 크롭은 애초에 헤더를 이미
+    찾은 뒤(find_tax_invoice_date_crop_box)에만 만들어지는데, 크롭 상단 경계
+    바로 위에서 헤더 텍스트 자체가 잘리거나 이 작은 이미지 안에서는 재인식되지
+    않는 경우가 있었다 — 값(연/월/일 분리 칸)은 confidence 0.98+로 정확히
+    읽었는데도 헤더 재탐색을 요구하면 매번 실패했다. 크롭 자체가 이미 날짜
+    영역으로 좁혀져 있다는 전제 하에, 각 행에서 곧바로 4자리 연도 한 셀 또는
+    2자리 연도 분리 셀(_find_split_date_in_row)을 순서대로 시도한다."""
+    for row in rows:
+        for _x0, _x1, text in row:
+            m = re.search(rf"(\d{{4}}){_DATE_SEP}(\d{{2}}){_DATE_SEP}(\d{{2}})", text)
+            if m:
+                return int(m.group(1)), int(m.group(2)), int(m.group(3))
+        split = _find_split_date_in_row(row, 0.0, float("inf"))
+        if split is not None:
+            return split
+    return None
+
+
 def parse_tax_invoice_date_table(rows: list[OcrRow]) -> tuple[int, int, int] | None:
     """세금계산서 날짜가 "작성일자:" 콜론 형식이 아니라 헤더행/데이터행 표 구조일
     때 좌표 기반으로 찾는다 — 실측 확인(2026-08-16, 사용자 제공 합성 세금계산서
@@ -604,7 +661,11 @@ def parse_tax_invoice_date_table(rows: list[OcrRow]) -> tuple[int, int, int] | N
     호출부가 다른 경로를 계속 시도할 수 있게).
 
     반환은 (year, month, day) — 예전엔 day를 버리고 (year, month)만
-    반환해 issue_date가 항상 null로 남는 버그가 있었다(2026-08-19 실측)."""
+    반환해 issue_date가 항상 null로 남는 버그가 있었다(2026-08-19 실측).
+
+    4자리 연도 한 셀(예: "2025-01-11") 매칭이 실패하면 _find_split_date_in_row로
+    2자리 연도·칸별 분리 서식도 시도한다(실측 2026-08-18 — 별지 제11호 서식은
+    연·월·일이 각각 별도 칸)."""
     for i, row in enumerate(rows):
         date_col = next(
             (
@@ -616,6 +677,10 @@ def parse_tax_invoice_date_table(rows: list[OcrRow]) -> tuple[int, int, int] | N
         )
         if date_col is None:
             continue
+        # 연/월/일 분리 칸 탐색 범위의 오른쪽 경계 — 같은 헤더행에서 date_col
+        # 오른쪽에 있는 다음 컬럼(공급가액 등) 시작 x좌표까지만 본다.
+        next_col_starts = [x0 for x0, _x1, _text in row if x0 > date_col[1]]
+        right_bound = min(next_col_starts) if next_col_starts else float("inf")
         for data_row in rows[i + 1 : i + 3]:  # 바로 아래 한두 행 안에서 값을 찾는다
             cell = _cell_for_column(data_row, date_col)
             if cell:
@@ -624,8 +689,69 @@ def parse_tax_invoice_date_table(rows: list[OcrRow]) -> tuple[int, int, int] | N
                     # 버그 수정(2026-08-19): 일(day)까지 캡처해놓고 여태 버렸다 — 아래
                     # parse_tax_invoice_header()와 같은 결.
                     return int(m.group(1)), int(m.group(2)), int(m.group(3))
+            split = _find_split_date_in_row(data_row, date_col[0], right_bound)
+            if split is not None:
+                return split
         return None  # 헤더는 찾았는데 값을 못 찾으면 더 이상 시도 안 함
     return None
+
+
+def find_tax_invoice_date_crop_box(
+    boxes: list[tuple[float, float, float, float, str]],
+) -> tuple[float, float, float, float] | None:
+    """작성/작성일자/발급일자 헤더 박스 좌표로, 날짜 값이 있을 것으로 예상되는 영역의
+    (x0, y0, x1, y1)를 원본 이미지 픽셀 좌표계로 계산한다 — db/document_ocr_extractor.py
+    ::ocr_retry_region()에 넘길 크롭 박스를 만드는 용도(실측 2026-08-19: 전체 페이지
+    인식에서 이 헤더 밑 격자 숫자가 뭉개져 parse_tax_invoice_date_table()이 값을 못
+    찾을 때만 부르는 2차 시도).
+
+    boxes는 클러스터링 전 원시 박스 목록(db.document_ocr_extractor.OcrResult.boxes,
+    (x0, x1, y0, y1, text) 튜플). 헤더를 못 찾으면 None(예외 대신 — 호출부가 크롭
+    재시도 자체를 건너뛸 수 있게).
+
+    가로 오른쪽 경계는 같은 행(헤더와 y범위가 겹치는)에 있는 다음 컬럼 헤더
+    ("공급가액" 등)의 시작 x좌표로 잡는다 — parse_tax_invoice_date_table()의
+    right_bound 계산과 같은 원칙. 고정 배율(예전엔 헤더 행 높이의 40배)은
+    문서마다 컬럼 폭이 달라 너무 넓어질 수 있다 — 실측(2026-08-20)으로 실제
+    사고가 남: "작성" 칸 값이 뭉개져 못 읽히자, 크롭이 한참 오른쪽 "세액" 칸까지
+    걸쳐 있던 탓에 그 칸의 낱자리 숫자("7"/"8")를 연/월로 잘못 주워 "2007년
+    8월"이라는 조용한 오답을 냈다(금액은 맞고 날짜만 틀려 실패로도 안 걸림 —
+    CLAUDE.md 실패 가시성 원칙 위반). 같은 행에서 다음 컬럼 헤더를 못 찾으면
+    (표 구조가 달라 헤더 텍스트 인식이 아예 안 된 경우 등) 헤더 행 높이의 15배로
+    폴백한다(예전 40배보다 훨씬 보수적 — 실측: 진짜 날짜 값은 크롭 시작점에서
+    row_height의 1.8배 이내에 있었다).
+
+    세로는 헤더 행 높이의 절반 위, 1.5배 아래까지만 본다 — 실측(2026-08-19)으로 여백을
+    더 넓혀(2~4배) 봤더니 오히려 바로 아래 있는 품목행 표까지 크롭에 딸려 들어와,
+    server 감지 모델이 크고 깨끗한 품목행 텍스트에 밀려 정작 찾는 작은 날짜 숫자를
+    더 못 찾는 역효과가 났다. 이 서식은 "작성" 요약행과 "품목" 표 헤더가 세로로
+    빽빽하게 붙어 있어(별지 제11호 서식 특징) 여백을 넓힐수록 손해라는 뜻 — 1.5배가
+    실측으로 "25"/"5"/"8"을 confidence 0.98+로 정확히 찾아낸 값."""
+    header = next(
+        (b for b in boxes if any(kw in _strip_ws(b[4]) for kw in _TABLE_HEADER_DATE_KEYWORDS)),
+        None,
+    )
+    if header is None:
+        return None
+    hx0, _hx1, hy0, hy1, _text = header
+    row_height = max(hy1 - hy0, 1.0)
+
+    def _same_row(b) -> bool:
+        b_center = (b[2] + b[3]) / 2
+        h_center = (hy0 + hy1) / 2
+        return abs(b_center - h_center) <= row_height
+
+    next_col_starts = [
+        b[0]
+        for b in boxes
+        if b[0] > hx0 and _same_row(b) and any(kw in _strip_ws(b[4]) for kw in _TABLE_HEADER_AMOUNT_KEYWORDS)
+    ]
+    x1 = min(next_col_starts) if next_col_starts else hx0 + row_height * 15.0
+
+    x0 = max(0.0, hx0 - row_height)
+    y0 = max(0.0, hy0 - row_height * 0.5)
+    y1 = hy1 + row_height * 1.5
+    return (x0, y0, x1, y1)
 
 
 def parse_tax_invoice_table_rows(rows: list[OcrRow]) -> dict | None:
