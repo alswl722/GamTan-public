@@ -134,6 +134,7 @@ Scope: 2026년 8월 v1 구현·검증·시연 일정
 | 부수 | 5개 기업(구미정밀 외) 세금계산서·전기요금고지서 합성 fixture 175건 추가 | — | #84 |
 | 부수 | `db/`, `tests/` 디렉토리를 역할별 서브패키지로 정리(document/pcaf_engine/reports 등) | — | #80 |
 | 부수 | PR #79·#80 근접 병합으로 유실된 `admin.py` import(`FinancialInstitution`, `EXAMPLE_FINANCED_EMISSIONS_TIMELINE`) 및 `db/climate_risk_report_pdf.py` 위치 회귀 수정 | — | fix/climate-risk-report-import |
+| Tier 2 | 소상공인 탄소중립포인트 프론트엔드 UI 껍데기 — 온보딩 리워드 배너, `business_scale_hint` 3분기, 자격 카드 + 신청서 초안 바텀시트, 홈 알림 배너. **fixture 기반이라 §9.1 API 연동은 남아 있음**(`web/lib/carbon-point-fixture.ts`가 교체 지점, 실행계획은 `docs/small-business-green-supply-develop-plan.md` §3) | B | #109 |
 
 ---
 
@@ -145,6 +146,9 @@ Scope: 2026년 8월 v1 구현·검증·시연 일정
 | Tier 2 | 청중별 통역 / 탄소 신용카드(QR) | 미배정 | ⬜ 미착수 | 상세 스펙 미작성 |
 | Tier 2 | 포트폴리오 뷰 확장 — 히트맵·연동 우선순위 Top10 | 미배정 | ⬜ 미착수 | `docs/owner-admin-flow-spec.md` §5 |
 | Tier 2 | 개인화된 정부 지원사업 매칭 (기업마당 API + pgvector) | A(예정) | 🔄 착수(2026-08-18) | `docs/gov-support-matching-plan.md` — 기술선택 확정(pgvector), bizinfo.go.kr API 키 신청 대기 중(§3·§10) |
+| Tier 2 | 소상공인 탄소중립포인트 백엔드(§9.1 API) — 계약종별 추출·`business_scale_hint` 계산·감축률·신청서 초안 생성 | A | ⬜ 미착수 | 프론트는 PR #109로 껍데기 완료(fixture 대역). 실행계획 `docs/small-business-green-supply-develop-plan.md` §2, 착수 조건은 회계 1순위(data-plan §15.1) |
+| Tier 2 | 위 API 나온 뒤 프론트 연동 — `web/lib/carbon-point-fixture.ts` 삭제 + `lib/api.ts` 호출로 교체 | B | ⬜ 백엔드 대기 | 교체 절차는 그 파일 상단 주석, 호출부 3곳(develop-plan §3.0) |
+| 부수 | `water_bill` 문서종류 추가 — 감축률이 전기+수도+가스 기준인데(data-plan §7.3) 상수도 고지서 파싱이 개발자 A 작업목록에 없음 | 미배정 | ⬜ 합의 필요 | 백엔드 파싱 없이 프론트만 고치면 업로드 칸이 붕 뜬다(develop-plan §3.5) |
 | 부수 | 룰 우선순위 충돌 정리 (표현 변형이 엉뚱한 룰에 오매칭) | 미배정 | ⬜ 미착수 | K택소노미 작업 중 발견, `분류_기준표_확장` 시트 전체 이슈 |
 | 3주차 | A+B 전체 플로우 통합 테스트 (사장님·관리자 1회 통주) | A+B | ⬜ 미착수 | |
 | Tier 3 | 기업대출 금융배출량(귀속계수) 계산 | 미배정 | ⬜ 착수 여부 미결정 | 산식은 §8에 정의됨 |
