@@ -61,6 +61,36 @@ export interface CarbonPointDraft {
 /** 탄소중립포인트 에너지분야 자격 임계값(data-plan §6.2). 화면 문구에서 공유한다. */
 export const CARBON_POINT_THRESHOLD_PCT = 5;
 
+/** 게이지 눈금의 상한 — 감축률을 "기준(5%) 대비 어디까지 왔는지"로 보여주기 위한
+ * 표시용 스케일이라 제도상 상한이 아니다(15% 이상은 한 구간으로 묶여 있다). */
+export const CARBON_POINT_GAUGE_MAX_PCT = 10;
+
+/** 「탄소중립포인트 제도 운영에 관한 규정」 별표2 — 에너지 분야 **상업(법인)** 기준
+ * 전기 감축 인센티브. 소상공인은 개인이 아니라 이 표를 적용받는다(cpoint.or.kr).
+ * 감축률 구간별 포인트이며 1포인트는 **최대** 2원이라, 아래 계산값도 상한선이다. */
+const ELECTRICITY_POINT_TIERS: readonly { minPct: number; points: number }[] = [
+  { minPct: 15, points: 60_000 },
+  { minPct: 10, points: 40_000 },
+  { minPct: CARBON_POINT_THRESHOLD_PCT, points: 20_000 },
+];
+
+const KRW_PER_POINT = 2;
+
+export interface CarbonPointRefundEstimate {
+  points: number;
+  /** 포인트 × 최대 단가 — "최대"라는 사실은 화면 라벨이 담당한다. */
+  maxKrw: number;
+}
+
+/** 감축률 → 예상 환급액(최대). 임계값 미만이거나 감축률을 계산하지 못했으면 null —
+ * 0원으로 표시해 "받을 게 없다"와 "아직 모른다"를 뭉개지 않는다(CLAUDE.md 원칙7). */
+export function estimateRefund(reductionRatePct: number | null): CarbonPointRefundEstimate | null {
+  if (reductionRatePct === null) return null;
+  const tier = ELECTRICITY_POINT_TIERS.find((t) => reductionRatePct >= t.minPct);
+  if (!tier) return null;
+  return { points: tier.points, maxKrw: tier.points * KRW_PER_POINT };
+}
+
 /** fixture로 그린 화면임을 사용자에게 그대로 알리는 칩 문구(data-plan §3.3 — 실제
  * 파이프라인이 아니라는 사실을 화면에 명시). API 연동 시 이 상수와 함께 사라진다. */
 export const FIXTURE_BADGE_LABEL = "예시 데이터 · API 연동 전";
