@@ -138,8 +138,31 @@ avg_prior_2yr_kwh, reduction_vs_2yr_avg_pct, avg2yr_eligible_5pct, note
 2년 평균을 계산할 수 있으므로). 감축률 산정 공식은 아직 회계 확인 전이라(§14-1·§15.2,
 `docs/small-business-green-supply-data-plan.md`) 두 해석을 모두 golden set에 남겨뒀다.
 
-**아직 없음**: 상수도 요금고지서(§7.2, 실제 서식 미확보로 이번엔 제외), 탄소중립포인트
-신청서 초안 자체(hwp 서식은 확보됨 — §14-1 해결, 다음 단계에서 데이터화 가능).
+### 상수도 요금고지서 — S001·S002 (2026-08-22 추가)
+
+`docs/small-business-green-supply-data-plan.md` §7.2 갱신에 대응. 용인시 실물(사용자 제공)을
+OCR로 구조 확인 후 대구시로 각색 — **대구시 자체 원본 검증은 아직 아님**, §14-2 참고.
+
+두 회사를 **서로 다른 문서 포맷**으로 만들어 입력 경로 다양성을 시연한다 — 같은 종류의
+데이터라도 정식 스캔 고지서인지 모바일 알림 캡처인지에 따라 문서분류기가 다르게 처리해야
+하는 케이스.
+
+- **S001(동성로카페) — 정식 고지서(고객보관용 영수증) 형식**, pdf/jpg/png 순환, 32건
+  - 관리번호·검침(전월지침/당월지침, 사용량이 아니라 누적 지침값 두 개로 표시)·**최근
+    12개월 사용량 추이 막대그래프**(매 문서마다 실제 롤링 윈도우로 재계산)·상수도요금/
+    하수도요금/물이용부담금 구분
+  - **2025년 7월 이상신호**: 평월 8~11㎥ → 35㎥(약 3.2배) 급증, 그래프에 빨간 막대로 표시,
+    원인 미기재(누수 의심이지만 확정 아님) — 전기고지서와 같은 "설명 불가능형" 패턴을 수도
+    데이터에도 확보
+  - 위치: `data/fixtures/water_bills/S001/` (32건 + `_manifest.csv`)
+- **S002(반월당분식) — 카카오톡 채널(알림톡) 캡처 형식**, jpg 고정, 32건
+  - 실제 알림톡 UI(채널 프로필·말풍선·"고지서 상세보기" 버튼·수신거부 안내 문구) 재현
+  - 전부 평이한 정상 사용량(월 6~9㎥) — 전기고지서에서 이미 대조군(감축 미달) 역할이라
+    수도 데이터까지 이상치를 겹치지 않게 의도적으로 평범하게 유지
+  - 위치: `data/fixtures/water_bills/S002/` (32건 + `_manifest.csv`)
+
+**아직 없음**: 탄소중립포인트 신청서 초안 자체(hwp 서식은 확보됨 — §14-1 해결, 다음 단계에서
+데이터화 가능), 대구시 자체 수도고지서 원본 검증.
 
 ---
 
@@ -159,6 +182,8 @@ data/fixtures/electricity_bills/C004/*.{pdf,jpg,png} + _manifest.csv   — 12건
 data/fixtures/electricity_bills/C005/*.{pdf,jpg,png} + _manifest.csv   — 10건
 data/fixtures/electricity_bills/S001/*.{pdf,jpg,png} + _manifest.csv + _reduction_expected.csv — 32건
 data/fixtures/electricity_bills/S002/*.{pdf,jpg,png} + _manifest.csv + _reduction_expected.csv — 32건
+data/fixtures/water_bills/S001/*.{pdf,jpg,png} + _manifest.csv         — 32건(정식 고지서)
+data/fixtures/water_bills/S002/*.jpg + _manifest.csv                   — 32건(알림톡 캡처)
 
 scripts/generate_tax_invoice_fixtures.ps1        — MAIN 세금계산서 생성기
 scripts/generate_electricity_bill_fixtures.ps1   — 성서테크 전기요금고지서 생성기
@@ -166,9 +191,11 @@ scripts/generate_other_companies_fixtures.ps1    — C001~C006 일괄 생성기(
                                                      전기고지서·무관파일 공용 템플릿 포함)
 scripts/generate_small_business_fixtures.ps1     — S001·S002 소상공인 전기고지서 + 감축률
                                                      골든셋 생성기(위 스크립트의 템플릿 재사용)
+scripts/generate_water_bill_fixtures.ps1         — S001·S002 수도요금고지서(정식 서식 +
+                                                     알림톡 캡처) 생성기
 ```
 
-총 259건(MAIN 34 + C001 35 + C002 36 + C003 12 + C004 26 + C005 30 + C006 22 + S001 32 + S002 32).
+총 323건(MAIN 34 + C001 35 + C002 36 + C003 12 + C004 26 + C005 30 + C006 22 + S001 64 + S002 64).
 
 재생성: PowerShell에서 각 스크립트 실행(Chrome headless 필요, 경로는 스크립트 상단 `$Chrome`
 변수 참고). 매 실행마다 파일을 덮어쓰므로 파일명·수치는 항상 동일하게 재현된다.
@@ -182,5 +209,5 @@ scripts/generate_small_business_fixtures.ps1     — S001·S002 소상공인 전
 - 2026년 1~8월 YTD 구간은 S001·S002(소상공인 트랙)만 커버함 — MAIN·C001~C006(제조업 트랙)은
   여전히 2025년 1개년 또는 그 이하라 개정 지시서 §1의 "2026년 1~8월 최근 동향" 요구사항이
   제조업 쪽에는 아직 미착수
-- 상수도 요금고지서, 탄소중립포인트 신청서 초안 데이터는 아직 없음(hwp 서식은 확보 완료,
+- 탄소중립포인트 신청서 초안 데이터는 아직 없음(hwp 서식은 확보 완료,
   `docs/small-business-green-supply-data-plan.md` §14-1 해결 — 다음 착수 후보)
