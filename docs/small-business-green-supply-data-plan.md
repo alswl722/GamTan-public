@@ -263,8 +263,39 @@ billed_amount_krw
 created_at
 ```
 
-`document_type` enum(§0 기준 `tax_invoice`/`electric_bill`/`gas_bill` 3종)에 `water_bill`
-추가가 선행돼야 한다. **실제 고지서 서식 미검증** — §14-2.
+문서종류 어휘에 `water_bill` 추가가 선행돼야 한다. **다만 이건 DDL 작업이 아니다(2026-08-22
+코드 확인으로 정정)** — `source_documents.document_type`은 DB enum이 아니라
+`Column(String(50), nullable=False)`이고(`db/models.py`) CHECK 제약도 없다. 리포지토리 전체에
+native enum이나 `ALTER TYPE`을 쓴 revision이 존재하지 않는다. 즉 마이그레이션 없이 **코드
+레벨 어휘 목록만** 고치면 된다:
+
+```text
+[백엔드]
+db/document/document_requirements.py   DocumentType Literal (단일 기준 — 여기서 시작)
+db/document/document_coverage.py       _DOCUMENT_TYPES 튜플 (업로드 그리드 열 목록)
+api/routers/owner.py                   _VALID_DOCUMENT_TYPES (업로드 요청 검증, 2곳에서 사용)
+db/document/document_text_extractor.py DOCUMENT_TYPE_LABEL (한글 라벨)
+db/document/document_llm_router.py     Gemini 응답 스키마의 document_type enum
+db/pcaf_engine/pcaf_quality.py         _FUEL_TO_DOCUMENT_TYPE (결손월 → 그리드 칸 딥링크)
+scripts/backfill_issue_date.py         document_type.in_((...)) 필터
+
+[프론트 — 백엔드만 고치면 화면에서 빠지므로 같이 확인해야 함]
+web/components/SceneUpload.tsx         canProceed의 하드코딩 배열
+web/components/admin/DocumentAccessLog.tsx  DOCUMENT_TYPE_LABEL (관리자 열람로그 라벨)
+```
+
+(위 목록은 2026-08-22에 리포지토리 전체 grep으로 확인한 것이다. 어휘가 한 곳에 모여 있지
+않고 9곳에 흩어져 있다는 사실 자체가 문제인데, `water_bill` 추가를 계기로 상수를 한 군데로
+모으는 리팩터링은 **하지 않는다** — 이번 스프린트 범위를 넘고 기존 업로드 경로 회귀 위험이
+있다. 다만 추가할 때 어디를 빠뜨렸는지 추적할 수 있게 목록만 남겨둔다.)
+
+참고로 마이데이터 KYB 경로(`api/mydata_kyb_mock.py`)는 이미 `business_registration` 등
+위 Literal에 없는 값을 이 컬럼에 쓰고 있다 — 컬럼이 의도적으로 자유형식이고, 어휘를 제한하는
+건 업로드 경로뿐이라는 뜻이다. 따라서 파싱 로직이 없는 동안에는 `_VALID_DOCUMENT_TYPES`에
+넣지 않는 편이 안전하다(올릴 수는 있는데 처리는 못 하는 상태 방지 — §3.3, CLAUDE.md §6
+실패 가시성).
+
+**실제 고지서 서식 미검증** — §14-2.
 
 ### 7.3 `carbon_neutral_point_applications` 신규
 

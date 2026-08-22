@@ -66,29 +66,37 @@ export const CARBON_POINT_THRESHOLD_PCT = 5;
 export const CARBON_POINT_GAUGE_MAX_PCT = 10;
 
 /** 「탄소중립포인트 제도 운영에 관한 규정」 별표2 — 에너지 분야 **상업(법인)** 기준
- * 전기 감축 인센티브. 소상공인은 개인이 아니라 이 표를 적용받는다(cpoint.or.kr).
- * 감축률 구간별 포인트이며 1포인트는 **최대** 2원이라, 아래 계산값도 상한선이다. */
+ * 전기 감축 인센티브. 소상공인은 개인이 아니라 이 표를 적용받는다(cpoint.or.kr). */
 const ELECTRICITY_POINT_TIERS: readonly { minPct: number; points: number }[] = [
   { minPct: 15, points: 60_000 },
   { minPct: 10, points: 40_000 },
   { minPct: CARBON_POINT_THRESHOLD_PCT, points: 20_000 },
 ];
 
-const KRW_PER_POINT = 2;
+/** 포인트 단가 — **대구시 적용 단가 1.4원**(2025년 하반기에 1원에서 인상).
+ * data-plan.md §15.1·develop-plan.md §2.6이 근거이며, 2026-08-22에 이 값으로 확정했다.
+ *
+ * 규정상 1포인트의 상한은 2원이지만 그건 지자체가 그 이하로 정하도록 한 **한도**일 뿐이고,
+ * 우리 대상 지역(대구)의 실제 단가는 1.4원이다 — 상한을 그대로 쓰면 사장님에게 받을 금액을
+ * 과대 안내하게 되므로(data-plan §3.3 과장 방지) 실제 단가를 쓴다.
+ *
+ * 화면 문구도 이 상수를 참조한다 — 숫자를 컴포넌트에 하드코딩하면 단가가 바뀔 때
+ * 계산값과 라벨이 어긋난다(실제로 그렇게 어긋나 있던 것을 고친 것이다). */
+export const KRW_PER_POINT = 1.4;
 
 export interface CarbonPointRefundEstimate {
   points: number;
-  /** 포인트 × 최대 단가 — "최대"라는 사실은 화면 라벨이 담당한다. */
-  maxKrw: number;
+  /** 포인트 × 단가. 단가가 정수가 아니라 부동소수 잔재가 남을 수 있어 원 단위로 반올림한다. */
+  krw: number;
 }
 
-/** 감축률 → 예상 환급액(최대). 임계값 미만이거나 감축률을 계산하지 못했으면 null —
+/** 감축률 → 예상 환급액. 임계값 미만이거나 감축률을 계산하지 못했으면 null —
  * 0원으로 표시해 "받을 게 없다"와 "아직 모른다"를 뭉개지 않는다(CLAUDE.md 원칙7). */
 export function estimateRefund(reductionRatePct: number | null): CarbonPointRefundEstimate | null {
   if (reductionRatePct === null) return null;
   const tier = ELECTRICITY_POINT_TIERS.find((t) => reductionRatePct >= t.minPct);
   if (!tier) return null;
-  return { points: tier.points, maxKrw: tier.points * KRW_PER_POINT };
+  return { points: tier.points, krw: Math.round(tier.points * KRW_PER_POINT) };
 }
 
 /** fixture로 그린 화면임을 사용자에게 그대로 알리는 칩 문구(data-plan §3.3 — 실제

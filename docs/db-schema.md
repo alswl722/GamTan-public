@@ -456,8 +456,11 @@ PCAF Standard Part A Third Edition, Table 10.1-2(Annex, p.192)의 Option 1a/1b/2
 | base_fee_krw, usage_fee_krw, sewage_fee_krw, water_utilization_fee_krw, billed_amount_krw | |
 | created_at | |
 
-`document_type` enum에 `water_bill` 추가 필요. 실제 고지서 서식 미검증(§14-2) — 이번엔
-스키마만 먼저 준비하고 파싱 로직은 서식 확보 후 추가.
+문서종류 어휘에 `water_bill` 추가 필요 — **단 DDL은 아니다(2026-08-22 정정).**
+`source_documents.document_type`은 DB enum이 아니라 `VARCHAR(50)`이고 CHECK 제약도 없어
+마이그레이션 없이 코드 레벨 어휘 목록만 고치면 된다(대상 파일은
+`docs/small-business-green-supply-data-plan.md` §7.2 참고). 실제 고지서 서식 미검증(§14-2) —
+이번엔 스키마만 먼저 준비하고 파싱 로직은 서식 확보 후 추가.
 
 ### 25.2 `carbon_neutral_point_applications` (계획)
 | 컬럼 | 설명 |
