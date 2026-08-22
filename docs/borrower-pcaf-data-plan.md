@@ -1,11 +1,14 @@
 # 감탄 PCAF 차주 데이터 제품 전환 상세 계획서
 
 ```text
-Status: authoritative
+Status: authoritative (부분 채택 — 기반 레이어)
 Last updated: 2026-08-05
 Superseded by: 없음
-Scope: 감탄의 PCAF 제품 범위, TO-BE 데이터·계산·체크리스트·운영 설계
+Scope: PCAF 데이터 품질 후보 규칙 엔진, 차주 인벤토리·기관/포트폴리오 스키마, 기업대출 금융배출량(귀속계수) 산식의 정본.
+       제품 범위·우대금리 정책 문구는 docs/v1-plan.md(병합판, 2026-08-11)를 따른다.
 ```
+
+> 이 문서의 데이터 모델·산식·품질규칙(§2~§6 등)은 여전히 정본이며 `feat/db-alembic-migration`으로 스키마가 이미 구현됐다. 다만 "PCAF 점수 기반 우대금리 자동판정 제외" 원칙은 "우대금리 안내는 하되 자동판정·보장은 하지 않는다"로 재해석되어 `docs/v1-plan.md`의 안내 레이어와 함께 쓰인다. 제품 스코프·일정·역할분담은 `docs/v1-plan.md`가 정본이다.
 
 ## 1. 문서 목적
 
