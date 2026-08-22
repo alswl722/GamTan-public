@@ -2,7 +2,7 @@
 
 ```text
 Status: synthetic-data
-Last updated: 2026-08-18 (2026년 1~8월 YTD 연장 반영)
+Last updated: 2026-08-18
 Scope: data/fixtures/ 아래 개별 PDF/JPG/PNG가 어떤 시나리오를 시연하는지 기록
 ```
 
@@ -11,7 +11,8 @@ Scope: data/fixtures/ 아래 개별 PDF/JPG/PNG가 어떤 시나리오를 시연
 > HTML로 재현해 Chrome headless로 PDF/JPG/PNG 렌더링하는 방식으로 만들며, 목적도 다르다 —
 > 업로드 결측 매트릭스가 아니라 **문서 자체의 시각적 다양성(서식·포맷 혼합)과 계산 엔진 검증용
 > golden set(`_manifest.csv`)** 확보가 우선이다. 생성기: `scripts/generate_tax_invoice_fixtures.ps1`,
-> `scripts/generate_electricity_bill_fixtures.ps1`, `scripts/generate_other_companies_fixtures.ps1`
+> `scripts/generate_electricity_bill_fixtures.ps1`, `scripts/generate_other_companies_fixtures.ps1`,
+> `scripts/generate_small_business_fixtures.ps1`
 > (PowerShell + Chrome headless, Python/Node 없는 환경에서도 재현 가능하도록 설계).
 
 ---
@@ -61,102 +62,116 @@ docstring에 명시)은 깨지 않았다 — MAIN은 여전히 자체 이상치(
 
 ## 상세
 
-각 회사 2025년 1~12월 시나리오는 아래 그대로 유지. **2026년 1~8월은 같은 시나리오 성격을
-그대로 이어가되, 2025년에 시연했던 1회성 문제(결손·오염 등)는 반복하지 않고 "정상화된 이후"로
-그린다** — 결손/오염 자체가 회사의 영구적 특징이 아니라 그 시점의 사건이었다는 설계 원칙
-(§"회사별 한 줄 요약" 참고)에 따른 선택. 유일한 예외는 MAIN·성서테크로, 이 둘의 이상치는애초에
-"구조적/진행형"으로 설계됐으므로 2026년에도 그 성격을 그대로 이어간다.
-
-### ○○정밀(MAIN) — 세금계산서(경유), 2025년 1월~2026년 8월
+### ○○정밀(MAIN) — 세금계산서(경유), 2025년 1~12월
 - 월 2~3건, 공급자 3곳(구미석유·왕산주유소·경일주유소) 로테이션
-- 1~6월(2025) 평상시(월 130~190L) → 7월(2025)부터 지게차 2대 증차로 월 500~700L 구조적 상승
-- **2026년 1~8월**: 증차 이후 상승분이 새 기준선으로 정착 — 추가 급증 없이 월 480~540L 안정
-  유지(더 이상 이상치가 아니라 "새 정상"). 7/25 청구분 비고란에 "증차 1주년, 사용량 안정적으로
-  유지" 명시 — 설명 가능한 이상치가 시간이 지나 정상 패턴으로 흡수되는 사례
-- 위치: `data/fixtures/tax_invoices/MAIN/` (58건 + `_manifest.csv`)
-- 생성기: `scripts/generate_tax_invoice_fixtures.ps1`
+- 1~6월 평상시(월 130~190L) → 7~12월 지게차 2대 증차로 월 500~700L 구조적 상승
+- 위치: `data/fixtures/tax_invoices/MAIN/` (34건 + `_manifest.csv`)
 - GitHub: `feat/tax-invoice-fixtures-main` 브랜치, PR #83 (머지 대기)
 
-### 구미정밀(C001) — 세금계산서(경유) + 전기고지서, 2025년 1월~2026년 8월
-- 세금계산서: 월 2건(지게차용/배송차량용), 형곡주유소·구미중앙에너지 로테이션, 월 195~230L 평이한 흐름 — 2026년도 동일 패턴 지속
-- 전기고지서: 2025년 1,3~12월만 존재(2월 파일 없음 — "결측=파일을 안 만든다" 원칙), 3,300~3,950kWh 완만한 증가.
-  **2026년 1~8월은 완비**(1회성 결손이었으므로 반복 안 함) — 3,700→4,250kWh로 증가세 지속
-- 위치: `data/fixtures/tax_invoices/C001/`(40건), `data/fixtures/electricity_bills/C001/`(19건)
+### 구미정밀(C001) — 세금계산서(경유) 12개월 완비 + 전기고지서 11개월(2월 결손)
+- 세금계산서: 월 2건(지게차용/배송차량용), 형곡주유소·구미중앙에너지 로테이션, 월 195~230L 평이한 흐름
+- 전기고지서: 1,3~12월만 존재(2월 파일 없음 — "결측=파일을 안 만든다" 원칙), 3,300~3,950kWh 완만한 증가
+- 위치: `data/fixtures/tax_invoices/C001/`(24건), `data/fixtures/electricity_bills/C001/`(11건)
 
-### 대경부품(C002) — 세금계산서(경유·휘발유 혼합) + 전기고지서, 2025년 1월~2026년 8월
-- 세금계산서: 월 2건 고정 조합(경유·지게차용 + 휘발유·업무차량용), 경산셀프주유소·대경에너지 — 2026년도 동일 패턴 지속
-- 전기고지서: **2·5·8·11월 추정청구 패턴이 2026년에도 그대로 이어짐**(2026-02, 2026-05,
-  2026-08도 "검침 확인 지연" + 전월 실적 기준 추정 청구) — 이 문제는 1회성이 아니라 검침
-  주기 자체의 구조적 특성이라는 설정이라 계속 재현
-- 위치: `data/fixtures/tax_invoices/C002/`(40건), `data/fixtures/electricity_bills/C002/`(20건)
+### 대경부품(C002) — 세금계산서(경유·휘발유 혼합) 12개월 + 전기고지서 12개월(4개월 추정청구)
+- 세금계산서: 월 2건 고정 조합(경유·지게차용 + 휘발유·업무차량용), 경산셀프주유소·대경에너지
+- 전기고지서: 2·5·8·11월은 "검침 확인 지연" 문구와 함께 당월 kWh가 비어있고 전월 실적 기준
+  추정 청구됨(`is_estimated=True`) — 실제 원격검침 장애 시 발행되는 추정요금고지서를 재현
+- 위치: `data/fixtures/tax_invoices/C002/`(24건), `data/fixtures/electricity_bills/C002/`(12건)
 
-### 성서테크(C003) — 전기요금고지서, 2025년 1월~2026년 8월
-- 월 1건, 2025년 1~11월 4,150→4,900kWh 완만한 계절 변동, 12월 11,800kWh 급증(원인 미기재)
-- **2026년 1~8월**: 12월 스파이크 이후 일부 되돌아왔지만(1월 9,200kWh) 이전 기준선(4,900)으로는
-  복귀하지 않고 8,000대에서 재상승, 8월 12,500kWh로 12월 스파이크보다 더 높은 신규 최고치 —
-  청구서 어디에도 원인 설명 없음(진행 중·악화 중인 이상치). 순수 숫자 패턴만으로 HITL을
-  계속 유발해야 하는 사례
-- 위치: `data/fixtures/electricity_bills/C003/` (20건 + `_manifest.csv`)
+### 성서테크(C003) — 전기요금고지서, 2025년 1~12월
+- 월 1건, 1~11월 4,150→4,900kWh 완만한 계절 변동, 12월 11,800kWh 급증(원인 미기재)
+- 12월 발행일 2026-01-05로 YTD 구간까지 자연스럽게 걸침
+- 위치: `data/fixtures/electricity_bills/C003/` (12건 + `_manifest.csv`)
 
-### 칠곡소재(C004) — 세금계산서(경유) + 전기고지서, 2025년 1월~2026년 8월, 전부 정상
-- 9명 소기업 규모에 맞춰 월 1건(일부 달만 2건), 35~68L 소량, 공급자 1곳(칠곡주유소)만 사용 — 2026년도 동일 패턴 지속
-- 전기고지서도 전 기간 존재, 1,850~2,150kWh 소규모 사용량 완만히 증가
-- 5~9인 규모 밴드에서 유일하게 "장기간 계산 가능한 정상 데이터"를 가진 기업 — 업종 벤치마크
+### 칠곡소재(C004) — 세금계산서(경유) 12개월 + 전기고지서 12개월, 전부 정상
+- 9명 소기업 규모에 맞춰 월 1건(일부 달만 2건), 35~68L 소량, 공급자 1곳(칠곡주유소)만 사용
+- 전기고지서도 12개월 전부 존재, 1,850~2,120kWh 소규모 사용량
+- 5~9인 규모 밴드에서 유일하게 "1년치 계산 가능한 정상 데이터"를 가진 기업 — 업종 벤치마크
   분포 비교의 기준점 역할(개정 지시서 §2-3 요구사항)
-- 위치: `data/fixtures/tax_invoices/C004/`(24건), `data/fixtures/electricity_bills/C004/`(20건)
+- 위치: `data/fixtures/tax_invoices/C004/`(14건), `data/fixtures/electricity_bills/C004/`(12건)
 
-### 포항이엔지(C005) — 세금계산서(경유) + 전기고지서, 2025년 1월~2026년 8월
-- 2025년 1~6월, 9~12월만 존재 — 7월·8월은 세금계산서·전기고지서 **둘 다 파일이 없음**
+### 포항이엔지(C005) — 세금계산서(경유) 10개월 + 전기고지서 10개월, 7~8월 전체 공백
+- 1~6월, 9~12월만 존재 — 7월·8월은 세금계산서·전기고지서 **둘 다 파일이 없음**
 - 나머지 달은 월 2건, 75~90L 안정적인 정상 흐름 (포항해맞이주유소·영일대에너지)
-- **2026년 1~8월은 완비**(7~8월 결손은 2025년 1회성 사건이었으므로 반복 안 함) — 83~93L로
-  완만히 증가하는 정상 흐름, 전기고지서도 3,150→3,650kWh 완비
-- 위치: `data/fixtures/tax_invoices/C005/`(36건), `data/fixtures/electricity_bills/C005/`(18건)
+- 위치: `data/fixtures/tax_invoices/C005/`(20건), `data/fixtures/electricity_bills/C005/`(10건)
 
-### 대구정공(C006) — 세금계산서(경유) + 무관 파일, 2025년 1월~2026년 8월
-- 2025년 1~4,6~8,10~12월은 정상 세금계산서 월 2건(북구주유소·북대구에너지)
-- 2025년 5월·9월은 정상 세금계산서 대신 **카페 영수증(무관 파일)**이 업로드됨 — 실제 연료 구매
+### 대구정공(C006) — 세금계산서(경유) 10개월 + 무관 파일 2건(5월·9월)
+- 1~4,6~8,10~12월은 정상 세금계산서 월 2건(북구주유소·북대구에너지)
+- 5월·9월은 정상 세금계산서 대신 **카페 영수증(무관 파일)**이 업로드됨 — 실제 연료 구매
   서류는 그 달에 존재하지 않음(대체가 아니라 결측 + 오염이 겹친 상태)
 - 카페 영수증은 세금계산서와 완전히 다른 미니 영수증 레이아웃(회전·그림자 효과)으로 별도 제작 —
   문서분류기가 형태만으로도 "이건 세금계산서가 아니다"를 구분할 수 있는지 테스트
-- **2026년 1~8월은 정상 제출로 복귀**(오염은 2025년 1회성 사건) — 73~80L 완만히 증가하는 정상 흐름
-- 위치: `data/fixtures/tax_invoices/C006/` (세금계산서 36건 + 카페영수증 2건, 총 38건)
+- 위치: `data/fixtures/tax_invoices/C006/` (세금계산서 20건 + 카페영수증 2건, 총 22건)
+
+---
+
+## 소상공인 트랙(탄소중립포인트) — S001·S002
+
+`docs/small-business-green-supply-data-plan.md` §6 설계에 대응하는 fixture. 위 회사들과
+다른 점 두 가지: ① **계약종별이 `일반용(을)`** (제조업 MAIN·C001~C006은 전부 `산업용(을)`
+계열) — 소상공인 자동 판별(같은 문서 §6.1)의 근거 데이터, ② **2024-01~2026-08 32개월치** —
+탄소중립포인트 자격 판정에 필요한 기준년도(2024) 비교 데이터가 있어야 하기 때문에 다른
+회사들(2025년 1개년 또는 YTD 일부)보다 기간이 길다.
+
+### S001(동성로카페) — 감축 성공 케이스
+- 2024(기준) → 2025: 매달 ~7.5% 감축(5% 문턱 안전 통과) → 2026: 추가로 ~3%만 감축(절감
+  여지 소진, 정체 패턴)
+- 2026 구간은 산식 해석에 따라 결과가 갈리는 의도적 엣지케이스: "전년 동월 단순비교"로는
+  5% 미달(~3%)이지만 "과거 2년 평균 대비"로는 통과(~6.7%) — 회계가 산식을 확정하면
+  계산 함수가 올바른 쪽(2년 평균)을 구현했는지 이 골든셋으로 바로 검증 가능
+- 위치: `data/fixtures/electricity_bills/S001/` (32건 + `_manifest.csv` + `_reduction_expected.csv`)
+
+### S002(반월당분식) — 감축 미달·대조군 케이스
+- 2024→2025→2026 내내 사용량이 오히려 소폭 증가(설비 추가 등 가정) — 어떤 산식으로 계산해도
+  자격 미달이어야 정상인 음성 대조군
+- 자격 판정 로직이 무조건 통과시키는 버그가 없는지 검증하는 용도(S001만 있으면 "항상 True를
+  반환해도 통과하는" 상태를 못 잡음)
+- 위치: `data/fixtures/electricity_bills/S002/` (32건 + `_manifest.csv` + `_reduction_expected.csv`)
+
+### `_reduction_expected.csv` 공통 컬럼
+```text
+year_month, usage_kwh, prior_year_same_month_kwh, yoy_reduction_pct, yoy_eligible_5pct,
+avg_prior_2yr_kwh, reduction_vs_2yr_avg_pct, avg2yr_eligible_5pct, note
+```
+2026년 행에서만 `avg_prior_2yr_kwh` 계열이 채워진다(2024+2025 두 해 데이터가 모두 있어야
+2년 평균을 계산할 수 있으므로). 감축률 산정 공식은 아직 회계 확인 전이라(§14-1·§15.2,
+`docs/small-business-green-supply-data-plan.md`) 두 해석을 모두 golden set에 남겨뒀다.
+
+**아직 없음**: 상수도 요금고지서(§7.2, 실제 서식 미확보로 이번엔 제외), 탄소중립포인트
+신청서 초안 자체(hwp 서식은 확보됨 — §14-1 해결, 다음 단계에서 데이터화 가능).
 
 ---
 
 ## 산출물
 
 ```text
-data/fixtures/tax_invoices/MAIN/*.{pdf,jpg,png} + _manifest.csv        — 58건 (2025:34 + 2026:24)
-data/fixtures/tax_invoices/C001/*.{pdf,jpg,png} + _manifest.csv        — 40건 (2025:24 + 2026:16)
-data/fixtures/tax_invoices/C002/*.{pdf,jpg,png} + _manifest.csv        — 40건 (2025:24 + 2026:16)
-data/fixtures/tax_invoices/C004/*.{pdf,jpg,png} + _manifest.csv        — 24건 (2025:14 + 2026:10)
-data/fixtures/tax_invoices/C005/*.{pdf,jpg,png} + _manifest.csv        — 36건 (2025:20 + 2026:16)
-data/fixtures/tax_invoices/C006/*.{pdf,jpg,png} + _manifest.csv        — 38건(카페영수증 2건 포함, 2025:22 + 2026:16)
-data/fixtures/electricity_bills/C001/*.{pdf,jpg,png} + _manifest.csv   — 19건 (2025:11 + 2026:8)
-data/fixtures/electricity_bills/C002/*.{pdf,jpg,png} + _manifest.csv   — 20건 (2025:12 + 2026:8)
-data/fixtures/electricity_bills/C003/*.{pdf,jpg,png} + _manifest.csv   — 20건 (2025:12 + 2026:8)
-data/fixtures/electricity_bills/C004/*.{pdf,jpg,png} + _manifest.csv   — 20건 (2025:12 + 2026:8)
-data/fixtures/electricity_bills/C005/*.{pdf,jpg,png} + _manifest.csv   — 18건 (2025:10 + 2026:8)
+data/fixtures/tax_invoices/MAIN/*.{pdf,jpg,png} + _manifest.csv        — 34건
+data/fixtures/tax_invoices/C001/*.{pdf,jpg,png} + _manifest.csv        — 24건
+data/fixtures/tax_invoices/C002/*.{pdf,jpg,png} + _manifest.csv        — 24건
+data/fixtures/tax_invoices/C004/*.{pdf,jpg,png} + _manifest.csv        — 14건
+data/fixtures/tax_invoices/C005/*.{pdf,jpg,png} + _manifest.csv        — 20건
+data/fixtures/tax_invoices/C006/*.{pdf,jpg,png} + _manifest.csv        — 22건(카페영수증 2건 포함)
+data/fixtures/electricity_bills/C001/*.{pdf,jpg,png} + _manifest.csv   — 11건
+data/fixtures/electricity_bills/C002/*.{pdf,jpg,png} + _manifest.csv   — 12건
+data/fixtures/electricity_bills/C003/*.{pdf,jpg,png} + _manifest.csv   — 12건
+data/fixtures/electricity_bills/C004/*.{pdf,jpg,png} + _manifest.csv   — 12건
+data/fixtures/electricity_bills/C005/*.{pdf,jpg,png} + _manifest.csv   — 10건
+data/fixtures/electricity_bills/S001/*.{pdf,jpg,png} + _manifest.csv + _reduction_expected.csv — 32건
+data/fixtures/electricity_bills/S002/*.{pdf,jpg,png} + _manifest.csv + _reduction_expected.csv — 32건
 
-scripts/generate_tax_invoice_fixtures.ps1        — MAIN 세금계산서 생성기(2025+2026 전체 포함)
-scripts/generate_electricity_bill_fixtures.ps1   — 성서테크 전기요금고지서 생성기(2025+2026 전체 포함)
-scripts/generate_other_companies_fixtures.ps1    — 나머지 5개 기업 공용 생성 함수(세금계산서·
-                                                     전기고지서·무관파일). Build-TaxInvoices·
-                                                     Build-ElectricityBills는 -Year 파라미터로
-                                                     연도를 받고, _manifest.csv는 기존 파일이
-                                                     있으면 덮어쓰지 않고 append한다(Save-Manifest)
-scripts/run_other_companies_fixtures.ps1         — 위 함수로 5개 기업 2025년 배치 생성
-scripts/run_other_companies_fixtures_2026.ps1    — 같은 함수로 5개 기업 2026년 1~8월 배치 생성
+scripts/generate_tax_invoice_fixtures.ps1        — MAIN 세금계산서 생성기
+scripts/generate_electricity_bill_fixtures.ps1   — 성서테크 전기요금고지서 생성기
+scripts/generate_other_companies_fixtures.ps1    — C001~C006 일괄 생성기(세금계산서·
+                                                     전기고지서·무관파일 공용 템플릿 포함)
+scripts/generate_small_business_fixtures.ps1     — S001·S002 소상공인 전기고지서 + 감축률
+                                                     골든셋 생성기(위 스크립트의 템플릿 재사용)
 ```
 
-총 333건(MAIN 58 + C001 59 + C002 60 + C003 20 + C004 44 + C005 54 + C006 38).
+총 259건(MAIN 34 + C001 35 + C002 36 + C003 12 + C004 26 + C005 30 + C006 22 + S001 32 + S002 32).
 
 재생성: PowerShell에서 각 스크립트 실행(Chrome headless 필요, 경로는 스크립트 상단 `$Chrome`
-변수 참고). MAIN·C003은 2025+2026 데이터가 한 배열에 있어 재실행 시 전체가 덮어써지며 파일명·
-수치가 항상 동일하게 재현된다. 나머지 5개 기업은 `run_other_companies_fixtures.ps1`(2025)과
-`run_other_companies_fixtures_2026.ps1`(2026)을 **순서대로** 실행해야 `_manifest.csv`가 두
-연도를 모두 담는다 — 2026 스크립트만 단독 재실행해도 append라 안전하지만, `_manifest.csv`
-자체를 지운 뒤라면 2025→2026 순서를 지켜야 한다.
+변수 참고). 매 실행마다 파일을 덮어쓰므로 파일명·수치는 항상 동일하게 재현된다.
 
 ## 남은 후보
 
@@ -164,8 +179,8 @@ scripts/run_other_companies_fixtures_2026.ps1    — 같은 함수로 5개 기�
   스키마로 통합할지 여부 — 현재는 두 데이터셋이 별개 파일 체계로 공존
 - 도시가스고지서 문서 유형은 아직 신규 트랙에 없음(성서테크의 Q1 도시가스 결손은 기존
   `data/업로드서류/`만 커버)
-- ~~2026년 1~8월 YTD 구간 데이터~~ — 2026-08-18 완료. MAIN·성서테크는 진행형 이상치를 그대로
-  이어갔고(§상세 참고), 나머지 5개 기업은 2025년의 1회성 결손·오염을 반복하지 않고 정상화된
-  것으로 그렸다. 이 구분(구조적 이상치 vs 1회성 이벤트)은 원본 개정 지시서(`gamtan_claude_data_
-  revision_command.md`, 이 리포지토리에는 없음) 텍스트 없이 이 문서의 기존 회사별 시나리오
-  설명만으로 추론한 것이니, 원 지시서의 의도와 다르면 알려주면 바로 조정 가능
+- 2026년 1~8월 YTD 구간은 S001·S002(소상공인 트랙)만 커버함 — MAIN·C001~C006(제조업 트랙)은
+  여전히 2025년 1개년 또는 그 이하라 개정 지시서 §1의 "2026년 1~8월 최근 동향" 요구사항이
+  제조업 쪽에는 아직 미착수
+- 상수도 요금고지서, 탄소중립포인트 신청서 초안 데이터는 아직 없음(hwp 서식은 확보 완료,
+  `docs/small-business-green-supply-data-plan.md` §14-1 해결 — 다음 착수 후보)

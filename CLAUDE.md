@@ -44,7 +44,7 @@
 - **테스트는 대응하는 소스 서브디렉토리와 이름을 맞춘다**: `db/document/*.py` → `tests/document/`, `db/pcaf_engine/*.py` → `tests/pcaf_engine/`, `db/reports/*.py` → `tests/reports/`. 라우터가 소스를 감싸서 호출할 뿐 직접 import하지 않는 TestClient 통합 테스트(`test_admin.py`, `test_owner_quality.py` 등)는 억지로 끼워 넣지 말고 `tests/` 루트에 둔다.
 - 이동 시 `git mv`로 이력을 보존하고, 그룹 내부 상호 import와 외부(api/, tests/) 참조처를 모두 새 경로로 고친 뒤 관련 테스트를 반드시 재실행해 통과를 확인한다.
 
-## 4. DB 테이블 (22개)
+## 4. DB 테이블 (22개 + 소상공인 트랙 3개 계획됨)
 
 세부 컬럼·제약은 정본 `db/models.py`, 사람이 읽기 쉬운 표는 `docs/db-schema.md` 참고. 두 세대로 나뉜다.
 
@@ -76,6 +76,12 @@
 21. `fx_rates` — 환율
 22. `rate_approval_requests` — 우대금리·설비금융 안내 승인요청 큐 (사장님 요청 → 은행 담당자 승인/반려, 여신 결정 아님 — 원칙10)
 
+**소상공인 탄소중립포인트 트랙 (3개, 계획됨 — 아직 Alembic revision 없음)** — `docs/small-business-green-supply-develop-plan.md` §2.2·§7, `docs/small-business-green-supply-data-plan.md` §7.2~§7.4가 정본. 착수 조건은 §7 각주 참고.
+
+23. `carbon_neutral_point_applications` — 탄소중립포인트 에너지분야 신청서 초안(기준/목표년도 사용량, 예상 감축률 `reduction_rate_pct`, 자격 여부, draft까지만 감탄이 갱신)
+24. `carbon_neutral_point_enrollments` — 탄소중립포인트 가입 여부·인센티브 종류(현금/그린카드 포인트, 1회성 가입)
+25. `water_bills` — 상수도 요금고지서(수도 사용량, §7.2 실 서식 미확보 상태라 스키마만 우선 준비, 파싱 로직은 서식 확보 후)
+
 ## 5. 핵심 설계 원칙 (위반 금지)
 
 1. **LLM 산수 금지**: LLM은 분류·추출만. 물량 환산(금액÷월별 단가)과 탄소량 계산(물량×배출계수)은 결정론적 파이썬 순수 함수 + 단위 테스트 + Pydantic 입력 검증. "환각이 숫자에 개입할 경로가 없다"가 대외 방어 논리임.
@@ -102,7 +108,7 @@
 7. **미산정 Scope와 미확인 가스는 0으로 합산하지 않는다** — `borrower_emission_inventories.emission_tco2e`, `inventory_gas_emissions`는 미산정 시 null + 사유(status/exclusion_reason)로 저장.
 8. **승인된 인벤토리·품질 후보·재무정보는 덮어쓰지 않고 새 버전으로 재산정한다** (`version` 컬럼, `supersedes_*_id`).
 9. **다른 금융기관의 데이터에 접근할 수 없다** (tenant 격리 — `financial_institution_id` 경계).
-10. **우대금리·설비금융 안내는 등급·데이터 완전성 개선을 제안할 뿐, 자격이나 등급 상승을 보장하지 않는다.** 최종 승인은 은행 담당자가 한다.
+10. **우대금리·설비금융 안내는 등급·데이터 완전성 개선을 제안할 뿐, 자격이나 등급 상승을 보장하지 않는다.** 최종 승인은 은행 담당자가 한다. 같은 원칙이 소상공인 탄소중립포인트 트랙에도 적용된다 — 감탄이 계산하는 `reduction_rate_pct`는 자체 예상치일 뿐 공식 판정이 아니며(공식 판정은 한국환경공단이 반기마다 별도 계산), 신청서 초안·알림 문구 어디에도 확정치처럼 표기하지 않는다(`docs/small-business-green-supply-data-plan.md` §6.2).
 
 ## 6. 에이전트 (오케스트레이터)
 
@@ -116,6 +122,7 @@
 ## 7. 데이터 입력 — 마이데이터·업로드 (v1 하이브리드 파이프라인)
 
 - `/mock/hometax`, `/mock/kepco` — 세금계산서·전기고지서 mock, v0.1부터 유지. 시연 기업 12개월치 전표 반환. ⚠️ **3~5월 도시가스 전표는 의도적으로 결손시킬 것** — 결손 감지 킬러씬 트리거, 빼먹으면 시연 불가. 7월 전표에 "지게차 경유 외 1종" 포함(분류 킬러씬용)
+- **예외 — 소상공인 탄소중립포인트 트랙은 12개월이 아니라 24개월(과거 2년)치 사용량 데이터가 전제다.** 대구시 탄소중립포인트 감축률 산정 자체가 "과거 2년치 사용량 평균 대비 금년 사용량" 기준이기 때문(신규 가입자는 1년치 평균으로 대체하는 예외 있음). 이 트랙의 fixture(S001·S002)는 2024-01~2026-08 32개월치로 이미 이 요구사항에 맞춰 제작됨(`data/fixtures/electricity_bills/S001`, `S002`) — 자세한 설계는 `docs/small-business-green-supply-develop-plan.md` §2.2 참고
 - **마이데이터 5종 mock**(`POST /mock/{source}/{company_id}`, `api/mydata_kyb_mock.py`) — 사업자등록증명·부가세과세표준증명·표준재무제표증명·중소기업확인서·전기요금납부내역. **전부 기업 식별·재무 프로필용이며 배출량 계산과 무관** — 표준재무제표증명만 `borrower_financials`에 매핑, 나머지는 `source_documents`에만 적재. 한전·가스공사 마이데이터에는 사용량(kWh 등)이 없어 배출량 계산에 못 쓴다는 게 확인된 사실 — 그래서 아래 업로드 3종이 별도로 존재한다.
 - **업로드 3종**(`POST /owner/{company_id}/documents/upload`, `api/document_ingestion.py`) — 세금계산서(사진/PDF/HTML 이메일 OCR 또는 홈택스 엑셀 택1)·전기요금고지서·도시가스고지서. `source_documents` → 에너지 관련 타입만 `vouchers`로 변환 → **기존 분류·계산 파이프라인을 그대로 재사용**한다. "OCR"은 4단계 구조다(`db/document_extraction.py::extract_document`) — 1순위 텍스트 레이어(`db/document_text_extractor.py`, PDF 전체 페이지) 또는 HTML 이메일(`db/document_html_extractor.py`, 홈택스·빌36524 등 발행 알림)에서 문서종류·날짜·금액·수량을 정규식으로 읽는다(회계 담당 업로드 서류가 스캔 이미지가 아니라 reportlab로 그린 텍스트 PDF라 여기서 대부분 끝남). 텍스트가 없거나(실 사진·스캔본) 있어도 서식을 못 알아보거나 필드 파싱에 실패하면 2순위 `db/document_ocr_extractor.py`(PaddleOCR, 한국어 모델)로 재시도한다 — JPEG/PNG/WEBP/HEIC 사진과 스캔 PDF(`PyMuPDF`로 래스터화)를 지원하며, 인식된 텍스트를 **같은 정규식 파서에 다시 흘려보낸다**(구조화 로직은 텍스트 레이어·OCR 경로가 공유). 세금계산서 품목행처럼 표 레이아웃이라 한 줄 정규식이 사진에서 컬럼 어긋남으로 실패하면 좌표 기반 표 매칭(`parse_tax_invoice_table_rows`)을 3순위로 추가 시도한다. 이 세 단계까지 다 실패하면(처음 보는 라벨 단어·표 구조 — 룰 기반 파서의 근본 한계) 4순위로 `db/document_llm_router.py`(Gemini, 2026-08-17 도입)를 최후 수단으로 부른다 — **다만 LLM은 PaddleOCR이 이미 뽑아놓은 셀 목록 중 "어느 셀이 어느 필드냐"만 판단(라우팅)하고, 실제 값은 항상 그 셀의 OCR 원문을 2순위와 동일한 결정론적 정규식으로 재파싱한다.** LLM 응답 스키마엔 애초에 숫자·날짜 값을 담는 필드가 없어(셀 id 참조만 가능) 값을 지어낼 경로가 구조적으로 없다 — "환각이 숫자에 개입할 경로가 없다"(원칙1)는 방어 논리를 이 최후 수단 경로에서도 유지한 채 서식·어휘 일반화 능력만 얻는 설계다. 신뢰도(셀 선택에 대한 확신도) 0.5 미만이거나 필수 필드를 못 채우면 여기서도 실패 처리된다. 관리비 고지서(전기료가 안분돼 포함된 문서)는 규칙 기반으로 인식해 electric_bill로 추출하되 `verification_status="mgmt_fee_estimate"`로 낮은 신뢰도를 표기하고 재발행 요청 안내를 함께 반환한다(1차 계량 데이터가 아님 — CLAUDE.md §6 결손 월 임시보정과 같은 결). 어느 경로로 읽혔는지(`extraction_method`: text_layer|html_text|ocr|ocr_llm)와 신뢰도(`extraction_confidence`)는 `source_documents`에 영속화된다. 예외는 슬롯 불일치(`DocumentTypeMismatchError`, 예: 전기고지서를 세금계산서 칸에 업로드)뿐 — 문서 자체는 이미 판별됐으니 재시도해도 결론이 안 바뀌어 곧장 실패시킨다. 그 외 모든 실패는 합성값으로 가리지 않고 `DocumentParseError` → 422로 명확히 실패한다(4단계 다 실패하는 극단적인 손글씨·저화질은 자동 복구 없이 재업로드 안내로 감 — 실패 가시성 원칙). 사용자는 업로드 전에 월을 지정하지 않고 여러 파일을 한 번에 올리면 각 파일의 실제 날짜가 응답으로 돌아온다.
 - 어느 문서가 필수/선택/해당없음인지는 사장님이 고른 연료 유형(`Company.fuel_types_json`)으로 결정된다 — 순수함수 `db/document_requirements.py::required_documents()`가 프론트·백엔드 양쪽에서 참조하는 단일 기준.

@@ -7,6 +7,7 @@
 
 - **v0.1 코어 엔진 테이블** (§1~8) — 전표→탄소량 변환 파이프라인. 데모부터 지금까지 교체 없이 계속 사용 중.
 - **v1 기관/PCAF 테이블** (§9~23) — 여신 포트폴리오 단위 금융배출량(PCAF Business Loans) 산정 레이어(§9~21)와 그 위의 관리자 승인요청·감사 로그·상품 참조 테이블(§15, §22~23, 2주차 추가)까지 포함. `financial_institutions`를 데이터 격리의 루트로 두고, 기존 v0.1 테이블(`vouchers`, `classifications`)에는 소속 기관을 가리키는 FK만 nullable로 얹었다(§24 참고).
+- **소상공인 탄소중립포인트 트랙 테이블** (§25) — §1~23과 달리 **아직 구현 전, 계획 단계**. Alembic revision도 없다. 착수 여부·시점은 회계 확인 작업(data-plan.md §15.1)에 달려 있다.
 
 ## 1. `companies` — 기업
 | 컬럼 | 타입 | 키/제약 | 설명 |
@@ -240,6 +241,12 @@
 
 > 하이브리드 입력 파이프라인(마이데이터 5종 + 업로드 3종)의 공통 착지점. 에너지 관련 문서(세금계산서·전기고지서·도시가스고지서)는 여기 적재된 뒤 `vouchers`로 변환돼 기존 `classify_vouchers()`/`calc_engine.py` 파이프라인을 그대로 탄다. 표준재무제표증명은 `borrower_financials`에도 매핑되고, 나머지 KYB성 문서(사업자등록증명·부가세과세표준증명·중소기업확인서·전기요금납부내역)는 이 테이블에만 남는다.
 
+> **계획됨 (미구현)** — 소상공인 탄소중립포인트 트랙(§25)을 위해 `contract_type`
+> VARCHAR(50, nullable, 원문 예: "산업용(을) 고압A")과 `contract_type_class` VARCHAR(20,
+> nullable, industrial\|commercial\|residential\|unknown)을 이 테이블에 추가 예정 —
+> 전기고지서 파싱 단계에서 채운다. 아직 Alembic revision 없음. 근거: `docs/small-business-
+> green-supply-data-plan.md` §7.1, `docs/small-business-green-supply-develop-plan.md` §2.1
+
 ## 15. `source_document_access_logs` — 원본문서 열람 감사 로그 (v1 2주차)
 | 컬럼 | 타입 | 키/제약 | 설명 |
 | --- | --- | --- | --- |
@@ -429,7 +436,56 @@ PCAF Standard Part A Third Edition, Table 10.1-2(Annex, p.192)의 Option 1a/1b/2
 - PCAF 엔진은 현재 두 갈래로 존재한다: 임시 구현 `db/pcaf.py::company_pcaf_summary()`(구 1~5등급 방식, `ScenePcaf.tsx`가 아직 이걸 씀)와 정식 구현 `db/pcaf_quality.py`(Table 10.1-2 옵션 기반, `/borrowers/{company_id}/quality-assessments/{year}`로 노출되지만 프론트 미연결) — 교체 작업 남아 있음.
 - `db/pcaf.py::rate_upgrade_candidates`(전체 기업 순회, 읽기 전용 안내 목록)는 단일 기업 판정 함수 `upgrade_candidate_for_company`로 리팩터링됐다 — `rate_approval_requests` 생성 시(§22) 동일 판정 로직을 재사용해 등급 스냅샷을 저장하기 위함(로직 중복 없음).
 
+## 25. 계획됨 — 미구현 (소상공인 탄소중립포인트 트랙)
+
+> 아래 3개 테이블은 §1~23과 달리 **아직 `db/models.py`에 없고 Alembic revision도 없다.**
+> 정본은 `docs/small-business-green-supply-data-plan.md` §7.2~§7.4, 실행 계획은
+> `docs/small-business-green-supply-develop-plan.md` §2.2·§7. 착수 조건(회계 확인 작업)은
+> data-plan.md §15.1 참고 — 컬럼명·타입은 실제 구현 시 바뀔 수 있다.
+
+### 25.1 `water_bills` (계획)
+| 컬럼 | 설명 |
+| --- | --- |
+| id, company_id | |
+| source_document_id | FK→source_documents |
+| provider | 지자체 상수도사업본부명 |
+| customer_number, site_addr | |
+| period_start / period_end | |
+| usage_amount_m3 | 당월 사용량 |
+| prev_usage_amount_m3 | |
+| base_fee_krw, usage_fee_krw, sewage_fee_krw, water_utilization_fee_krw, billed_amount_krw | |
+| created_at | |
+
+`document_type` enum에 `water_bill` 추가 필요. 실제 고지서 서식 미검증(§14-2) — 이번엔
+스키마만 먼저 준비하고 파싱 로직은 서식 확보 후 추가.
+
+### 25.2 `carbon_neutral_point_applications` (계획)
+| 컬럼 | 설명 |
+| --- | --- |
+| id, company_id | |
+| application_type | `business` \| `household` — 이번 범위는 business만 |
+| baseline_year, target_year | |
+| baseline_usage_json, target_usage_json | `{"electricity_kwh": n, "water_m3": n, "city_gas_m3": n}` |
+| reduction_rate_pct | 감탄 자체 예상치(공식 판정 아님, CLAUDE.md §5 원칙10) |
+| eligible | bool |
+| status | `draft` \| `submitted` \| `approved` \| `rejected` — draft까지만 감탄이 갱신, 이후는 사장님 수동 갱신 |
+| draft_document_url | 자동 생성된 신청서 초안 파일 경로 |
+| created_at | |
+
+### 25.3 `carbon_neutral_point_enrollments` (계획)
+| 컬럼 | 설명 |
+| --- | --- |
+| id, company_id | |
+| enrolled, enrolled_at | |
+| point_type | `cash` \| `green_card_point` \| `local_currency`(비전 단계) |
+| source | `self_reported` \| `api_confirmed` — 대구시 API 연동 전까지는 self_reported만 |
+
 ## 변경 이력
+- 2026-08-22: §25(계획됨) 신설 — 소상공인 탄소중립포인트 트랙의 미구현 테이블 3종
+  (`water_bills`, `carbon_neutral_point_applications`, `carbon_neutral_point_enrollments`)
+  및 `source_documents`(§14)에 추가 예정인 `contract_type`/`contract_type_class` 컬럼 반영.
+  전부 계획 단계이며 Alembic revision 없음 — 정본은
+  `docs/small-business-green-supply-data-plan.md` §7.
 - 2026-08(2주차): `rate_products`(§23) 추가 + `rate_approval_requests`(§22)에 `matched_product_name` 컬럼 — 우대금리 카드를 "이미 대상"/"개선 필요" 두 상태로 나누며 실제 iM뱅크 상품(ESG Grow-Up 특별대출)을 참조 시드. `0016_rate_products.py` 마이그레이션. §22 표에 그동안 누락돼 있던 `scope_group` 컬럼(0014)도 같이 반영.
 - 2026-08(2주차): §17 `borrower_emission_inventories.emission_tco2e`를 채우는 집계 로직(`aggregate_scope_emissions`) 추가 — 스키마 변경 없음, 계산 경로만 신규(§4 역할분담 "인벤토리 완전성 집계" 해소).
 - 2026-08(2주차): `source_document_access_logs`(§15), `rate_approval_requests`(§22) 추가 — 승인요청 큐(HITL 큐와 분리)와 원본문서 열람 감사 로그(PR #28). `0011_rate_approval_and_access_log.py` 마이그레이션.
