@@ -1,10 +1,11 @@
 # 감탄 PCAF 차주 데이터 제품 전환 상세 계획서
 
 ```text
-Status: authoritative
+Status: authoritative (부분 채택 — 기반 레이어)
 Last updated: 2026-08-05
 Superseded by: 없음
-Scope: 감탄의 PCAF 제품 범위, TO-BE 데이터·계산·체크리스트·운영 설계
+Scope: PCAF 데이터 품질 후보 규칙 엔진, 차주 인벤토리·기관/포트폴리오 스키마, 기업대출 금융배출량(귀속계수) 산식의 정본.
+       제품 범위·우대금리 정책 문구는 docs/v1-plan.md(병합판, 2026-08-11)를 따른다.
 ```
 
 > **구현 현황 포인터 (2026-08-12)** — 이 문서는 TO-BE 목표 설계로서 여전히 유효하다. 실제 진행 상황·주차별 완료조건은 `docs/v1-plan.md`, DB 스키마의 현재 정본 대조표는 `docs/db-schema.md`를 참고할 것. 이 문서가 그리는 설계 중 이미 구현된 부분:
