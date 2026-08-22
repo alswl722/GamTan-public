@@ -9,6 +9,9 @@ Depends on: docs/small-business-green-supply-data-plan.md (스키마·API·화�
 Scope: 소상공인 탄소중립포인트 트랙(data-plan.md §6)의 개발자 A(백엔드)·개발자 B(프론트엔드)
        작업 분담과 순서. 그린 서플라이 네트워크(data-plan.md §7.5~§9.2)는 Tier3로 재분류되어
        이 문서 범위에서 제외한다.
+프론트(§3): 2026-08-21 실행 스펙 확정 — 백엔드 §9.1 API 미구현을 코드로 확인해 이번 스코프를
+       "UI 껍데기까지"로 한정하고, fixture 모듈로 대역한다. 파일 목록·시나리오 토글은 §3.0,
+       제외 항목은 §3.5, 검증 방법은 §3.6.
 2026-08-22 갱신: 원본 브레인스토밍 재검토로 §2.2(24개월 데이터·정산주기·수도 스키마)와
        §2.6(열린 질문 — 개인/법인 참여 트랙, 인센티브 금액 노출 여부)을 보강. 상세 작업
        체크리스트는 docs/tasks.md(개발자 A 실행 계획) 참고.
@@ -128,40 +131,158 @@ data-plan.md §15.1(회계 1순위)이 끝나야 정확한 스펙으로 시작�
 
 ## 3. 개발자 B (프론트엔드)
 
-개발자 A의 API가 나오는 대로 순차 진행하되, UI 시안은 먼저 시작할 수 있다.
+**이번 스코프는 "UI 껍데기까지"로 확정(2026-08-21).** §9.1 API(`carbon-point/eligibility`,
+`carbon-point/applications`)가 아직 하나도 없다는 걸 코드로 확인했다 — `carbon_neutral_point`
+·`contract_type`·`business_scale_hint`·`water_bill`을 저장소 전체에서 검색한 결과 `db/`·`api/`에
+구현이 없고, `db/synth_dataset_generator.py`의 합성 CSV 컬럼 `contract_type`("산업용"/"일반용")만
+존재한다. 그래서 프론트는 fetch 연동 없이 화면·문구·분기까지만 만들고, 실제 연동은 개발자 A의
+엔드포인트가 나온 뒤 별도 작업으로 미룬다.
+
+대신 **fixture 모듈 하나를 API 경계의 유일한 대역**으로 두고, 컴포넌트는 처음부터 §9.1 응답
+스키마와 똑같은 타입만 소비한다. 나중 연동은 `web/lib/carbon-point-fixture.ts` 참조를
+`web/lib/api.ts` 호출로 갈아끼우는 것으로 끝난다.
+
+### 3.0 신규·수정 파일과 시나리오 토글 규약
+
+| 파일 | 구분 | 역할 |
+| --- | --- | --- |
+| `web/lib/carbon-point-fixture.ts` | 신규 | §9.1 응답 타입 + 시나리오 4종 + `resolveScenario()`. **연동 시 삭제 대상** |
+| `web/components/OnboardingRewardBanner.tsx` | 신규 | §3.1 온보딩 리워드 배너 |
+| `web/components/CarbonPointCard.tsx` | 신규 | §3.3 자격 요약 카드(혜택 페이지) |
+| `web/components/CarbonPointDraftSheet.tsx` | 신규 | §3.3 신청서 초안 바텀시트 |
+| `web/components/CarbonPointNoticeBanner.tsx` | 신규 | §3.3 홈 화면 신청 가능 알림 배너. 지금은 props 없음(fixture라 `companyId`를 쓸 곳이 없어 unused 경고를 만들지 않으려고) — API 연동 시 생긴다 |
+| `web/components/SceneConsent.tsx` | 수정 | `phase === "done"`에 §3.1 배너 삽입 |
+| `web/app/owner/benefits/page.tsx` | 수정 | §3.2 3분기 |
+| `web/app/owner/page.tsx` | 수정 | §3.3 홈 배너 삽입 |
+
+시나리오 토글은 URL 쿼리 `?cp=`로 한다. 쿼리 파싱은 `useSyncExternalStore`로 한다 —
+`useCarbonPointScenario()` 훅이 `popstate`를 구독하고 서버 스냅숏으로 기본 시나리오를 준다.
+후보 두 개를 다 버린 이유가 있다.
+
+- `useSearchParams()`: 정적 프리렌더 라우트에서 Suspense 경계를 요구해 기존 페이지 구조를
+  건드려야 한다
+- `useEffect` + `setState`: 이 프로젝트 lint가 `react-hooks/set-state-in-effect`를 **error**로
+  잡는다(React 19 규칙, 기존 파일 13건이 이미 걸려 있어 신규 코드로 늘리지 않는다)
+
+`useSyncExternalStore`는 브라우저의 외부 상태를 읽는 정석 훅이라 하이드레이션 불일치 경고도
+없다. 예외가 한 곳 있다: `benefits/page.tsx`의 조회 게이팅 effect는 훅 값 대신
+`resolveScenario(window.location.search)`를 직접 읽는다 — 그 effect는 하이드레이션 직후에도 도는데
+그 시점 훅 값은 서버 스냅숏(기본 시나리오)일 수 있어서다.
+
+```text
+?cp=manufacturing            제조업/산업체 (기본값 — 쿼리 없이 들어오면 이것, 기존 화면 무변화)
+?cp=commercial_eligible      소상공인/상업시설 + 자격 충족
+?cp=commercial_not_eligible  소상공인/상업시설 + 감축률 미달
+?cp=unknown                  미확인(계약종별 판별 실패)
+```
+
+fixture가 활성인 동안 카드에 `예시 데이터 · API 연동 전` 칩을 상시 노출한다 — 데모에서 실제
+파이프라인처럼 보이지 않게 하는 장치(data-plan.md §3.3, "실제 구현은 …" 표기 원칙과 같은 결).
 
 ### 3.1 온보딩 리워드 배너
 
 - 마이데이터 연동 완료 화면에 리워드 안내 배너
+- **위치 확정**: `web/components/SceneConsent.tsx`의 `phase === "done"`일 때만 렌더한다(5종 병렬
+  수집이 전부 성공한 상태). `phase === "error"`에서는 노출하지 않는다 — 실패했는데 혜택 안내가
+  뜨면 안 된다
 - **문구는 회계 1순위(온보딩 리워드 예산 확인)가 끝나기 전까지 확정적으로 쓰지 않는다.**
   "대구로페이 1만원 충전 예정"처럼 금액·시점을 못박은 문구 대신, 확인 전에는 "온보딩 혜택
   안내(검토 중)"처럼 잠정 톤으로 시작하고 확인되면 문구만 교체한다(data-plan.md §3.3 안전한
   표현 원칙)
+- 그 교체가 한 줄로 끝나도록 문구를 컴포넌트 상단 `REWARD_BANNER_COPY` 상수 한 곳에 모은다 —
+  예산이 확인되면 이 상수만 고치고 마크업은 안 건드린다
 
 ### 3.2 사장님 화면 분기
 
 - 화면 분기는 저장된 `business_type` 컬럼이 아니라 §2.1의 API 응답값(`business_scale_hint`)
   기준으로 한다 — 제조업 카드(K택소노미·우대금리 등 기존 카드)와 소상공인 카드(탄소중립포인트
   알림)를 이 값으로 나눈다
+- **분기 규칙 확정(2026-08-21)** — 대상 화면은 `web/app/owner/benefits/page.tsx`:
+
+```text
+"소상공인/상업시설" → RateProductCard·KTaxonomyCard·GovSupportCard 미렌더 + 그 3종 API 조회도
+                     건너뜀, CarbonPointCard만 노출
+"제조업/산업체"     → 현행 그대로, CarbonPointCard 숨김(data-plan.md §10.1 — 산업용 전기는
+                     탄소중립포인트 에너지분야 원천 제외라 카드 자체를 안 보여준다)
+"미확인"           → 현행 3카드 유지 + 상단에 계약종별 확인 안내 박스
+                     (/owner/uploads?type=electric_bill 딥링크, 기존 딥링크 규약 재사용)
+```
+
+- `"미확인"`에서 기존 카드를 **숨기지 않는** 이유: data-plan.md §6.1이 이 경우를 "계약종별 재확인
+  요청(HITL)"으로 규정했다. 판별에 실패한 상태에서 이미 받던 안내를 없애는 건 잘못 숨기는 쪽의
+  손해가 더 크다 — 안내를 추가하는 방향으로만 처리한다
+- 지금은 fixture가 동기값이지만, API 전환 시 자연스럽게 2단 로딩(hint 먼저 → 카드 조회)이 되도록
+  "hint 확정 전에는 카드 영역을 렌더하지 않는" 구조로 미리 작성한다
 
 ### 3.3 탄소중립포인트 알림·신청서 화면
 
 - 신청 가능 알림 + 신청서 초안 미리보기/다운로드 화면
+- **컴포넌트명은 `CarbonPointCard`로 확정.** data-plan.md §10.1은 이 카드를 `GovSupportCard`로
+  적었는데, 그 이름은 이미 `web/components/GovSupportCard.tsx`(정부 지원사업 매칭 카드,
+  gov-support-matching-plan.md §8)가 점유하고 있어 충돌한다 — 설계문서가 우선이라는 원칙의
+  예외로, 이 항목만 이 문서의 이름을 따른다
+- **배치 확정**: 홈(`/owner`)에는 알림 배너(`CarbonPointNoticeBanner`), 혜택
+  페이지(`/owner/benefits`)에는 자격 요약 카드 + 초안 시트. 배너는 `eligible`이 아니거나
+  소상공인이 아니면 렌더하지 않고, 누르면 혜택 페이지로 보낸다
+- **초안 화면은 바텀시트**(`CarbonPointDraftSheet`) — 기존 `GoalSheet.tsx`의 셸
+  (`fixed inset-0 z-50 flex items-end` + `rounded-t-3xl bg-surface`, 배경 클릭 닫기)을 그대로
+  재사용한다. 하단바 4탭에 안 들어가는 고아 라우트를 새로 만들지 않기 위해서다
+- **다운로드 버튼은 비활성 + "초안 생성 기능 준비 중"** 표기. 초안 생성 함수(§2.3)가 아직
+  없으므로 가짜 파일을 내려주지 않는다(CLAUDE.md §6 실패 가시성)
+- "신청서 초안 보기" 버튼은 `eligible`일 때만 노출한다(data-plan.md §6.2 — 판정을 통과한 경우에만
+  신청 절차로 이어진다). 미달이면 버튼 대신 "예상 감축률이 5%를 넘으면 초안을 만들어 드려요"로
+  왜 아직 안 되는지만 알린다
+- 자격 미달(`eligible: false`)이어도 카드 자체는 보여준다 — "기준 미달" 배지와 현재 예상 감축률을
+  같이 노출해야 사장님이 얼마나 남았는지 알 수 있다. 카드를 숨기는 기준은 자격이 아니라
+  `business_scale_hint`다(§3.2)
+- 실물 hwp 서식이 미확인이라(data-plan.md §14-1) 초안 필드는 fixture의 배열을 그대로 렌더하는
+  구조로 둔다 — 서식이 확인되면 fixture만 고쳐도 화면이 따라온다
+- 신청서 초안 화면 어디에도 감축률을 확정치처럼 표기하지 않는다 — "예상 감축률"로 통일(§2.3 대응)
 - **비보장 문구 필수, 구현 방식 확정(2026-08-21)**: API에 플래그가 없으므로(§2.2) 이 문구는
   `CarbonPointCard` 컴포넌트에 정적 텍스트로 박아넣는다. `GoalSheet.tsx`(§209 근처)의
   "등급·혜택 목표는 데이터 완전성 개선을 제안할 뿐 등급 상승·자격을 보장하지 않아요"와 같은
   스타일(`text-[11px] leading-relaxed text-faint`)로 "예상 감축률 기준이며, 실제 심사·지급은
   한국환경공단이 진행합니다" 문구를 고정 렌더링한다(§2.3과 대응, data-plan.md §6.2·§3.3 근거)
 
-### 3.4 트레이스 뷰
+### 3.4 트레이스 뷰 — 이번 스코프 제외 (2026-08-21 정정)
 
-- 신규 이벤트 타입 반영 — `[행동] 온보딩 리워드 지급 안내`, `[행동] 신청서 초안 생성` 등
-  아이콘·색 추가
+원래 항목: "신규 이벤트 타입 반영 — `[행동] 온보딩 리워드 지급 안내`, `[행동] 신청서 초안 생성`
+등 아이콘·색 추가".
+
+**코드를 확인한 결과 추가할 자리가 없다.** `web/components/SceneTrace.tsx`의 `STEP_ICON`은
+`계획`/`관찰`/`행동` 3종 `step_type`에만 매핑되고(`trace_logs`의 스키마가 그렇다 — CLAUDE.md §4-6,
+"결선까지 불변"), 도구명은 `tool_name` 뱃지로 이미 자동 렌더링된다. 위 두 이벤트는 **둘 다 기존
+`행동` 타입**이라 개발자 A가 `trace_logs`에 쓰기만 하면 프론트 수정 없이 그대로 표시된다.
+
+도구별로 아이콘을 다르게 주고 싶다면 `tool_name` 기준 새 매핑을 만드는 별개 작업이 되는데, 그건
+원래 계획과 다른 일이라 이번 스프린트에서 하지 않는다.
 
 ### 3.5 이번 스프린트에서 하지 않는 것
 
 - 그린 서플라이어 배지 UI(iM샵 프로필 목업 포함) — 2.5와 같은 이유로 Tier3, 이번
   스프린트 제외
+- §3.4 트레이스 뷰 아이콘·색 추가 — 위 정정 참고(할 일이 없음)
+- **실제 API fetch 연동** — fixture로 껍데기까지만. 연동은 §9.1 엔드포인트가 나온 뒤 별도 작업
+- **`water_bill` 문서종류 프론트 확장** — 감축률은 전기+수도+가스 기준인데(data-plan.md §7.3)
+  개발자 A 작업목록(§2)에 상수도 고지서 파싱이 아예 없다. 프론트 쪽도 `SceneUpload.tsx`의
+  `DocType`·`DOC_LABELS`·`RequiredDocuments`, `uploads/page.tsx`의 `DOC_LABEL`,
+  `admin/DocumentAccessLog.tsx`, `lib/api.ts`의 `DocumentType`이 전부 3종 하드코딩이라 4곳 이상을
+  고쳐야 하는데, 백엔드 파싱이 없으면 업로드 칸만 붕 뜬다 — 개발자 A와 합의 후 별도 착수
+- 신청서 초안 실제 생성·다운로드 — §2.3이 나온 뒤
+
+### 3.6 검증 방법
+
+프론트에 테스트 프레임워크가 없다(`web/package.json`에 `dev`/`build`/`start`/`lint`만, `*.test.tsx`
+0건). 이번 스코프를 위해 새로 도입하지 않고 아래로 검증한다.
+
+- `npm run build` — Next 빌드에 타입체크가 포함된다. **기준선: EXIT=0**(2026-08-21 실측)
+- `npm run lint` — **기준선이 이미 red다**: 24 problems(13 errors, 11 warnings)이 이번 작업 전부터
+  있었고 전부 기존 파일의 `react-hooks/set-state-in-effect`·`refs`·`exhaustive-deps`
+  ·`no-unused-vars`다. 그래서 판정 기준은 "0건"이 아니라 **"이 숫자가 늘지 않았고 신규 파일이
+  목록에 없다"**다. 이번 작업 후에도 24 problems 그대로 확인함
+- fixture 시나리오 4종 × 화면(홈·혜택·초안 시트) 수동 매트릭스 확인
+- **회귀 기준**: `?cp=` 없이 들어온 화면이 이번 작업 전과 동일해야 한다(기본값이 `manufacturing`인
+  이유)
 
 ---
 
@@ -171,8 +292,9 @@ data-plan.md §15.1(회계 1순위)이 끝나야 정확한 스펙으로 시작�
 1주차: 회계 확인작업(data-plan.md §15.1) — 개발자 A·B는 대기하지 않고 §1의 "골격 먼저"
        원칙대로 착수. 동시에 기존 v1-plan.md Tier1 마무리 작업 병행
 2주차: 개발자 A — 판별함수·감축률계산·신청서생성 골격에 회계 결과 반영
-       개발자 B — UI 시안 착수, API 나오는 대로 연동 시작
-3주차: 통합, 트레이스뷰 반영, 리허설에 새 시나리오 편입
+       개발자 B — UI 껍데기 완성(§3.0 파일 목록, fixture 기준). API 대기 없이 끝난다
+3주차: 통합 — fixture를 §9.1 API 호출로 교체(§3.0 표의 "연동 시 삭제 대상" 한 파일이 경계),
+       리허설에 새 시나리오 편입. 트레이스뷰는 §3.4대로 프론트 작업 없음
 ```
 
 ---
@@ -187,3 +309,7 @@ data-plan.md §15.1(회계 1순위)이 끝나야 정확한 스펙으로 시작�
 | §2.4 온보딩 리워드 | §3.3 (안전한 표현 원칙) |
 | §2.5·§3.5 이번에 안 하는 것 | §3.4, §12 (Tier3 재분류) |
 | §2.6 열린 질문 | 아직 data-plan.md 미반영 — §14 열린 질문에 추가 논의 필요 |
+| §3.0 파일 목록·시나리오 토글 | §11 (파일별 예상 변경 — 프론트엔드), §3.3 (예시 데이터 표기) |
+| §3.2 화면 분기 3분기 | §6.1 (미확인 → HITL), §10.1 (제조업엔 카드 숨김) |
+| §3.3 카드·초안 시트 | §6.3, §9.1, §10.1, §14-1 (hwp 서식 미확인) |
+

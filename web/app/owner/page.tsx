@@ -15,6 +15,7 @@ import {
   type OwnerProgress,
 } from "@/lib/api";
 import OwnerNotificationBanner from "@/components/OwnerNotificationBanner";
+import CarbonPointNoticeBanner from "@/components/CarbonPointNoticeBanner";
 import { GoalBox } from "@/components/GoalCard";
 import { GoalSheet } from "@/components/GoalSheet";
 
@@ -264,6 +265,7 @@ export default function OwnerHomePage() {
       )}
 
       {selectedId !== null && <OwnerNotificationBanner companyId={selectedId} />}
+      {selectedId !== null && <CarbonPointNoticeBanner />}
 
       {/* 기능 카드 그리드 — 하단바 목적지를 홈에서도 바로 눌러 들어갈 수 있게 */}
       <div className="mt-3 grid grid-cols-2 gap-3">
