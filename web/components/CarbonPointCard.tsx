@@ -6,6 +6,7 @@ import {
   CARBON_POINT_GAUGE_MAX_PCT,
   CARBON_POINT_THRESHOLD_PCT,
   FIXTURE_BADGE_LABEL,
+  KRW_PER_POINT,
   estimateRefund,
   getDraftFixture,
   getEligibilityFixture,
@@ -114,7 +115,7 @@ export function CarbonPointCard({ companyId }: { companyId: number | null }) {
             <div className="w-px self-stretch bg-line" />
 
             <div className="min-w-0 flex-1">
-              <div className="text-[11.5px] font-semibold text-muted">예상 환급액 (최대)</div>
+              <div className="text-[11.5px] font-semibold text-muted">예상 환급액</div>
               {refund === null ? (
                 <p className="mt-1.5 text-[12.5px] leading-relaxed text-ink">
                   기준 감축률을 넘으면 계산해 드려요.
@@ -122,10 +123,10 @@ export function CarbonPointCard({ companyId }: { companyId: number | null }) {
               ) : (
                 <>
                   <div className="mt-1.5 text-[20px] font-extrabold leading-none text-brand-ink">
-                    {refund.maxKrw.toLocaleString()}원
+                    {refund.krw.toLocaleString()}원
                   </div>
                   <div className="mt-1 text-[9.5px] text-faint">
-                    전기 {refund.points.toLocaleString()}P × 2원
+                    전기 {refund.points.toLocaleString()}P × {KRW_PER_POINT}원
                   </div>
                 </>
               )}
