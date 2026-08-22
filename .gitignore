@@ -48,3 +48,6 @@ data/uploads/
 
 # Excel 임시 잠금 파일
 ~$*.xlsx
+
+# kiro
+.kiro/

@@ -228,7 +228,13 @@ ELSE:
 사업자등록번호                     →  마이데이터 사업자등록증명 (기존)
 법인번호(법인사업자만)              →  마이데이터에 없음 — 잔여 필드(개인사업자는 해당 없음)
 신청인 휴대전화번호                 →  Company 또는 InstitutionBorrower (기존, 확인 필요)
-고지서 고객번호 — 전기               →  전기고지서 파싱값(기존, source_documents)
+고지서 고객번호 — 전기               →  전기고지서 파싱값 — **"기존"이 아니라 신규 작업이다
+                                      (2026-08-22 코드 확인으로 정정): 현재 전기고지서
+                                      파서는 고객번호를 추출하지 않는다. db/ 전체에서
+                                      customer_number가 나오는 곳은 무관한 레거시
+                                      synth_dataset_generator.py뿐이다. S001 fixture PDF
+                                      본문엔 "고객번호 0355-7712-90"이 있으므로 추출 자체는
+                                      가능 — §7.1 계약종별 추출과 같은 작업에 함께 넣는다
 고지서 고객번호 — 수도               →  수도고지서 파싱값(신규, §7.2 water_bills.customer_number)
 고지서 고객번호 — 도시가스            →  이번 범위 밖(§3.2) — 잔여 필드
 고지서 고객번호 — 지역난방            →  이번 범위 밖(§3.2) — 잔여 필드
@@ -275,11 +281,13 @@ id
 company_id
 source_document_id       FK → source_documents
 provider                 지자체 상수도사업본부명 (예: 대구광역시상수도사업본부)
-customer_number
+customer_number          고지서의 "관리번호"
 site_addr
 period_start / period_end
-usage_amount_m3          당월 사용량
-prev_usage_amount_m3
+prev_reading             전월지침 (계량기 누적값 — 고지서 원문 그대로)
+cur_reading              당월지침 (계량기 누적값 — 고지서 원문 그대로)
+usage_m3                 당월 사용량 (고지서에 인쇄된 값. cur-prev와 같아야 하지만
+                         계량기 교체·리셋 시 어긋날 수 있어 별도 저장한다)
 base_fee_krw
 usage_fee_krw
 sewage_fee_krw            하수도요금
@@ -335,9 +343,22 @@ web/components/admin/DocumentAccessLog.tsx  DOCUMENT_TYPE_LABEL (관리자 열�
   보관용 이중 서식과 같은 패턴) — fixture는 고객보관용만 제작
 ```
 
-`prev_usage_amount_m3` 필드명을 실제 구조에 맞게 `prev_reading`/`cur_reading`(누적 지침)
-으로 바꾸는 걸 고려할 것 — 현재 스키마의 `usage_amount_m3`/`prev_usage_amount_m3`는 사용량
-기준이라 실제 고지서의 지침 기준과 다르다. 최종 결정은 개발팀 스키마 리뷰에서(§14-4와 동일 결).
+**컬럼 구조 결정(2026-08-22, 개발자 A) — 위 §7.2 블록에 반영 완료.** #112가 스키마 리뷰로
+넘긴 `prev_usage_amount_m3` 개명 문제는 **지침 2개와 사용량을 모두 저장**하는 쪽으로 정했다
+(`prev_reading` / `cur_reading` / `usage_m3`). 근거:
+
+- 지침만 저장하면 감축률을 계산할 때마다 `cur - prev` 차분을 구해야 하는데, **계량기 교체·
+  리셋이 일어난 달은 이 차분이 음수나 비정상값이 된다.** 고지서엔 그 달의 정상 사용량이
+  따로 인쇄돼 나오므로 그 값을 버릴 이유가 없다.
+- 반대로 사용량만 저장하면 고지서 원문과 대조할 근거가 사라진다 — 모든 판단에 evidence를
+  남긴다는 원칙(CLAUDE.md §5 원칙5)과 어긋나고, 감사 시 "이 수치가 어디서 왔나"를 답할 수
+  없다.
+- 전기고지서도 이미 같은 패턴이다(당월·전월 사용량을 둘 다 저장).
+- `prev_usage_amount_m3`는 "전월 사용량"인지 "전월 지침"인지 이름만으로 구분되지 않아
+  버린다 — 실제 고지서가 지침 기준이라 오독 위험이 크다.
+
+`cur_reading - prev_reading != usage_m3`인 달은 계량기 이력 변화 신호이므로, 값을 조용히
+맞추지 말고 그대로 저장한 뒤 불일치 자체를 드러낸다(실패 가시성 — CLAUDE.md §6).
 
 fixture 위치: `data/fixtures/water_bills/S001/`(동성로카페, 32건, 정식 고지서 서식) —
 7월 이상치(평월 8~11㎥ → 35㎥, 원인 미기재) 포함. 알림톡(카카오톡 채널) 형식 변형도
@@ -383,6 +404,12 @@ source                    self_reported | api_confirmed   -- 대구시 API 연�
 ```
 
 "탄소중립포인트 참여 배지"(§6-2 참고표)의 근거 테이블.
+
+**`point_type` 확정(2026-08-22, 개발자 A)**: 위 5종을 그대로 `CheckConstraint`로 박는다
+(`ck_carbon_neutral_point_enrollments_point_type`) — 이 프로젝트가 열거형 문자열 컬럼에
+쓰는 기존 방식이다(`ck_document_upload_jobs_status` 등, DB enum 타입은 쓰지 않는다).
+`local_currency`는 제약에서 제외한다 — 서식에 없는 §12 Phase 3 비전 값이라, 넣어두면
+"지원하는 것처럼" 보인다. 실제로 도입되면 그때 새 revision으로 제약을 넓힌다.
 
 ### 7.5 `supply_profiles` 신규 (공급 프로필)
 
