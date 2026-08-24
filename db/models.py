@@ -394,6 +394,25 @@ class SourceDocument(Base):
     # 엑셀 대량 업로드처럼 한 문서가 여러 달에 걸치면 null로 남는다(0017 참고).
     year = Column(SmallInteger)
     month = Column(SmallInteger)
+    # 전기고지서(document_type="electric_bill")의 계약종별 — 소상공인 탄소중립포인트
+    # 트랙의 판별 근거(docs/small-business-green-supply-data-plan.md §7.1). 0029에서 추가.
+    #
+    # contract_type은 고지서 원문 문자열 그대로 저장한다("산업용(을) 고압A" 등). 표기가
+    # 지역·계약별로 다양해서(§15.2 실물 표기 확인 진행 중) 어휘를 제한하지 않는다.
+    # contract_type_class는 그 원문을 4종으로 정규화한 값이다.
+    #
+    # 이 두 컬럼은 "사업 규모 라벨"이 아니다 — 소상공인/제조업 판별값(business_scale_hint)은
+    # 저장하지 않고 조회 시점에 이 컬럼에서 매번 계산한다(§5·§6.1). 사업장이 계약종별을
+    # 바꾸면 마이그레이션 없이 자동으로 갱신되게 하려는 의도이므로, Company나 다른
+    # 테이블에 business_type 같은 저장형 컬럼을 만들지 않는다.
+    #
+    # 둘 다 nullable: ⑴ 0029 이전 레코드엔 값이 없다 ⑵ 전기고지서가 아닌 문서(세금계산서·
+    # 가스고지서·마이데이터 KYB 등)는 애초에 해당 없음이다. 즉 null은 "판별 불가"가 아니라
+    # "해당 없음 또는 아직 안 읽음"이고, 전기고지서를 읽었는데 매핑에 실패한 경우는 null이
+    # 아니라 명시적으로 "unknown"으로 채운다 — 그래야 §6.1의 HITL 재확인 요청 대상을
+    # "해당 없는 문서"와 구분할 수 있다.
+    contract_type = Column(String(50))
+    contract_type_class = Column(String(20))  # industrial | commercial | residential | unknown
 
     __table_args__ = (
         Index("ix_source_documents_company", "company_id"),
@@ -402,6 +421,17 @@ class SourceDocument(Base):
         # 코드 레벨 SELECT-then-INSERT 중복 체크만으로는 동시 업로드(더블클릭·재시도)
         # 레이스를 못 막는다 — DB 제약으로 최종 방어선을 둔다.
         UniqueConstraint("company_id", "file_hash", name="uq_source_documents_company_file_hash"),
+        # 정규화값은 닫힌 집합이라 제약을 건다(document_type과 다른 판단 — 그쪽은 원문
+        # 어휘가 계속 늘어나 자유형식으로 둔 컬럼이다). 매핑 실패는 집합 밖 값이 아니라
+        # "unknown"이므로 파서가 이 제약을 위반할 경로가 없다. 실물 표기 확인(§15.2)으로
+        # 늘어나는 건 contract_type 원문 → class 매핑 테이블이지 class 어휘 자체가 아니다.
+        # 축이 추가되면(§2.6 개인/법인 참여 판별) 새 revision으로 넓힌다 — DB enum이 아니라
+        # CHECK라 넓히는 비용이 낮다.
+        CheckConstraint(
+            "contract_type_class IS NULL OR contract_type_class IN "
+            "('industrial', 'commercial', 'residential', 'unknown')",
+            name="ck_source_documents_contract_type_class",
+        ),
     )
 
 
