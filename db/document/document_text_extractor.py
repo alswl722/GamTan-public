@@ -27,6 +27,8 @@ from datetime import date
 
 import pdfplumber
 
+from db.document.contract_type import normalize_contract_type_class
+
 DocumentType = str  # "tax_invoice" | "electric_bill" | "gas_bill"
 
 # OCR 표 재구성 결과 하나의 셀: (x_start, x_end, text). document_ocr_extractor.py가
@@ -195,6 +197,17 @@ def parse_amount_from_cell_text(text: str) -> int | None:
         return None
 
 
+def parse_customer_number_from_cell_text(text: str) -> str | None:
+    """셀 원문에서 고객번호(숫자·하이픈)만 뽑는다. 못 찾으면 None.
+
+    db/document_llm_router.py 전용 공개 진입점 — parse_amount_from_cell_text와 같은 이유
+    (LLM이 고른 셀의 원문을 항상 재파싱하고, LLM이 반환한 값을 직접 쓰지 않는다).
+    라벨이 셀에 같이 들어온 경우("고객번호 0355-7712-90")도 숫자 부분만 남는다.
+    """
+    hit = _CUSTOMER_NUMBER_RE.search(text or "")
+    return hit.group(1) if hit else None
+
+
 def parse_year_month_from_cell_text(text: str) -> tuple[int, int, int | None] | None:
     """셀 원문에서 연/월(+가능하면 일)을 뽑는다. 구분자 앞뒤 공백은 `_DATE_SEP`과
     동일하게 허용.
@@ -242,6 +255,93 @@ def _line_value(text: str, label_pattern: str, *, field_label: str) -> str:
             f"실제 {field_label}이 아니라 예상·추정치로 보여요 — 정식 청구서로 다시 올려 주세요"
         )
     return m.group(1).strip()
+
+
+_MONEY_WITH_UNIT_RE = re.compile(r"(\d[\d,]*)\s*원")
+_MONEY_BARE_RE = re.compile(r"(\d[\d,]*)")
+
+
+def _amount_near_label(text: str, label: str, *, field_label: str) -> str:
+    """금액 라벨 주변에서 금액 토큰을 찾는다 — 라벨과 값이 같은 줄에 없는 서식 대응.
+
+    버그 수정(2026-08-24): 종전엔 `_line_value`로 "라벨 뒤 아무 텍스트"를 잡고
+    `_parse_amount`가 숫자만 걸러냈다. 그런데 실제 전기고지서 서식은 pdfplumber 추출에서
+    금액이 라벨보다 **앞줄**에 온다:
+
+        부가가치세 및 전력기금 14,616 원
+        197,316 원              ← 값
+        이번달 청구금액          ← 라벨
+        납기일: 2024-02-25 · 미납 시 연체료가 부과될 수 있습니다
+
+    그래서 라벨 다음 줄인 납기일 줄이 값으로 잡히고, `_parse_amount`가 숫자만 남겨
+    `20240225`를 금액으로 저장했다. 공유 DB에 이렇게 오염된 전표가 7건 있었다
+    (`20,260,825` = 2026-08-25). 모든 전기고지서 fixture(C001·S001·S002)가 같은
+    레이아웃이라 텍스트 레이어 경로를 타는 모든 업로드가 영향을 받았다.
+
+    탐색 순서 — 실제 서식 두 종류를 모두 커버하되 날짜를 금액으로 오인하지 않는다:
+      1. 라벨 뒤 같은 줄 ("청구금액 9,240원", "청구금액(원) 1,234" — 실물 고지서 서식)
+      2. 라벨 앞 같은 줄 ("197,316 원 이번달 청구금액")
+      3. 바로 앞 줄 (위 fixture 서식)
+    2·3순위는 **"원" 단위가 붙은 토큰만** 인정한다 — 단위 없는 숫자까지 허용하면
+    사용량(kWh)·계약전력 같은 인접 수치를 금액으로 집어올 수 있다. 1순위는 기존 동작을
+    유지하기 위해 단위 없는 숫자도 허용한다(라벨 바로 뒤라 오인 위험이 낮다).
+    """
+    lines = text.split("\n")
+    label_re = re.compile(_label_pattern(label))
+    for i, line in enumerate(lines):
+        m = label_re.search(line)
+        if m is None:
+            continue
+        if any(kw in line[: m.start()] for kw in _FORECAST_PREFIX_KEYWORDS):
+            raise DocumentParseError(
+                f"실제 {field_label}이 아니라 예상·추정치로 보여요 — 정식 청구서로 다시 올려 주세요"
+            )
+        after = line[m.end():]
+        hit = _MONEY_WITH_UNIT_RE.search(after) or _MONEY_BARE_RE.search(after)
+        if hit:
+            return hit.group(1)
+        hit = _MONEY_WITH_UNIT_RE.search(line[: m.start()])
+        if hit:
+            return hit.group(1)
+        if i > 0:
+            hit = _MONEY_WITH_UNIT_RE.search(lines[i - 1])
+            if hit:
+                return hit.group(1)
+    raise DocumentParseError(f"{field_label} 항목을 찾지 못했어요")
+
+
+# 계약종별 값 — "일반용(을)", "산업용(을) 고압A", "주택용전력"처럼 한글 어절 + 괄호·영숫자.
+# 다음 라벨(고객번호·사용기간 등)까지 삼키지 않으려면 값의 모양을 제한해야 한다: 실측
+# 서식이 "고객번호 0355-7712-90 계약종별 일반용(을)"처럼 한 줄에 라벨-값 쌍을 여러 개
+# 늘어놓기 때문이다(줄 끝까지 잡으면 뒷 라벨이 값에 붙는다).
+_CONTRACT_TYPE_VALUE_RE = re.compile(r"([가-힣]+(?:\([가-힣]\))?(?:\s*[A-Za-z0-9]+)?)")
+# 고객번호 — 숫자와 하이픈만. "0355-7712-90" 같은 한전 표기.
+_CUSTOMER_NUMBER_RE = re.compile(r"(\d[\d-]*\d)")
+
+
+def _optional_token_after_label(text: str, label: str, value_re: re.Pattern) -> str | None:
+    """라벨 뒤에서 `value_re` 모양의 토큰만 뽑는다. 없으면 None.
+
+    계약종별·고객번호처럼 **나중에 추가된 보조 필드**용이다. 금액·날짜는 없으면 그 문서로
+    할 수 있는 게 없어 DocumentParseError가 맞지만, 이 두 필드는 없어도 배출량 계산이
+    그대로 되므로 기존 업로드를 회귀시키면 안 된다(사용량 quantity 처리와 같은 원칙).
+
+    줄 끝까지 잡지 않고 값 모양으로 끊는 이유: 실제 서식이 한 줄에 라벨-값 쌍을 여러 개
+    늘어놓는다("고객번호 0355-7712-90 계약종별 일반용(을)"). 줄 단위로 잡으면 고객번호에
+    "0355-7712-90 계약종별 일반용(을)"이 통째로 들어간다(2026-08-24 실측).
+
+    라벨이 있어도 값 모양이 안 맞으면 None을 준다 — 판별은 "미확인"으로 흘러 HITL 재확인
+    대상이 되고, 값을 지어내지 않는다(실패 가시성).
+    """
+    label_re = re.compile(_label_pattern(label))
+    for line in text.split("\n"):
+        m = label_re.search(line)
+        if m is None:
+            continue
+        hit = value_re.match(line[m.end():].strip())
+        if hit:
+            return hit.group(1).strip()
+    return None
 
 
 def _parse_by_type(document_type: DocumentType, text: str) -> dict:
@@ -365,7 +465,7 @@ def _parse_electric_bill(text: str) -> dict:
     # 실측: "청구금액(원)"이 아니라 "청구금액"(단위 없이) 바로 뒤에 금액이 온다
     # ("청구금액 9,240원") — "(원)"을 선택적으로 바꿔 둘 다 허용.
     amount = _parse_amount(
-        _line_value(text, _label_pattern("청구금액") + f"(?:{_label_pattern('(원)')})?", field_label="청구금액"),
+        _amount_near_label(text, "청구금액", field_label="청구금액"),
         field_label="청구금액",
     )
     bill_year, bill_month = int(date_m.group(1)), int(date_m.group(2))
@@ -379,6 +479,20 @@ def _parse_electric_bill(text: str) -> dict:
         # (2026-08-19 사용자 확인, month_end_issue_date_str 참고).
         "issue_date": month_end_issue_date_str(bill_year, bill_month),
     }
+    # 계약종별·고객번호 — 소상공인 탄소중립포인트 트랙용(data-plan.md §7.1, §6.3).
+    # 둘 다 못 찾아도 파싱은 성공시킨다: 금액·날짜가 멀쩡한 문서를 이 두 필드 때문에
+    # 거부하면 기존 업로드가 회귀한다(사용량 처리와 같은 원칙).
+    #
+    # 위 item_description이 항상 고정 문구 "전기요금 (산업용 을)"인 점에 주의 —
+    # 그건 파서 기본값이지 계약종별이 아니다. 그래서 계약종별을 별도로 읽는다.
+    # 이 값을 item_description으로 대체하려 하지 말 것(전 기업이 산업용으로 보인다).
+    contract_type = _optional_token_after_label(text, "계약종별", _CONTRACT_TYPE_VALUE_RE)
+    if contract_type is not None:
+        result["contract_type"] = contract_type
+        result["contract_type_class"] = normalize_contract_type_class(contract_type)
+    customer_number = _optional_token_after_label(text, "고객번호", _CUSTOMER_NUMBER_RE)
+    if customer_number is not None:
+        result["customer_number"] = customer_number
     if quantity is not None:
         result["quantity"] = quantity
         result["quantity_unit"] = "kWh"
@@ -417,7 +531,7 @@ def _parse_gas_bill(text: str) -> dict:
     except DocumentParseError:
         pass
     amount = _parse_amount(
-        _line_value(text, _label_pattern("청구금액") + f"(?:{_label_pattern('(원)')})?", field_label="청구금액"),
+        _amount_near_label(text, "청구금액", field_label="청구금액"),
         field_label="청구금액",
     )
     bill_year, bill_month = int(date_m.group(1)), int(date_m.group(2))
