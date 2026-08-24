@@ -49,10 +49,22 @@ def _voucher_dict(v: Voucher) -> dict:
 
 
 def get_vouchers(session: Session, company_id: int, source: str | None = None) -> list[dict]:
+    """기업의 전표 전량 — 기간 필터 없음, 연대순 정렬.
+
+    year를 정렬 키에 넣는 이유(2026-08-22 수정): 종전엔 `(month, issue_date)`로만
+    정렬해서 여러 해 데이터가 섞이면 결과가 연대순이 아니었다. 월이 1차 키라 모든
+    1월이 먼저 묶이고, 2차 키인 issue_date는 nullable이라(마이데이터 mock 경로 등)
+    NULLS LAST로 밀려 2021년 전표가 2026년 뒤에 오는 일이 실제로 있었다.
+    v0.1이 "12개월치 전표" 단일 연도만 다뤘을 때는 드러나지 않던 전제다.
+
+    소상공인 탄소중립포인트 트랙은 24개월(과거 2년) 사용량을 월 시계열로 다루므로
+    (CLAUDE.md §7 예외) 이 순서에 의존한다. 기존 호출부(get_coverage·collect_vouchers·
+    mock 라우터)는 집계·건수 용도라 순서에 의존하지 않아 영향이 없다.
+    """
     stmt = select(Voucher).where(Voucher.company_id == company_id)
     if source:
         stmt = stmt.where(Voucher.source == source)
-    stmt = stmt.order_by(Voucher.month, Voucher.issue_date)
+    stmt = stmt.order_by(Voucher.year, Voucher.month, Voucher.issue_date)
     rows = session.execute(stmt).scalars().all()
     return [_voucher_dict(v) for v in rows]
 
@@ -138,7 +150,12 @@ def get_classifications(session: Session, company_id: int) -> list[dict]:
     기업 배치가 건별로 흘러들어가는 것을 막기 위함.
     HITL 대기(review_required) 건과 확정됐지만 미전송인 건은 원문·Scope·판단 근거를
     사장님에게 노출하지 않는다 — 건수만 get_hitl_pending_count()로 별도 안내.
-    정렬: 월·발행일순.
+    정렬: 연·월·발행일순(2026-08-22 — 종전 "월·발행일순"은 다년 데이터에서 연대순이
+    깨졌다, get_vouchers 참고).
+
+    ⚠️ 반환 dict에 year·month가 없다 — 이 목록은 "무엇을 어떻게 분류했나"를 보여주는
+    화면용이고 월 시계열이 아니다. 소상공인 탄소중립포인트 감축률처럼 월별 사용량
+    시계열이 필요한 계산은 이 함수를 쓸 수 없고 별도 조회 함수가 필요하다.
     """
     stmt = (
         select(Classification, Voucher, SourceDocument)
@@ -153,7 +170,9 @@ def get_classifications(session: Session, company_id: int) -> list[dict]:
                 & Classification.sent_to_owner_at.isnot(None)
             )
         )
-        .order_by(Voucher.month, Voucher.issue_date)
+        # get_vouchers와 같은 이유로 year를 1차 키에 넣는다(2026-08-22) — 여러 해
+        # 데이터가 섞이면 월 우선 정렬이 연대순을 깨뜨린다.
+        .order_by(Voucher.year, Voucher.month, Voucher.issue_date)
     )
     rows = session.execute(stmt).all()
     return [
@@ -244,7 +263,9 @@ def get_pending_anomaly_checks(session: Session, company_id: int) -> list[dict]:
         .join(Voucher, Classification.voucher_id == Voucher.id)
         .where(Voucher.company_id == company_id)
         .where(Classification.anomaly_check_status == "pending")
-        .order_by(Voucher.month, Voucher.issue_date)
+        # get_vouchers와 같은 이유로 year를 1차 키에(2026-08-22) — 되묻기 큐에 여러
+        # 해 건이 섞이면 "몇 월 건인지"만 보여주는 화면에서 순서가 뒤엉킨다.
+        .order_by(Voucher.year, Voucher.month, Voucher.issue_date)
     )
     rows = session.execute(stmt).all()
     return [
