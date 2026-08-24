@@ -679,6 +679,147 @@ class CompanyGoal(Base):
     )
 
 
+class WaterBill(Base):
+    """상수도 요금고지서 (0031에서 추가) — 스키마만 준비, 파싱 로직은 아직 없다.
+
+    정본: docs/small-business-green-supply-data-plan.md §7.2.
+
+    ⚠️ 이 테이블을 채우는 파서는 이번 스프린트에 만들지 않는다(develop-plan.md §2.5).
+    §14-2가 부분 해결 상태라(용인시 실물을 대구시로 각색한 fixture) 지금 파서를 만들면
+    fixture에만 맞는 파서가 되고, S002 fixture가 알림톡 캡처 jpg 고정이라 OCR·LLM 라우터
+    경로까지 필요해 계약종별 추출과 규모가 다르다. 테이블을 먼저 두는 이유는 감축률이
+    전기만으로 계산되면 실제보다 부정확해진다는 사실을 화면에 고지하기 위해서다.
+
+    컬럼 3개(prev_reading / cur_reading / usage_m3)를 모두 두는 결정(2026-08-22):
+    실제 고지서는 사용량이 아니라 **계량기 누적 지침 2개**로 표시되고 사용량은 따로
+    인쇄된다. 지침만 저장하면 계량기 교체·리셋 달에 `cur - prev`가 음수가 되고, 사용량만
+    저장하면 고지서 원문과 대조할 근거가 사라진다(원칙5 evidence). 그래서 셋 다 남긴다.
+    `cur_reading - prev_reading != usage_m3`인 달은 계량기 이력 변화 신호이므로 값을
+    조용히 맞추지 말고 불일치를 그대로 드러낸다(실패 가시성 — CLAUDE.md §6).
+
+    customer_number는 고지서의 "관리번호"다 — 신청서의 수도 고객번호 필드로 재사용된다
+    (§6.3). 전기 쪽 고객번호는 아직 파서가 안 뽑는다(별도 작업).
+    """
+    __tablename__ = "water_bills"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    source_document_id = Column(Integer, ForeignKey("source_documents.id"))
+    provider = Column(String(100))        # 예: 대구광역시상수도사업본부
+    customer_number = Column(String(50))  # 고지서의 "관리번호"
+    site_addr = Column(String(255))
+    period_start = Column(DateTime(timezone=True))
+    period_end = Column(DateTime(timezone=True))
+    prev_reading = Column(Float)   # 전월지침(누적) — 고지서 원문 그대로
+    cur_reading = Column(Float)    # 당월지침(누적) — 고지서 원문 그대로
+    usage_m3 = Column(Float)       # 당월 사용량 — 고지서에 인쇄된 값
+    base_fee_krw = Column(Numeric(15, 0))
+    usage_fee_krw = Column(Numeric(15, 0))
+    sewage_fee_krw = Column(Numeric(15, 0))              # 하수도요금
+    water_utilization_fee_krw = Column(Numeric(15, 0))   # 물이용부담금
+    billed_amount_krw = Column(Numeric(15, 0))
+    created_at = Column(DateTime(timezone=True), default=now)
+
+    __table_args__ = (
+        Index("ix_water_bills_company", "company_id"),
+        Index("ix_water_bills_source_document", "source_document_id"),
+    )
+
+
+class CarbonNeutralPointApplication(Base):
+    """탄소중립포인트(에너지 분야) 사업자 참여 신청서 초안 (0030에서 추가).
+
+    정본: docs/small-business-green-supply-data-plan.md §7.3, §6.3.
+
+    ⚠️ reduction_rate_pct는 **감탄의 자체 예상치이지 공식 판정이 아니다**(CLAUDE.md §5
+    원칙10). 실제 제도는 가입(고객번호 등록, 1회성) 이후 한국환경공단이 한전·도시가스공사
+    등에서 사용량을 직접 받아 6월·12월 반기 단위로 자체 계산·검증한다 — 감탄이 계산한 값을
+    제출하거나 대신 넣어줄 인터페이스 자체가 없다. 그래서 이 테이블의 값은 신청서 초안을
+    채우는 재료일 뿐이고, 화면·초안 문구 어디에도 확정치처럼 표기하지 않는다.
+
+    단위 주의: 컬럼명 그대로 **퍼센트**다(7.4 = 7.4%). 비율(0.074)이 아니다 — 병합된
+    프론트 fixture(web/lib/carbon-point-fixture.ts)가 `reduction_rate_pct: 7.4`,
+    `CARBON_POINT_THRESHOLD_PCT = 5`로 이미 확정했고 API 응답도 같은 단위를 쓴다.
+
+    status는 감탄이 추적하지 않는 승인 결과까지 값으로 갖는다 — 실제로는 `draft`까지만
+    감탄이 책임지고, `submitted` 이후는 사장님이 직접 갱신하는 수동 필드다(§3.2 범위 제한).
+
+    `application_type`은 서식이 사업자용·가구용 2종이라 두 값을 두되 이번 범위는 business
+    뿐이다(household 서식은 아직 미확인 — §14-1).
+    """
+    __tablename__ = "carbon_neutral_point_applications"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    application_type = Column(String(20), nullable=False, default="business")  # business | household
+    baseline_year = Column(Integer, nullable=False)
+    target_year = Column(Integer, nullable=False)
+    # {"electricity_kwh": n, "water_m3": n, "city_gas_m3": n} — 계산 시점의 스냅숏.
+    # 아직 반영 못 한 에너지원(수도·가스 파싱 미착수)은 키를 아예 넣지 않는다.
+    # 0을 넣으면 "안 썼다"와 "아직 모른다"가 뭉개진다(원칙7).
+    baseline_usage_json = Column(JSON)
+    target_usage_json = Column(JSON)
+    reduction_rate_pct = Column(Float)   # 퍼센트. 계산 불가면 null(0이 아니다 — 원칙7)
+    eligible = Column(Boolean)
+    status = Column(String(20), nullable=False, default="draft")
+    draft_document_url = Column(String(500))  # 초안 파일 경로. 생성 전까진 null
+    created_at = Column(DateTime(timezone=True), default=now)
+
+    __table_args__ = (
+        CheckConstraint(
+            "application_type IN ('business', 'household')",
+            name="ck_cnp_applications_application_type",
+        ),
+        CheckConstraint(
+            "status IN ('draft', 'submitted', 'approved', 'rejected')",
+            name="ck_cnp_applications_status",
+        ),
+        Index("ix_cnp_applications_company", "company_id"),
+    )
+
+
+class CarbonNeutralPointEnrollment(Base):
+    """탄소중립포인트 가입 여부·인센티브 종류 (0030에서 추가).
+
+    정본: docs/small-business-green-supply-data-plan.md §7.4. 가입은 1회성이라 반복
+    계산 기능이 아니라 온보딩 보조 기능이다(§6.3).
+
+    point_type 5종은 실제 신청서 서식의 인센티브 유형을 그대로 옮긴 것이다(PR #112가
+    hwp 실물로 확인: ①상품권 ②현금 ③현금기부 ④그린카드포인트 ⑤기타). "그린카드"는
+    신청서 이름이 아니라 이 지급수단 중 하나를 가리키는 말이었다는 점도 그때 확인됐다.
+    `local_currency`(지역화폐 직접 전환)는 서식에 없는 §12 Phase 3 비전 값이라 제약에서
+    제외한다 — 넣어두면 지원하는 것처럼 보인다. 도입되면 새 revision으로 넓힌다.
+
+    source는 대구시 API 연동 전까지 `self_reported`만 쓴다 — 감탄이 가입 사실을 확인할
+    경로가 없으므로 사장님 자기신고임을 값으로 남긴다(확인된 것처럼 보이지 않게).
+
+    enrolled_at은 정산 주기 계산의 기준점이다 — 제도가 "가입월 다음 달부터 6개월 단위로
+    정산(6월·12월 지급)"이라, 알림·신청서가 "언제 지급되는지" 안내할 때 이 값을 쓴다.
+    """
+    __tablename__ = "carbon_neutral_point_enrollments"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    enrolled = Column(Boolean, nullable=False, default=False)
+    enrolled_at = Column(DateTime(timezone=True))
+    point_type = Column(String(30))
+    source = Column(String(20), nullable=False, default="self_reported")
+    created_at = Column(DateTime(timezone=True), default=now)
+
+    __table_args__ = (
+        CheckConstraint(
+            "point_type IS NULL OR point_type IN "
+            "('gift_certificate', 'cash', 'cash_donation', 'green_card_point', 'other')",
+            name="ck_cnp_enrollments_point_type",
+        ),
+        CheckConstraint(
+            "source IN ('self_reported', 'api_confirmed')",
+            name="ck_cnp_enrollments_source",
+        ),
+        Index("ix_cnp_enrollments_company", "company_id"),
+    )
+
+
 class PcafQualityRule(Base):
     """PCAF Business Loans and Unlisted Equity 데이터 품질표 (§7.7)
 
