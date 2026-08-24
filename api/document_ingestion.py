@@ -236,6 +236,11 @@ def process_upload_job(job_id: int, session: Session | None = None) -> None:
             extraction_confidence=extraction_confidence,
             year=rows[0]["year"] if mode == "ocr" else None,
             month=rows[0]["month"] if mode == "ocr" else None,
+            # 전기고지서에서만 채워지는 소상공인 판별 근거(0029, data-plan §7.1).
+            # 파서가 못 읽으면 키가 아예 없어 None으로 남는다 — 그 상태가
+            # business_scale_hint "미확인"(HITL 재확인)으로 이어진다.
+            contract_type=extracted.get("contract_type"),
+            contract_type_class=extracted.get("contract_type_class"),
         )
         voucher_source = DOCUMENT_TYPE_TO_VOUCHER_SOURCE[resolved_document_type]
 

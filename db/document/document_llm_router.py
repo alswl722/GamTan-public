@@ -26,6 +26,7 @@ from google.genai import types
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from db.document.contract_type import normalize_contract_type_class
 from db.document.document_ocr_extractor import rasterize_to_images
 from db.document.document_text_extractor import (
     DOCUMENT_TYPE_LABEL,
@@ -36,6 +37,7 @@ from db.document.document_text_extractor import (
     issue_date_str,
     month_end_issue_date_str,
     parse_amount_from_cell_text,
+    parse_customer_number_from_cell_text,
     parse_year_month_from_cell_text,
 )
 from db.models import LlmCache
@@ -120,6 +122,11 @@ def _build_schema(cell_ids: list[int]) -> dict:
             "item_cell_id": ref_field,
             "quantity_cell_id": ref_field,
             "supplier_cell_id": ref_field,
+            # 전기고지서 전용 보조 필드 — 소상공인 판별 근거(data-plan §7.1). 다른 문서
+            # 종류에선 null로 온다. 여기서도 LLM은 "어느 셀이냐"만 고르고, 값은 그 셀의
+            # OCR 원문을 결정론적으로 재해석한다(원칙1 — 값을 지어낼 경로 없음).
+            "contract_type_cell_id": ref_field,
+            "customer_number_cell_id": ref_field,
             "confidence": {"type": "NUMBER", "description": "0.0~1.0, 셀 선택에 대한 확신도"},
             "evidence": {"type": "STRING", "description": "판단 근거 한 문장"},
         },
@@ -261,6 +268,21 @@ def _resolve_fields(result: dict, cells: list[dict], row_texts: list[str], docum
     supplier_id = _resolve_cell_id(result.get("supplier_cell_id"), valid_ids)
     if supplier_id is not None:
         parsed["supplier_name"] = by_id[supplier_id]["text"].strip()
+
+    # 계약종별·고객번호 — 소상공인 판별 근거(data-plan §7.1). LLM이 고른 셀의 원문을
+    # 텍스트 레이어 경로와 **같은 함수**로 정규화한다(구조화 로직 공유 원칙).
+    contract_id = _resolve_cell_id(result.get("contract_type_cell_id"), valid_ids)
+    if contract_id is not None:
+        contract_type = by_id[contract_id]["text"].strip()
+        if contract_type:
+            parsed["contract_type"] = contract_type
+            parsed["contract_type_class"] = normalize_contract_type_class(contract_type)
+
+    customer_id = _resolve_cell_id(result.get("customer_number_cell_id"), valid_ids)
+    if customer_id is not None:
+        customer_number = parse_customer_number_from_cell_text(by_id[customer_id]["text"])
+        if customer_number is not None:
+            parsed["customer_number"] = customer_number
 
     return parsed
 
