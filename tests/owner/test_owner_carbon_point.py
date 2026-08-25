@@ -147,7 +147,11 @@ def test_create_application_returns_draft_contract(client, db):
     by_label = {f["label"]: f["value"] for f in body["fields"]}
     assert by_label["상호(법인명)"] == "동성로카페"
     assert by_label["사업장 주소"] == "대구 중구 ○○로 11"
-    assert by_label["예상 감축률"] == "10.0%"
+    # 감축률·사용량은 `fields`에 없다(2026-08-25) — 서식에 기재란이 없어서다. 값은 DB
+    # 레코드에만 남고, 자격 판정 응답(GET .../carbon-point)이 화면에 보여준다.
+    assert not [f for f in body["fields"] if "감축률" in f["label"] or "사용량" in f["label"]]
+    row = session.query(CarbonNeutralPointApplication).one()
+    assert row.reduction_rate_pct == 10.0
 
 
 def test_create_application_not_persisted_when_not_eligible(client, db):

@@ -491,27 +491,32 @@ def notify_if_eligible(
 
 # ── 신청서 초안 ─────────────────────────────────────────────────────────────
 
-# fields[].source 어휘 — 프론트 fixture(getDraftFixture)가 쓰는 문자열과 맞춘다.
+# fields[].source 어휘.
+#
+# "감탄 계산값"·"감탄 계산값(예상치)" 두 개는 사용량·감축률 항목과 함께 없어졌다
+# (2026-08-25 — build_application_draft 주석 참고). 서식에 없는 항목이라 `fields`에 넣지
+# 않기로 했고, 그 세 항목 말고 계산값을 출처로 갖는 신청서 칸이 없다.
 SRC_MYDATA_BIZ = "마이데이터 · 사업자등록증명"
-SRC_CALC = "감탄 계산값"
-SRC_CALC_ESTIMATE = "감탄 계산값(예상치)"
 SRC_BILL = "전기요금고지서 파싱값"
 SRC_UNCONFIRMED = "출처 확인 중(data-plan §6.3)"
 SRC_OWNER_INPUT = "사장님 직접 입력"
 SRC_PORTAL = "탄소중립포인트 포털에서 직접 발급"
 
-# 서식에 있지만 감탄도 사장님도 채울 수 없어 **안내만 하는** 항목.
+# 서식에 있지만 감탄도 사장님도 채울 수 없어 **안내만 하는** 항목 — 지금은 비어 있다.
 #
 # 0032 이전에는 휴대전화번호·전자메일·인센티브 유형·계좌정보 등이 전부 여기 있었다. 그건
 # 화면이 "초안 미리보기"뿐이라 사장님 입력을 받을 자리가 없었기 때문이고, 4단계 위저드의
 # 3단계가 그 입력을 받게 되면서 전부 `APPLICANT_FIELDS`로 옮겨갔다.
 #
-# 비밀번호만 남는다 — 탄소중립포인트 포털 계정의 비밀번호이고 가입 처리 후 포털이 임시번호를
-# 문자로 발급하는 흐름이라, 감탄이 값을 받아 보관해야 할 단계가 아예 없다. 타 기관
-# 자격증명을 대신 들고 있지 않는다(0032 주석 참고).
-REMAINING_FIELDS = [
-    "비밀번호 — 감탄이 보관하지 않아요. 가입 신청 후 문자로 오는 임시번호로 포털에 접속해 직접 바꾸셔야 해요",
-]
+# 마지막으로 남아 있던 비밀번호 안내도 뺐다(2026-08-25). 포털 계정 비밀번호는 가입 처리 후
+# 포털이 임시번호를 문자로 발급하는 흐름이라 감탄이 손댈 단계가 없고, 그건 폼 아래 잔글씨로
+# 설명할 일이 아니라 **비밀번호 칸을 만들지 않는 것**으로 이미 지켜지는 원칙이다(타 기관
+# 자격증명을 대신 들고 있지 않는다 — 0032 주석). 화면에서 문구를 지웠어도 `APPLICANT_FIELDS`에
+# 비밀번호 key가 없다는 사실은 그대로다.
+#
+# 리스트 자체는 남긴다 — 응답 키(`remaining_fields`)와 그걸 렌더하는 3단계 블록이 그대로
+# 있어, 서식 개정으로 "안내만 할 항목"이 생기면 여기에 문자열만 추가하면 화면이 따라온다.
+REMAINING_FIELDS: list[str] = []
 
 # 서식에 있지만 **상업시설 신청에는 해당 없어 화면에도 초안에도 넣지 않는** 항목.
 #
@@ -605,25 +610,32 @@ APPLICANT_FIELDS: tuple[ApplicantField, ...] = (
         key="application_kind", label="신청 구분", input_type="radio", required=True,
         group=GROUP_SIGNUP, options=APPLICATION_KINDS,
     ),
+    # 도움말(`help_text`)은 전부 걷어냈다(2026-08-25). 항목 13개 아래로 각각 두 줄짜리
+    # 설명이 붙으니 폼이 읽히지 않았다 — 라벨로 흡수되는 건 라벨에 넣고(포털 아이디,
+    # 법인번호), 나머지는 라벨·플레이스홀더·선택지가 이미 말하고 있거나 화면 다른 곳에
+    # 있는 말의 중복이었다. `ApplicantField.help_text` 자체는 남긴다 — 서식이 개정돼
+    # 설명이 꼭 필요한 칸이 생기면 그때 값만 채우면 된다.
+    #
+    # 서식 원문 라벨은 "아이디(ID)"인데 어느 사이트 아이디인지가 안 드러나 라벨에
+    # "탄소중립포인트 포털"을 넣었다. 서식과 라벨 문구가 1:1로 같아야 하는 제약은 없다 —
+    # 사장님이 읽는 문구는 우리가 정하고 서식 항목과의 대응은 key가 잡는다.
     ApplicantField(
-        key="portal_id", label="아이디(ID)", required=True, group=GROUP_SIGNUP,
+        key="portal_id", label="탄소중립포인트 포털 아이디", required=True, group=GROUP_SIGNUP,
         placeholder="영문·숫자 8~20자",
-        help_text="탄소중립포인트 포털에서 쓸 아이디를 정해 적어주세요. 비밀번호는 가입 후 문자로 오는 임시번호로 직접 설정하시게 됩니다.",
     ),
+    # "법인사업자만"을 라벨에 붙였다 — 개인사업자는 이 칸을 건너뛰어야 하는데, 그 판단
+    # 근거를 도움말로 내려두면 칸을 채우려다 읽는다.
     ApplicantField(
-        key="corporate_registration_no", label="법인번호", group=GROUP_BUSINESS,
+        key="corporate_registration_no", label="법인번호(법인사업자만)", group=GROUP_BUSINESS,
         placeholder="000000-0000000",
-        help_text="법인사업자만 적으시면 돼요. 개인사업자는 비워 두세요.",
     ),
     ApplicantField(
         key="business_open_date", label="영업개시일자", input_type="date",
         group=GROUP_BUSINESS,
-        help_text="사업자등록증명에 개업일자가 없어 직접 확인이 필요해요.",
     ),
     ApplicantField(
         key="applicant_phone", label="신청인 휴대전화번호", input_type="tel", required=True,
         group=GROUP_CONTACT, placeholder="'-' 없이 숫자만 입력",
-        help_text="가입 확인과 인센티브 지급 안내를 문자로 받으실 번호예요.",
     ),
     ApplicantField(
         key="applicant_email", label="전자메일", input_type="email", group=GROUP_CONTACT,
@@ -631,7 +643,6 @@ APPLICANT_FIELDS: tuple[ApplicantField, ...] = (
     ),
     ApplicantField(
         key="postal_code", label="우편번호", group=GROUP_ADDRESS, placeholder="00000",
-        help_text="사업자등록증명에는 주소만 있고 우편번호가 없어요.",
     ),
     ApplicantField(
         key="road_address", label="도로명 주소", required=True, group=GROUP_ADDRESS,
@@ -641,19 +652,23 @@ APPLICANT_FIELDS: tuple[ApplicantField, ...] = (
         key="address_detail", label="상세 주소", group=GROUP_ADDRESS,
         placeholder="동·층·호",
     ),
+    # 전기 고객번호는 고지서 파싱값을 기본값으로 깔아준다(build_application_draft) —
+    # 값이 이미 들어와 있는 게 "미리 채워 드렸다"는 설명을 대신한다.
     ApplicantField(
         key="electric_customer_number", label="전기", required=True, group=GROUP_CUSTOMER_NO,
-        help_text="전기요금고지서에서 읽어 미리 채워 드려요. 값이 비어 있거나 다르면 고지서를 보고 고쳐주세요.",
     ),
     ApplicantField(key="water_customer_number", label="수도", group=GROUP_CUSTOMER_NO),
     ApplicantField(key="city_gas_customer_number", label="도시가스", group=GROUP_CUSTOMER_NO),
     ApplicantField(
         key="district_heating_customer_number", label="지역난방", group=GROUP_CUSTOMER_NO,
     ),
+    # 도움말에 있던 제약("관할 지자체가 시행하는 유형만", "그린카드 미가입자는 그린카드
+    # 포인트 선택 불가")은 감탄이 검증할 수 없는 조건이다 — 지자체별 시행 유형도, 그린카드
+    # 가입 여부도 우리가 조회할 수 없고 최종 판단은 포털·지자체가 한다. 화면에서 못 막는
+    # 조건을 폼 아래 잔글씨로 적어두면 읽히지도 않으면서 지킨 척만 된다.
     ApplicantField(
         key="incentive_type", label="인센티브 유형", input_type="select", required=True,
         group=GROUP_INCENTIVE, options=INCENTIVE_TYPES,
-        help_text="관할 지방자치단체가 시행하는 유형 중 하나만 고르실 수 있어요. 그린카드 미가입자는 그린카드 포인트를 고를 수 없습니다.",
     ),
     ApplicantField(
         key="incentive_type_other", label="기타 유형", group=GROUP_INCENTIVE,
@@ -721,8 +736,11 @@ def build_application_draft(
     `application_id`, `status`, `fields[{label, value, source}]`, `remaining_fields`,
     `draft_document_url`. **라벨 문구까지 백엔드가 정한다** — 프론트는 배열을 그대로 렌더한다.
 
-    LLM은 개입하지 않는다(원칙1) — 모든 수치는 `compute_reduction_rate()` 결과를 그대로
-    문자열로 옮긴다. 채울 수 없는 값은 빈 문자열이 아니라 `None`이다(실패 가시성).
+    LLM은 개입하지 않는다(원칙1) — 값은 마이데이터·고지서 파싱값과 사장님 입력을 그대로
+    옮긴다. 채울 수 없는 값은 빈 문자열이 아니라 `None`이다(실패 가시성).
+
+    `fields`는 **실물 서식에 있는 칸만** 담는다 — `compute_reduction_rate()`의 사용량·감축률은
+    여기 넣지 않고 draft 레코드 컬럼에만 저장한다(2026-08-25 정정, `fields` 아래 주석).
 
     data-plan §6.3이 "마이데이터 사업자등록증명 (기존)"으로 적어둔 항목 중 주소·연락처는
     실제로 그 페이로드에 없었다(2026-08-24 코드 확인). 둘의 성격이 달라 다르게 처리했다:
@@ -753,9 +771,6 @@ def build_application_draft(
     company_name = biz.get("company_name")
     representative = biz.get("representative")
 
-    def _kwh(value: float | None) -> str | None:
-        return None if value is None else f"전기 {value:,.0f} kWh"
-
     baseline_year, target = info["baseline_year"], info["target_year"]
     rate = info["reduction_rate_pct"]
     fields = [
@@ -770,18 +785,24 @@ def build_application_draft(
         # 가진 데이터"인 척하게 되므로 잔여 필드로 둔다(2026-08-24 결정).
         {"label": "신청인 휴대전화번호", "value": None, "source": SRC_OWNER_INPUT},
         {"label": "전자메일", "value": None, "source": SRC_OWNER_INPUT},
-        {"label": "고지서 고객번호 — 전기", "value": _electric_customer_number(session, company_id),
+        # 에너지원은 줄표가 아니라 괄호로 붙인다 — 좁은 모바일 폭에서 줄표가 하이픈처럼
+        # 읽힌다(2026-08-25).
+        {"label": "고지서 고객번호(전기)", "value": _electric_customer_number(session, company_id),
          "source": SRC_BILL},
         # 수도 파싱이 이번 범위 밖이라 항상 null(develop-plan §2.5).
-        {"label": "고지서 고객번호 — 수도", "value": None, "source": SRC_OWNER_INPUT},
-        {"label": f"기준년도({baseline_year}) 사용량", "value": _kwh(result.baseline_usage_kwh),
-         "source": SRC_CALC},
-        {"label": f"감축년도({target}) 사용량", "value": _kwh(result.target_usage_kwh), "source": SRC_CALC},
-        # "예상 감축률" 문구로 통일 — 확정치처럼 표기하지 않는다(develop-plan §2.3).
-        {"label": "예상 감축률", "value": None if rate is None else f"{rate}%", "source": SRC_CALC_ESTIMATE},
+        {"label": "고지서 고객번호(수도)", "value": None, "source": SRC_OWNER_INPUT},
     ]
     # BLANK_BY_POLICY(거주 면적·세대원 수·전입일자)는 `fields`에 넣지 않는다 — 상업시설
     # 신청에 해당 없는 칸을 "해당 없음"으로 띄워두면 초안 미리보기만 길어진다(2026-08-25).
+    #
+    # 기준년도·감축년도 사용량과 감축률도 `fields`에서 뺐다(2026-08-25 정정). 실물 서식에
+    # 그 기재란이 없다 — 가입 신청서는 계정·고객번호·인센티브 수령 방법을 받는 서식이고,
+    # 사용량은 공단이 한전·도시가스공사에서 직접 받아 반기마다 자체 계산한다(§6.2 원칙).
+    # data-plan §6.3 매핑표가 이 세 항목을 "서식 실제 항목"으로 적어둔 건 잠정안의 잔재다.
+    # 계산값 자체는 버리지 않는다 — 자격 판정 근거로 아래 draft 레코드(baseline_usage_json·
+    # target_usage_json·reduction_rate_pct)에 그대로 남고, 화면에는 위저드 1단계와
+    # `CarbonPointCard`가 "예상 감축률"로 보여준다. 서식에 없는 칸을 신청서 초안 목록에
+    # 끼워 넣으면 사장님이 제출 서류에 그 값이 들어간다고 오해한다.
 
     # draft 레코드는 자격을 충족했을 때만 남긴다 — 미달 기업의 신청서를 DB에 쌓지 않는다
     # (rate_approvals가 근거 없는 요청을 거부하는 것과 같은 결).
@@ -865,13 +886,13 @@ def applicant_saved_values(application: CarbonNeutralPointApplication | None) ->
 
 
 # 초안 미리보기의 라벨 ↔ 입력 key 대응. `fields`는 서식 순서대로 사람이 읽는 목록이고
-# `applicant_fields`는 폼이라 라벨 문구가 다를 수 있어(예: "전기" vs "고지서 고객번호 — 전기")
+# `applicant_fields`는 폼이라 라벨 문구가 다를 수 있어(예: "전기" vs "고지서 고객번호(전기)")
 # 자동 매칭에 의존하지 않고 명시적으로 적는다.
 _FIELD_LABEL_TO_KEY = {
     "신청인 휴대전화번호": "applicant_phone",
     "전자메일": "applicant_email",
-    "고지서 고객번호 — 전기": "electric_customer_number",
-    "고지서 고객번호 — 수도": "water_customer_number",
+    "고지서 고객번호(전기)": "electric_customer_number",
+    "고지서 고객번호(수도)": "water_customer_number",
 }
 
 

@@ -11,6 +11,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from db.carbon_neutral_point import (
+    APPLICANT_FIELD_KEYS,
     APPLICANT_FIELDS,
     BLANK_BY_POLICY,
     INCENTIVE_TYPES,
@@ -254,8 +255,30 @@ def test_draft_matches_frontend_contract(setup):
     by_label = {f["label"]: f for f in draft["fields"]}
     assert by_label["상호(법인명)"]["value"] == "동성로카페"
     assert by_label["사업자등록번호"]["value"] == "211-81-10011"
-    assert by_label["고지서 고객번호 — 전기"]["value"] == "0355-7712-90"
-    assert by_label["예상 감축률"]["value"] == "10.0%"
+    assert by_label["고지서 고객번호(전기)"]["value"] == "0355-7712-90"
+
+
+def test_draft_fields_exclude_usage_and_reduction_rate(setup):
+    """사용량·감축률은 신청서 초안 목록에 넣지 않는다(2026-08-25 정정).
+
+    실물 서식에 기재란이 없다 — 가입 신청서는 계정·고객번호·인센티브 수령 방법을 받는
+    서식이고, 사용량은 공단이 한전 등에서 직접 받아 반기마다 자체 계산한다(data-plan §6.2).
+    서식에 없는 칸을 초안 목록에 끼워 넣으면 사장님이 제출 서류에 그 값이 들어간다고
+    오해한다. 계산값은 버리는 게 아니라 draft 레코드 컬럼에 남는다.
+    """
+    db, company, inst = setup
+    _eligible_history(db, company, inst)
+
+    draft = build_application_draft(db, company.id, 2026, 1)
+
+    labels = [f["label"] for f in draft["fields"]]
+    assert not [lb for lb in labels if "사용량" in lb or "감축률" in lb]
+    assert not [f for f in draft["fields"] if "계산값" in f["source"]]
+
+    row = db.query(CarbonNeutralPointApplication).one()
+    assert row.reduction_rate_pct == 10.0
+    assert row.baseline_usage_json["electricity_kwh"] is not None
+    assert row.target_usage_json["electricity_kwh"] is not None
 
 
 def test_draft_fills_address_from_mydata(setup):
@@ -313,20 +336,22 @@ def test_draft_omits_household_leftover_fields(setup):
     assert not ({f["label"] for f in draft["applicant_fields"]} & set(BLANK_BY_POLICY))
 
 
-def test_remaining_fields_only_carry_password_notice(setup):
-    """잔여 필드는 "감탄도 사장님도 여기서 채울 수 없는 것"만 남는다.
+def test_password_is_never_asked(setup):
+    """비밀번호는 어디에서도 받지 않는다 — 타 기관 자격증명을 대신 들고 있지 않는다.
 
-    비밀번호는 탄소중립포인트 포털 계정의 것이라 감탄이 받아 보관할 단계가 없다 —
-    타 기관 자격증명을 대신 들고 있지 않는다. 입력 폼에도 비밀번호 칸이 없어야 한다.
+    이 원칙을 지키는 건 안내 문구가 아니라 **칸이 없다는 사실**이다. 2026-08-25에 잔여
+    필드의 비밀번호 안내 문구를 화면에서 걷어냈고(REMAINING_FIELDS 주석), 그래서 이
+    테스트는 문구가 아니라 폼 명세·저장 가능한 key 쪽을 잠근다.
     """
     db, company, inst = setup
     _eligible_history(db, company, inst)
     draft = build_application_draft(db, company.id, 2026, 1)
 
     assert draft["remaining_fields"] == list(REMAINING_FIELDS)
-    assert "비밀번호" in " ".join(draft["remaining_fields"])
     keys = {f["key"] for f in draft["applicant_fields"]}
     assert not any("password" in k or "비밀번호" in k for k in keys)
+    assert not any("password" in k for k in APPLICANT_FIELD_KEYS)
+    assert not any("비밀번호" in f["label"] for f in draft["applicant_fields"])
 
 
 def test_applicant_fields_expose_form_spec(setup):
