@@ -526,21 +526,28 @@ export function cancelCompanyGoal(
 }
 
 // GET /owner/{company_id}/calendar — 탄소 캘린더. 그 달의 날짜별 구매·탄소
-// 배출 내역(전표 기준)을 반환. 사장님에게 노출 가능한 분류만 포함
-// (담당자 확정·전송 완료 건 — HITL 대기 중인 건은 안 보임). 에이전트 트레이스
-// (결손 감지·이상치 검증 등 내부 판단 로그)는 포함하지 않는다 — 사장님이
-// 보고 싶은 건 "이날 뭘 샀고 탄소가 얼마나 나왔는지"이지 AI 활동 일지가
-// 아니다.
+// 배출·리포트·신청 내역을 반환. entry_type이 "voucher"인 건만 사장님에게
+// 노출 가능한 분류로 필터링됨(담당자 확정·전송 완료 건 — HITL 대기 중인 건은
+// 안 보임). "report"(탄소리포트 생성 시점)·"carbon_point_application"(탄소중립
+// 포인트 신청서 초안 생성일)은 분류 상태와 무관하게 노출됨. 에이전트 트레이스
+// (결손 감지·이상치 검증 등 내부 판단 로그)는 포함하지 않는다 — 사장님이 보고
+// 싶은 건 "이날 뭘 샀고 탄소가 얼마나 나왔는지"이지 AI 활동 일지가 아니다.
+export type CalendarEntryType = "voucher" | "report" | "carbon_point_application";
+
 export interface CalendarEvent {
   date: string; // YYYY-MM-DD
-  entry_type: "voucher";
-  voucher_id: number;
+  entry_type: CalendarEntryType;
+  voucher_id: number | null;
   scope: number | null;
   fuel_type: string | null;
   item_description: string | null;
   supply_amount_krw: number | null;
   emission_tco2e: number | null;
   source: string;
+  // 그 날짜에 같은 entry_type이 여러 건이면 몇 건이 합쳐졌는지("voucher"는 항상 1).
+  // "report"·"carbon_point_application"은 날짜당 1개 이벤트로 묶여서 오므로
+  // 캘린더가 점으로 뒤덮이지 않는다 — 상세 카드에 "N건"으로 표시한다.
+  count: number;
 }
 
 export interface CalendarResponse {

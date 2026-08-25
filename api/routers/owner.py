@@ -231,12 +231,14 @@ def owner_calendar(
     month: int | None = None,
     session: Session = Depends(get_session),
 ):
-    """탄소 캘린더 — 그 달의 날짜별 구매·탄소 배출 내역(전표 기준).
+    """탄소 캘린더 — 그 달의 날짜별 구매·탄소 배출·리포트·신청 내역.
 
-    year/month 생략 시 서버 기준 이번 달. 사장님에게 노출 가능한 분류가 붙은
-    전표만 포함한다(get_classifications()와 동일 필터 — api/queries.py::
-    _owner_visible_classification_filter). 에이전트 트레이스(활동 로그)는
-    포함하지 않는다 — api/queries.py::get_calendar_events 참고.
+    year/month 생략 시 서버 기준 이번 달. entry_type이 "voucher"인 건만
+    사장님에게 노출 가능한 분류 필터가 붙는다(get_classifications()와 동일 —
+    api/queries.py::_owner_visible_classification_filter). report·
+    carbon_point_application은 분류 상태와 무관하게 발생 시점 그대로 노출한다.
+    에이전트 트레이스(활동 로그)는 포함하지 않는다 — api/queries.py::
+    get_calendar_events 참고.
     """
     today = datetime.now(timezone.utc)
     y = year or today.year
