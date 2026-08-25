@@ -18,13 +18,19 @@ import { MonthlyTrendChart } from "@/components/MonthlyTrendChart";
  * 월별 막대 차트로 구성된 진행 카드를 보여준다(걸음수 앱 레퍼런스 참고, 사용자
  * 요청 2026-08-18) — 다만 두 목표 타입의 "진행" 성격이 달라 링이 의미하는 값이
  * 다르다: 등급 목표는 completeness_pct(서류 채울 때마다 실제로 오름), 감축 목표는
- * "다음 측정 전엔 비교 대상 자체가 없다"는 원칙을 지키기 위해 measured=false일 땐
- * 링을 채우지 않고 목표 감축률만 숫자로 보여준다(가짜 진행률 금지). */
+ * 동월 대비 감축률 ÷ 목표 감축률(2026-08-25 — 목표 시작월부터 이번 달까지를 "1년 전
+ * 같은 달들"과 비교하므로 첫 달부터 링이 움직이고 계절성에도 안전하다. 자세한 근거는
+ * db/pcaf_engine/company_goals.py::_emission_reduction_progress 주석).
+ * 작년 동월 데이터가 아예 없어 비교 자체가 불가능할 때(measured=false)만 링을 비우고
+ * 목표 감축률을 숫자로 보여준다 — 없는 진행률을 지어내지 않는다(가짜 진행률 금지). */
 
 const SCOPE_LABEL: Record<string, string> = { scope_1: "Scope 1", scope_2: "Scope 2" };
 
-const RING_SIZE = 104;
-const RING_STROKE = 10;
+// 링 지름 — 104에서 줄였다(사용자 요청, 2026-08-25). 링 칼럼이 카드 높이를 결정하는
+// 쪽이라 이 값을 줄이면 카드도 같이 낮아진다. 옆 칼럼 라벨이 "최근 1년 배출량"으로
+// 길어져 두 줄로 감길 여유가 필요해진 것과도 맞물린다.
+const RING_SIZE = 90;
+const RING_STROKE = 9;
 const RING_RADIUS = (RING_SIZE - RING_STROKE) / 2;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 const RING_GRADIENT_ID = "goal-ring-gradient";
@@ -63,7 +69,7 @@ function GoalRing({ pct, bigText }: { pct: number; bigText: string }) {
         />
       </svg>
       <div className="absolute inset-0 flex items-center justify-center px-2 text-center">
-        <span className="text-[20px] font-extrabold leading-none text-ink">{bigText}</span>
+        <span className="text-[18px] font-extrabold leading-none text-ink">{bigText}</span>
       </div>
     </div>
   );
@@ -223,17 +229,23 @@ function GoalProgressCard({
   const electricBillFilled =
     (grid?.document_types.find((r) => r.document_type === "electric_bill")?.months[String(prevMonth)] ?? 0) > 0;
 
+  // 감축 목표의 링은 "목표 진행률" — 동월 대비 감축률 ÷ 목표 감축률(백엔드
+  // progress_pct, 2026-08-25). 예전엔 기준 12개월이 다 지나야 비교가 성립해서 그전까진
+  // 링이 내내 0%로 죽어 있었다(사용자 지적) — 지금은 첫 달부터 값이 있다.
+  // 작년 동월 데이터가 아예 없어 비교가 불가능할 때(measured=false)만 예전처럼 목표
+  // 감축률을 숫자로 보여주고 링은 비운다(없는 진행률을 지어내지 않음).
   const ringPct = isEmission ? (goal.measured ? goal.progress_pct : 0) : goal.progress_pct;
   const ringBigText = isEmission
     ? goal.measured
       ? `${Math.round(goal.progress_pct)}%`
       : `${goal.target_reduction_pct}%`
     : `${Math.round(goal.progress_pct)}%`;
-  const ringCaption = isEmission ? (goal.measured ? "감축 진행률" : "목표 감축률") : "데이터 완전성";
+  const ringCaption = isEmission ? (goal.measured ? "목표 진행률" : "목표 감축률") : "데이터 완전성";
 
-  // "최근"·"현재" 값은 다음 측정 전엔 목표 설정 시점 기준값이 곧 가장 최근에 확인된
+  // 감축 목표: current_value는 항상 "지금 기준 최근 12개월" 총량이라 목표 배출량과 같은
+  // 길이로 나란히 비교된다. 등급 목표: 측정 전엔 설정 시점 등급이 가장 최근에 확인된
   // 값이다(원칙7 — 없는 값을 지어내지 않고 마지막으로 확인된 값을 그대로 보여줌).
-  const recentEmission = goal.measured && goal.current_value != null ? goal.current_value : goal.baseline_value;
+  const recentEmission = goal.current_value ?? goal.baseline_value;
   const currentGrade = goal.current_value ?? goal.baseline_value;
 
   return (
@@ -266,7 +278,7 @@ function GoalProgressCard({
         <div className="flex flex-1 flex-col justify-center gap-3 pt-2.5">
           {isEmission ? (
             <>
-              <StatRow label="최근 배출량" value={`${recentEmission}tCO2e`} />
+              <StatRow label="최근 1년 배출량" value={`${recentEmission}tCO2e`} />
               <StatRow label="목표 배출량" value={`${goal.target_value}tCO2e`} />
             </>
           ) : (

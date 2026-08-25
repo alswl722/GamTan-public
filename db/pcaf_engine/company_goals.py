@@ -1,10 +1,12 @@
 """사장님 목표 설정 — 5단계 위저드 완료 후 홈 화면 박스가 목표 카드로 바뀔 때 쓰는 서비스 레이어.
 
 goal_type 2종:
-  - emission_reduction: 배출량 N% 감축 목표. 기준값은 목표 설정월부터 롤링 12개월의
-    Scope1+2 총 배출량(null인 Scope는 합산 제외, 원칙7과 같은 결). 달력년도가 아니라
-    "설정월부터 12개월"을 쓰는 이유: 8월에 목표를 세우면 달력년도 기준값은 8개월치인데
-    그걸 다음 해 12개월치와 비교하면 월수가 안 맞는다(사용자 지적, 2026-08-19) —
+  - emission_reduction: 배출량 N% 감축 목표. 기준값은 목표 설정월**까지의 최근** 12개월
+    Scope1+2 총 배출량(null인 Scope는 합산 제외, 원칙7과 같은 결). 달력년도를 안 쓰는
+    이유: 8월에 목표를 세우면 달력년도 기준값은 8개월치인데 그걸 다음 해 12개월치와
+    비교하면 월수가 안 맞는다(사용자 지적, 2026-08-19). 그 12개월이 미래가 아니라
+    과거인 이유: 미래 구간은 설정 시점에 데이터가 이번 달 하나뿐이라 "연간 기준값"이
+    사실상 한 달치가 돼버렸다(2026-08-25, 실측 11배 오차 — 0033에서 기존 행 재계산).
     시작월은 사용자가 고르지 않고 설정 시점(지금)을 자동으로 쓴다("입력 제로" 원칙).
   - grade_upgrade: PCAF 데이터 품질 등급 상승 목표. 내부적으로 우대금리 상품 매칭과
     완전히 같은 엔진(rate_products.py::rate_product_status_for_scope)을 쓴다 — 목표
@@ -18,10 +20,15 @@ goal_type 2종:
 
 진행률·체크리스트는 CompanyGoal에 저장하지 않고 조회할 때마다 다시 계산한다
 (quality-report·progress 엔드포인트와 같은 이 프로젝트의 관례) — CompanyGoal 행
-자체는 "무엇을 목표로 했는지"의 스냅숏만 갖는다. 배출량 감축 목표는 기준 윈도우
-(설정월부터 12개월) 안에서는 비교 대상이 없다(결손월이 채워질수록 총량은 늘어나는
-게 정상이라 "감축" 판단 근거가 못 된다) — 그 다음 12개월(비교 윈도우)에 데이터가
-잡힐 때부터 실제로 비교한다(가짜 진행률을 보여주지 않는다, 실패 가시성 원칙과 같은 결).
+자체는 "무엇을 목표로 했는지"의 스냅숏만 갖는다(기준값·목표값 2개. 그래서 기준
+구간 정의가 바뀌면 코드만 고쳐선 안 되고 기존 행도 함께 재계산해야 한다 — 0033).
+
+배출량 감축 목표의 진행률은 **동월 대비**로 잰다: 목표 시작월부터 이번 달까지를
+"정확히 같은 달들, 1년 전"과 비교한다(2026-08-25). 첫 달부터 값이 있고, 같은 달끼리만
+비교하므로 계절성에 안전하며, 12개월이 지나면 "최근 12개월 vs 직전 12개월"과 정확히
+같아진다. 다만 "목표 달성"(status→achieved) 판정은 경과 12개월이 다 찬 뒤에만 한다 —
+석 달 잘한 걸로 연간 감축 달성 배지를 주지 않는다(가짜 진행률 금지, 실패 가시성 원칙과
+같은 결). 근거와 대안 검토는 _emission_reduction_progress 주석에 자세히 적어뒀다.
 """
 from datetime import datetime, timezone
 
@@ -82,22 +89,45 @@ def _window_months(start_year: int, start_month: int, *, offset: int = 0, count:
     return [(idx // 12, idx % 12 + 1) for idx in range(base_index, base_index + count)]
 
 
-def _emission_in_window(session: Session, company_id: int, start_year: int, start_month: int) -> float | None:
-    """Scope1+2 총 배출량 — 달력년도가 아니라 (start_year, start_month)부터 롤링
-    12개월 윈도우로 집계한다. aggregate_scope_emissions + _total_emission과 정확히
-    같은 판정 규칙(원칙7: Scope 하나라도 매칭되는 전표가 있으면 있는 것으로 취급,
-    반려·미산정 건은 0으로 더함 — "전표가 아예 없는 Scope"만 None)을 롤링 윈도우로
-    적용한다. aggregate_scope_emissions는 연도 전체만 필터할 수 있어 재사용 불가,
-    같은 fuel_bucket/FUEL_BUCKET_SCOPE 매핑(pcaf_quality.py에서 공개, 2026-08-19)
-    으로 독립 집계한다."""
-    start_index = start_year * 12 + start_month
-    end_index = start_index + 11
+def _trailing_months(end_year: int, end_month: int, *, count: int = 12) -> list[tuple[int, int]]:
+    """(end_year, end_month)을 **마지막 칸**으로 하는 직전 count개월 (연, 월) 리스트 —
+    "최근 1년치"를 뜻한다. 지금이 2026년 8월이면 2025년 9월~2026년 8월.
+
+    _window_months가 시작월을 받아 앞을 보는 것과 방향만 반대다. 홈 목표 카드의 월별
+    차트가 쓴다 — 목표 윈도우는 설정월부터 미래 12개월이라 차트에 쓰면 아직 오지 않은
+    달이 빈칸으로 대부분을 차지한다(2026-08-25 사용자 지적). 차트는 "최근 활동 현황"이
+    목적이므로 목표 기간과 분리해 항상 뒤를 돌아본다.
+
+    반환 순서는 과거→현재(시간순)라 그대로 x축 순서가 된다. 정확히 count개월 연속
+    구간이므로 count<=12일 때 각 항목의 month(1~12)는 중복되지 않는다 —
+    monthly_by_fuel이 month 번호로 버킷을 잡는 전제와 맞다."""
+    end_index = end_year * 12 + (end_month - 1)
+    return [(idx // 12, idx % 12 + 1) for idx in range(end_index - count + 1, end_index + 1)]
+
+
+def _emission_in_months(session: Session, company_id: int, months: list[tuple[int, int]]) -> float | None:
+    """Scope1+2 총 배출량 — 달력년도가 아니라 정확히 months에 준 (연, 월)들만 집계한다.
+    연속 구간일 필요도 없다(동월 대비 비교가 "작년 같은 달들"이라는 띄어진 구간을 쓴다).
+
+    aggregate_scope_emissions + _total_emission과 정확히 같은 판정 규칙(원칙7: Scope
+    하나라도 매칭되는 전표가 있으면 있는 것으로 취급, 반려·미산정 건은 0으로 더함 —
+    "전표가 아예 없는 Scope"만 None)을 임의 월 집합에 적용한다.
+    aggregate_scope_emissions는 연도 전체만 필터할 수 있어 재사용 불가, 같은
+    fuel_bucket/FUEL_BUCKET_SCOPE 매핑(pcaf_quality.py에서 공개, 2026-08-19)으로
+    독립 집계한다.
+
+    Scope별로 먼저 round(2)한 뒤 더하는 순서를 지킨다 — aggregate_scope_emissions가
+    Scope 카드에 그렇게 표시하므로, 합계만 따로 반올림하면 화면의 Scope1+Scope2와
+    총량이 1의 자리에서 안 맞는 일이 생긴다."""
+    if not months:
+        return None
+    month_indexes = [y * 12 + m for y, m in months]
     rows = session.execute(
         select(Classification.fuel_type, Classification.status, Classification.emission_co2e)
         .join(Voucher, Classification.voucher_id == Voucher.id)
         .where(
             Voucher.company_id == company_id,
-            (Voucher.year * 12 + Voucher.month).between(start_index, end_index),
+            (Voucher.year * 12 + Voucher.month).in_(month_indexes),
         )
     ).all()
 
@@ -158,10 +188,22 @@ def _supersede_active_goal(session: Session, company_id: int) -> None:
 def create_emission_reduction_goal(
     session: Session, company_id: int, *, target_reduction_pct: float
 ) -> CompanyGoal:
-    """배출량 N% 감축 목표를 확정한다. 기준값(baseline_value)은 지금 이 달부터
-    롤링 12개월의 Scope1+2 총 배출량 — 분류가 아직 안 끝나 배출량 자체가 없으면
-    세울 수 없다. 시작월은 목표 설정 시점(지금)을 자동으로 쓴다 — 사용자가
-    고르게 하지 않는다("입력 제로" 원칙, CLAUDE.md)."""
+    """배출량 N% 감축 목표를 확정한다. 기준값(baseline_value)은 **지금까지의 최근
+    12개월**(_trailing_months) Scope1+2 총 배출량 — 분류가 아직 안 끝나 배출량 자체가
+    없으면 세울 수 없다. 시작월은 목표 설정 시점(지금)을 자동으로 쓴다 — 사용자가
+    고르게 하지 않는다("입력 제로" 원칙, CLAUDE.md).
+
+    기준 구간이 "앞으로 12개월"이 아니라 "지난 12개월"인 이유(2026-08-25, 사용자
+    지적으로 발견): 예전엔 설정월부터 **미래** 12개월을 기준 구간으로 삼았는데, 목표를
+    세우는 순간 그 구간에 존재할 수 있는 데이터는 이번 달 하나뿐이라 기준값이 사실상
+    "이번 달 한 달치"가 됐다. 실측(대경부품): 2026-08에 세운 목표의 기준값이 1.5tCO2e로
+    잡혔는데 이는 8월 한 달(1.506)이고, 실제 최근 1년 총량은 17.37tCO2e였다 —
+    "연간 목표 배출량"이라 표시되는 값이 한 달치의 90%라 11배 이상 틀렸다. 감축 목표는
+    본질적으로 "과거 1년보다 덜 쓰기"이므로 기준은 이미 확정된 과거여야 한다.
+
+    baseline_reporting_year/baseline_start_month의 의미는 그대로 "목표 시작월"이다
+    (기준 구간의 시작월이 아님 — 기준 구간은 거기서 거꾸로 12개월). 컬럼 의미가
+    안 바뀌므로 스키마 변경은 없고, 이미 저장된 기준값만 0033에서 재계산한다."""
     company = session.get(Company, company_id)
     if company is None:
         raise CompanyNotFoundError(f"company_id={company_id} 없음")
@@ -169,7 +211,7 @@ def create_emission_reduction_goal(
         raise ValueError(f"target_reduction_pct는 0~100 사이여야 함(전달값: {target_reduction_pct})")
 
     start_year, start_month = _now_year_month()
-    baseline = _emission_in_window(session, company_id, start_year, start_month)
+    baseline = _emission_in_months(session, company_id, _trailing_months(start_year, start_month))
     if baseline is None:
         raise NoEmissionDataError(f"company_id={company_id} 배출량 기준값 없음 — 분류 실행 필요")
 
@@ -266,55 +308,88 @@ def get_active_goal(session: Session, company_id: int) -> CompanyGoal | None:
 
 
 def _emission_reduction_progress(session: Session, goal: CompanyGoal) -> dict:
-    """기준 윈도우(baseline_reporting_year, baseline_start_month부터 롤링 12개월)와
-    바로 다음 12개월(비교 윈도우)을 비교한다 — 달력년도가 아니라 목표 설정월
-    기준이라, 몇 월에 목표를 세웠든 항상 12개월 대 12개월로 공정하게 비교된다
-    (2026-08-19, 이전엔 "달력년도 vs 달력년도"라 8월에 세운 목표는 8개월치
-    기준값이 다음 해 12개월치와 비교되는 월수 불일치가 있었다)."""
+    """진행률을 **동월 대비**로 잰다 — 목표 시작월부터 이번 달까지(경과 구간)의 배출량을
+    "정확히 같은 달들, 1년 전"과 비교한다(2026-08-25 결정).
+
+    왜 동월 대비인가. 예전 방식은 기준 12개월이 다 지나야(=12개월 뒤) 비로소 비교가
+    성립해서, 그전까지 링이 12개월 내내 0%로 죽어 있었다(measured=False). 사용자가
+    "목표 진행률 링으로 바꾸고 싶다"고 한 게 이 죽은 링 얘기다. 대안으로 검토한 것들:
+      - 누적 예산 소진율(pace): 즉시 움직이지만 계절성을 무시해 난방 달에 억울하게
+        빨개진다. 계절 가중을 넣으려면 근거 없는 숫자를 만들어야 해서 탈락.
+      - 데이터 완전성(등급 목표가 쓰는 방식): 매달 움직이지만 배출량이 **늘어도** 링이
+        가득 차서 감축 목표에는 거짓말이 된다. 탈락.
+    동월 대비는 (a) 첫 달부터 값이 있고, (b) 같은 달끼리만 비교하므로 계절성에 안전하고,
+    (c) 12개월이 지나면 "최근 12개월 vs 직전 12개월"과 **정확히 같아진다** — 그래서
+    중간에 기준이 바뀌는 불연속이 없다.
+
+    12개월이 다 찼을 때 카드의 모든 숫자가 한 점에서 만난다:
+      비교 구간 합 == baseline_value(=목표 설정 시점의 최근 12개월)
+      경과 구간 합 == current_value(=지금 기준 최근 12개월)
+      achieved ⟺ 감축률 >= 목표% ⟺ current_value <= target_value
+    즉 "링 100%"와 "최근 1년 배출량 <= 목표 배출량"이 항상 같은 뜻이 된다.
+
+    achieved는 경과 12개월이 다 차야만 True다 — 3개월 잘했다고 "연간 10% 감축 달성"
+    배지를 주면 거짓이다(가짜 진행률 금지와 같은 결). 링은 그 사이에도 차오른다.
+    """
     start_year, start_month = goal.baseline_reporting_year, goal.baseline_start_month
-    baseline_window = _window_months(start_year, start_month)
-    last_year, last_month = baseline_window[-1]
     now_year, now_month = _now_year_month()
-    # "지금이 기준 윈도우의 마지막 달 이전이냐"를 (year*12+month) 하나의 값으로
-    # 비교한다 — month를 그대로 쓰므로(0-based로 안 바꿈) 두 값이 같은 산식으로
-    # 나온 이상 어긋날 일이 없다(_window_months 내부는 별도의 0-based 산식을 쓰므로
-    # 그 결과값(연,월)만 여기서 재조합한다 — 산식을 섞어 쓰면 경계에서 하루 어긋나는
-    # off-by-one이 난다, 구현 중 실측 확인).
-    still_in_baseline = (now_year * 12 + now_month) <= (last_year * 12 + last_month)
 
-    # 홈 박스의 월별 차트는 "비교가 성립하는지"와 무관하게 항상 최근 활동 현황을
-    # 보여준다 — 기준 윈도우 안이면 그 윈도우가 쌓이는 데이터, 넘어갔으면 비교
-    # 윈도우. 리포트 화면(web/components/ScenePcaf.tsx)의 "월별 배출 추이"와
-    # 완전히 같은 차트(web/components/MonthlyTrendChart.tsx)를 재사용하기로 해
+    # 홈 박스의 월별 차트는 목표 구간과 상관없이 "지금 기준 최근 1년"을 그린다
+    # (_trailing_months — 이번 달이 오른쪽 끝). 리포트 화면(ScenePcaf.tsx)의 "월별
+    # 배출 추이"와 완전히 같은 차트(MonthlyTrendChart.tsx)를 재사용하기로 해
     # (사용자 요청, 2026-08-18) 같은 재료 함수(monthly_by_fuel)를 그대로 쓴다.
-    chart_months = _window_months(start_year, start_month, offset=0 if still_in_baseline else 12)
-    monthly_emission_detail = monthly_by_fuel(session, goal.company_id, months=chart_months)
+    #
+    # 예전엔 목표 윈도우(설정월부터 12개월)를 그대로 썼는데, 그 윈도우가 미래를
+    # 향하다 보니 8월에 목표를 세우면 x축이 "8,9,…,7"로 깔리고 8월 한 칸만 막대가
+    # 있고 나머지 11칸은 아직 오지 않은 달이라 텅 비어 보였다(사용자 지적,
+    # 2026-08-25 — "왜 8월부터 나오지"). 차트의 목적은 목표 기간 표시가 아니라
+    # "최근 활동 현황"이므로 목표 구간과 분리해 항상 뒤를 돌아보게 한다.
+    trailing_year_months = _trailing_months(now_year, now_month)
+    monthly_emission_detail = monthly_by_fuel(session, goal.company_id, months=trailing_year_months)
 
-    if still_in_baseline:
-        return {
-            "achieved": False, "measured": False, "current_value": None,
-            "progress_pct": 0.0, "monthly_emission_detail": monthly_emission_detail,
-        }
+    # "최근 1년 배출량" — 목표 진행과 무관하게 항상 지금 기준 최근 12개월 총량이다.
+    # 카드의 목표 배출량(연간 총량)과 같은 단위·같은 길이라 그대로 나란히 비교된다.
+    current_value = _emission_in_months(session, goal.company_id, trailing_year_months)
 
-    comparison_start_year, comparison_start_month = _window_months(start_year, start_month, offset=12)[0]
-    current_value = _emission_in_window(session, goal.company_id, comparison_start_year, comparison_start_month)
-    if current_value is None:
-        return {
-            "achieved": False, "measured": False, "current_value": None,
-            "progress_pct": 0.0, "monthly_emission_detail": monthly_emission_detail,
-        }
+    # 경과 개월(시작월 포함, 최대 12). 목표 시작월이 미래면(시계 문제 등) 0 이하가 된다.
+    elapsed_months = (now_year * 12 + now_month) - (start_year * 12 + start_month) + 1
+    elapsed_months = min(12, elapsed_months)
 
-    reduction_needed = goal.baseline_value - goal.target_value
-    achieved_reduction = goal.baseline_value - current_value
+    unmeasured = {
+        "achieved": False, "measured": False, "current_value": current_value,
+        "progress_pct": 0.0, "reduction_pct": None, "elapsed_months": max(0, elapsed_months),
+        "monthly_emission_detail": monthly_emission_detail,
+    }
+    if elapsed_months < 1:
+        return unmeasured
+
+    measure_months = _window_months(start_year, start_month, count=elapsed_months)
+    # 같은 달들의 1년 전 — start_year를 1 줄이면 (연,월) 쌍이 정확히 12개월 앞으로
+    # 밀린다(_window_months가 year*12 산식이라 12월 경계에서도 어긋나지 않는다).
+    compare_months = _window_months(start_year - 1, start_month, count=elapsed_months)
+
+    measure_total = _emission_in_months(session, goal.company_id, measure_months)
+    compare_total = _emission_in_months(session, goal.company_id, compare_months)
+    # 비교 기준(작년 동월)이 없거나 0이면 감축률을 만들 수 없다 — 0으로 나누거나
+    # 없는 값을 지어내지 않고 "아직 비교 불가"로 내려보낸다(원칙7).
+    if measure_total is None or not compare_total:
+        return unmeasured
+
+    reduction_pct = (1 - measure_total / compare_total) * 100
+    target_pct = goal.target_reduction_pct or 0
     progress_pct = (
-        0.0 if reduction_needed <= 0
-        else max(0.0, min(100.0, achieved_reduction / reduction_needed * 100))
+        0.0 if target_pct <= 0
+        else max(0.0, min(100.0, reduction_pct / target_pct * 100))
     )
     return {
-        "achieved": current_value <= goal.target_value,
+        "achieved": elapsed_months >= 12 and reduction_pct >= target_pct,
         "measured": True,
         "current_value": current_value,
         "progress_pct": round(progress_pct, 1),
+        # 배출량이 늘었으면 음수로 그대로 내려간다 — 링은 0%로 눌리지만 화면이
+        # "지난해 같은 달보다 늘었어요"라고 사실대로 말할 수 있어야 한다.
+        "reduction_pct": round(reduction_pct, 1),
+        "elapsed_months": elapsed_months,
         "monthly_emission_detail": monthly_emission_detail,
     }
 

@@ -492,8 +492,16 @@ export interface CompanyGoal {
   created_at: string | null;
   achieved: boolean;
   measured: boolean;
+  // emission_reduction: 지금 기준 최근 12개월 Scope1+2 총량(tCO2e) — target_value와
+  // 같은 길이·단위라 나란히 비교된다. grade_upgrade: 현재 등급.
   current_value: number | null;
   progress_pct: number;
+  // ↓ emission_reduction 전용(동월 대비 진행률, 2026-08-25).
+  // reduction_pct: 목표 시작월~이번 달을 "1년 전 같은 달들"과 비교한 감축률(%).
+  // 배출량이 늘었으면 음수. measured=false면 null. progress_pct는 이 값을
+  // target_reduction_pct로 나눈 것(0~100 clamp)이라 음수는 0%로 눌린다.
+  reduction_pct?: number | null;
+  elapsed_months?: number; // 목표 시작월부터 경과한 개월(시작월 포함, 최대 12)
   missing_items?: RateMissingItem[];
   disclaimer_text?: string;
   monthly_emission_detail?: MonthlyRow[]; // emission_reduction 전용 — 이번 해(또는 비교연도) 월별 배출(연료별 분해)
