@@ -63,12 +63,16 @@ def main() -> int:
     recovered_from_fixtures = 0
     with Session(engine) as session:
         stmt = select(SourceDocument).where(
-            SourceDocument.document_type.in_(("tax_invoice", "electric_bill", "gas_bill"))
+            # water_bill은 아직 적재되는 경로가 없지만 어휘에 넣어둔다 — 나중에 수도
+            # 문서가 쌓인 뒤 이 필터를 고치는 걸 잊으면 조용히 빠진 채로 돈다.
+            SourceDocument.document_type.in_(
+                ("tax_invoice", "electric_bill", "gas_bill", "water_bill")
+            )
         )
         if args.company_id is not None:
             stmt = stmt.where(SourceDocument.company_id == args.company_id)
         docs = session.execute(stmt).scalars().all()
-        print(f"[i] 대상 문서(세금계산서·전기·가스) {len(docs)}건" + (f" (company_id={args.company_id})" if args.company_id else ""))
+        print(f"[i] 대상 문서(세금계산서·전기·가스·수도) {len(docs)}건" + (f" (company_id={args.company_id})" if args.company_id else ""))
 
         for doc in docs:
             vouchers = session.execute(

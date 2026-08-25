@@ -15,7 +15,11 @@ from typing import Literal, TypedDict
 
 LpgStatus = Literal["yes", "no", "unsure"]
 DocumentStatus = Literal["required", "optional", "not_applicable"]
-DocumentType = Literal["tax_invoice", "electric_bill", "gas_bill"]
+# `water_bill`은 어휘에는 있지만 `required_documents()` 반환에는 없다 — 소상공인 탄소중립
+# 포인트용 문서라 배출량 계산 필수/선택 판정 대상이 아니고, 파서(§2.5 범위 밖)가 없어서
+# 업로드 그리드에 칸을 만들면 항상 실패하는 칸이 된다. 반환 dict의 키가 이 Literal을
+# 전부 채울 의무는 없다(dict[DocumentType, ...]는 exhaustive가 아니다).
+DocumentType = Literal["tax_invoice", "electric_bill", "gas_bill", "water_bill"]
 
 
 class FuelTypes(TypedDict, total=False):

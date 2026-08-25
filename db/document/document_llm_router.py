@@ -114,8 +114,12 @@ def _build_schema(cell_ids: list[int]) -> dict:
         "properties": {
             "document_type": {
                 "type": "STRING",
-                "enum": ["tax_invoice", "electric_bill", "gas_bill", "unknown"],
-                "description": "실제로 보이는 문서 종류. 셋 중 어느 것도 아니면 unknown.",
+                # water_bill은 파싱 지원 전이지만 어휘에는 넣는다 — 선택지에 없으면
+                # 모델이 수도고지서를 electric_bill로 밀어넣을 수 있고, 그러면 수도
+                # 사용량이 kWh 자리에 섞여 감축률을 오염시킨다. 정답 칸을 주고
+                # 파서 단계에서 "아직 지원 안 함"으로 명확히 실패시키는 쪽이 안전하다.
+                "enum": ["tax_invoice", "electric_bill", "gas_bill", "water_bill", "unknown"],
+                "description": "실제로 보이는 문서 종류. 어느 것도 아니면 unknown.",
             },
             "date_cell_id": ref_field,
             "amount_cell_id": ref_field,

@@ -302,25 +302,53 @@ created_at
 native enum이나 `ALTER TYPE`을 쓴 revision이 존재하지 않는다. 즉 마이그레이션 없이 **코드
 레벨 어휘 목록만** 고치면 된다:
 
+**2026-08-24 작업 완료 — 다만 "9곳 전부 추가"는 아니었다.** 실제로 어휘 자리는 **11곳**이고
+(아래 ★ 2곳이 원래 목록에서 빠져 있었다), 그중 **6곳만 추가하는 게 맞았다.** 자리마다 성격이
+다르기 때문이다 — 어떤 곳은 "이런 값이 존재할 수 있다"는 **서술**이고, 어떤 곳은 "사장님이
+업로드할 수 있다"는 **기능 활성화**다. 파서(`db/water_bill_extraction.py`)가 아직 없으므로
+활성화 자리에 넣으면 항상 실패하는 업로드 칸이 화면에 생긴다.
+
 ```text
-[백엔드]
-db/document/document_requirements.py   DocumentType Literal (단일 기준 — 여기서 시작)
-db/document/document_coverage.py       _DOCUMENT_TYPES 튜플 (업로드 그리드 열 목록)
-api/routers/owner.py                   _VALID_DOCUMENT_TYPES (업로드 요청 검증, 2곳에서 사용)
+[추가함 — 값의 존재·이름·인식에 관한 서술]
+db/document/document_requirements.py   DocumentType Literal (단일 기준)
 db/document/document_text_extractor.py DOCUMENT_TYPE_LABEL (한글 라벨)
+db/document/document_text_extractor.py _TITLE_TO_DOCUMENT_TYPE ★ 제목 인식 2항목 신규
+db/document/document_text_extractor.py _parse_by_type ★ water_bill 분기(안내 문구로 실패)
 db/document/document_llm_router.py     Gemini 응답 스키마의 document_type enum
-db/pcaf_engine/pcaf_quality.py         _FUEL_TO_DOCUMENT_TYPE (결손월 → 그리드 칸 딥링크)
 scripts/backfill_issue_date.py         document_type.in_((...)) 필터
 
-[프론트 — 백엔드만 고치면 화면에서 빠지므로 같이 확인해야 함]
-web/components/SceneUpload.tsx         canProceed의 하드코딩 배열
-web/components/admin/DocumentAccessLog.tsx  DOCUMENT_TYPE_LABEL (관리자 열람로그 라벨)
+[의도적으로 안 넣음 — 넣는 순간 파서 없는 업로드 경로가 열림. 파서와 함께 열 것]
+db/document/document_coverage.py       _DOCUMENT_TYPES (업로드 그리드 열 목록)
+api/routers/owner.py                   _VALID_DOCUMENT_TYPES (업로드 요청 검증)
+web/components/SceneUpload.tsx         canProceed 하드코딩 배열
+web/lib/api.ts                         DocumentType 유니온 ★ Record 키로 전수 사용됨
+
+[해당 없음 — 어휘 누락이 아니라 설계]
+db/pcaf_engine/pcaf_quality.py         _FUEL_TO_DOCUMENT_TYPE — 수도는 배출 연료가 아니다
+api/document_ingestion.py              DOCUMENT_TYPE_TO_VOUCHER_SOURCE ★ 수도는 vouchers가
+                                       아니라 water_bills로 간다(전표화하면 배출 파이프라인 오염)
+
+[추가함 — 라벨]
+web/components/admin/DocumentAccessLog.tsx  DOCUMENT_TYPE_LABEL (관리자 열람로그)
 ```
 
-(위 목록은 2026-08-22에 리포지토리 전체 grep으로 확인한 것이다. 어휘가 한 곳에 모여 있지
-않고 9곳에 흩어져 있다는 사실 자체가 문제인데, `water_bill` 추가를 계기로 상수를 한 군데로
+`web/lib/api.ts`의 유니온은 단순 목록처럼 보이지만 `Record<DocumentType, string>`의 키로
+전수 사용된다 — 추가했더니 `tsc`가 `app/owner/uploads/page.tsx`·`SceneUpload.tsx`에서
+컴파일 에러를 냈다. 즉 그 자리는 서술이 아니라 활성화였고, 되돌렸다. **어휘를 넣기 전에
+`npx tsc --noEmit`을 돌려야 이런 자리를 구분할 수 있다.**
+
+LLM 라우터 enum에는 넣었다 — 선택지에 없으면 모델이 수도고지서를 `electric_bill`로 밀어넣을
+수 있고, 그러면 수도 사용량이 kWh 자리에 섞여 **감축률이 오염된다.** 정답 칸을 주고 파서
+단계에서 명확히 실패시키는 쪽이 안전하다(실패 가시성, CLAUDE.md §6).
+
+`water_bill`로 인식된 문서는 `_parse_by_type`이 "상수도요금고지서는 아직 읽지 못해요 —
+전기요금고지서만 올려 주세요"로 실패한다. 내부 문구(`알 수 없는 문서종류: water_bill`)가
+사장님에게 노출되면 버그처럼 보이기 때문이다.
+
+(어휘가 한 곳에 모여 있지 않고 11곳에 흩어져 있다는 사실 자체가 문제인데, 상수를 한 군데로
 모으는 리팩터링은 **하지 않는다** — 이번 스프린트 범위를 넘고 기존 업로드 경로 회귀 위험이
-있다. 다만 추가할 때 어디를 빠뜨렸는지 추적할 수 있게 목록만 남겨둔다.)
+있다. 다만 위 분류를 남겨 다음 사람이 "빠뜨린 것"과 "의도적으로 안 넣은 것"을 구분할 수
+있게 했고, 안 넣은 4곳에는 코드 주석으로 같은 내용을 박아뒀다.)
 
 참고로 마이데이터 KYB 경로(`api/mydata_kyb_mock.py`)는 이미 `business_registration` 등
 위 Literal에 없는 값을 이 컬럼에 쓰고 있다 — 컬럼이 의도적으로 자유형식이고, 어휘를 제한하는
@@ -714,8 +742,14 @@ NISP·EIP를 쓴다.
 
 ### 15.2 2순위 — 매핑·기준 작업
 
-- [ ] 5% 감축률 산정 공식 확정 — 큰 틀("과거 1~2년간 월별 평균사용량 대비 금월 사용량")은
-      조사로 이미 확인됨. 위 1순위 전화 확인 결과로 세부 계산 스펙만 채워 `docs/small-business-green-supply-develop-plan.md`의 감축률 계산 함수 스펙에 반영
+- [x] 5% 감축률 산정 공식 확정 — **2026-08-24 완료.** 큰 틀("과거 1~2년간 월별 평균사용량 대비
+      금월 사용량")은 조사로 확인됐고, 갈렸던 세부 2건이 확정됐다:
+      **⑴ 기준값은 동월 기준**(과거 2년의 같은 구간 평균. 24개월 전체 평균이 아니다),
+      **⑵ 정산 구간은 가입월 기준**(가입월 다음 달부터 6개월. 달력 반기 고정이 아니다).
+      전체 평균 방식을 버린 근거는 S001·S002 실측 3건 — 구간을 2달 옮기면 자격이 사라지고,
+      가입월 한 달 차이로 20,000P vs 0P가 되고, 사용량이 **늘어난** 대조군을 감축으로 계산한다.
+      상세는 `docs/small-business-green-supply-develop-plan.md` §2.2 참고.
+      신규 가입자(2년치 없음) 1년치 평균 대체 예외도 함께 반영돼 있다
 - [x] 탄소중립포인트제 신청서(사업자용) 필드 ↔ 감탄 보유 데이터 매핑표 작성 (§6.3, §14-1) —
       2026-08-22 완료, §6.3 표 참고
 - [x] 소상공인 mock 기업 업종·개수 확정 (§14-3) — 2026-08-22 카페(동성로카페)·분식점

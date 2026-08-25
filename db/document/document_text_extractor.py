@@ -38,6 +38,7 @@ OcrRow = list[OcrCell]
 
 DOCUMENT_TYPE_LABEL = {
     "tax_invoice": "세금계산서",
+    "water_bill": "상수도요금고지서",
     "electric_bill": "전기요금고지서",
     "gas_bill": "도시가스고지서",
 }
@@ -54,6 +55,14 @@ _TITLE_TO_DOCUMENT_TYPE = {
     # 문구는 실물에 없었다. "전기요금 청구"까지만 매칭해 두 실제 서식을 모두 커버.
     "전기요금 청구": "electric_bill",
     "도시가스 요금고지서": "gas_bill",
+    # 상수도 — 제목만 인식하고 파싱은 아직 없다(§2.5 범위 밖). 인식은 해두는 게 맞다:
+    # 어휘에 없으면 수도고지서가 electric_bill로 오분류될 여지가 생기고, 그러면 수도
+    # 사용량이 kWh 자리에 섞여 감축률을 오염시킨다. 인식만 해두면 _parse_by_type이
+    # "아직 지원 안 함"으로 명확히 실패한다(실패 가시성 — CLAUDE.md §6).
+    # 실물 제목은 "상하수도 요금 고지서"이고 공백 제거 부분일치라 "상수도요금"까지 같이
+    # 덮으려면 두 항목이 필요하다("상하수도"에는 "상수도"가 부분문자열로 없다).
+    "상하수도요금": "water_bill",
+    "상수도요금": "water_bill",
 }
 
 # 문서 앞부분 몇 줄까지를 "제목"으로 볼지 — 실제 문서는 로고·페이지번호 등이 제목보다
@@ -351,6 +360,13 @@ def _parse_by_type(document_type: DocumentType, text: str) -> dict:
         return _parse_gas_bill(text)
     if document_type == "tax_invoice":
         return _parse_tax_invoice(text)
+    if document_type == "water_bill":
+        # 어휘·테이블(water_bills, 0031)은 있지만 파서가 아직 없다. 내부 문구
+        # ("알 수 없는 문서종류")로 떨어지면 사장님에게 버그처럼 보이므로 상태를
+        # 그대로 알린다 — 없는 기능을 되는 척하지 않는다(data-plan §3.3).
+        raise DocumentParseError(
+            "상수도요금고지서는 아직 읽지 못해요 — 전기요금고지서만 올려 주세요"
+        )
     raise DocumentParseError(f"알 수 없는 문서종류: {document_type}")
 
 
