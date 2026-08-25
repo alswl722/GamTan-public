@@ -1,42 +1,12 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { ArrowRight, Check, FileText, Leaf } from "lucide-react";
+import { ArrowRight, Check, FileText } from "lucide-react";
 import { getCarbonPointEligibility, type CarbonPointEligibility } from "@/lib/api";
-import {
-  CARBON_POINT_GAUGE_MAX_PCT,
-  CARBON_POINT_THRESHOLD_PCT,
-  KRW_PER_POINT,
-  estimateRefund,
-} from "@/lib/carbon-point";
-
-/** 감축률 게이지 — 기준선(5%)을 눈금으로 찍어 "넘었는지"를 색이 아니라 위치로 보여준다.
- * 상한(10%)을 넘는 값은 막대가 꽉 찬 상태로 고정된다. */
-function ReductionGauge({ pct }: { pct: number }) {
-  const fillRatio = Math.min(1, pct / CARBON_POINT_GAUGE_MAX_PCT);
-  const thresholdRatio = CARBON_POINT_THRESHOLD_PCT / CARBON_POINT_GAUGE_MAX_PCT;
-  return (
-    <div>
-      <div className="relative h-[7px] w-full overflow-hidden rounded-full bg-line">
-        <div
-          className="h-full rounded-full bg-gradient-to-r from-brand-ink to-lime"
-          style={{ width: `${fillRatio * 100}%` }}
-        />
-        <span
-          className="absolute top-0 h-full w-0.5 bg-white"
-          style={{ left: `${thresholdRatio * 100}%` }}
-        />
-      </div>
-      <div
-        className="mt-1 -translate-x-1/2 text-[8px] font-semibold text-faint"
-        style={{ marginLeft: `${thresholdRatio * 100}%` }}
-      >
-        기준 {CARBON_POINT_THRESHOLD_PCT}%
-      </div>
-    </div>
-  );
-}
+import { CARBON_POINT_THRESHOLD_PCT, KRW_PER_POINT, estimateRefund } from "@/lib/carbon-point";
+import { ReductionGauge } from "@/components/carbon-point/ReductionGauge";
 
 /** 소상공인 탄소중립포인트 자격 안내 카드 — "맞춤 혜택" 페이지(/owner/benefits)의
  * 소상공인 전용 섹션. docs/small-business-green-supply-develop-plan.md §3.3 정본.
@@ -78,8 +48,17 @@ export function CarbonPointCard({ companyId }: { companyId: number | null }) {
     <div className="mt-3 space-y-3">
       <div className="rounded-3xl bg-surface p-5 shadow-card">
         <div className="flex items-center gap-2.5">
-          <span className="grid size-[42px] shrink-0 place-items-center rounded-full bg-brand">
-            <Leaf size={20} strokeWidth={2.1} className="text-white" />
+          {/* 한국환경공단 정식 로고 — 원형 안에 비율 유지로 작게 배치(object-contain)해서
+              로고 하단 "한국환경공단" 글자가 잘리지 않게 한다. 배경은 흰색+옅은 테두리로
+              카드(bg-surface)와 자연스럽게 분리한다(Figma ⑩ 시안과 동일, 2026-08-25). */}
+          <span className="relative grid size-[42px] shrink-0 place-items-center overflow-hidden rounded-full border border-line bg-white p-1.5">
+            <Image
+              src="/환경공단_로고.png"
+              alt="한국환경공단"
+              width={400}
+              height={300}
+              className="h-auto w-full object-contain"
+            />
           </span>
           <div className="min-w-0 flex-1">
             <div className="text-[15px] font-bold leading-snug text-ink">탄소중립포인트</div>
@@ -144,7 +123,7 @@ export function CarbonPointCard({ companyId }: { companyId: number | null }) {
 
         {missing_data.length > 0 && (
           <div className="mt-4">
-            <div className="text-[11.5px] font-semibold text-muted">아직 없는 자료</div>
+            <div className="text-[11.5px] font-semibold text-muted">추가 업로드 해야해요</div>
             <div className="mt-1.5 flex flex-wrap gap-1.5">
               {missing_data.map((item) => (
                 <span
@@ -164,7 +143,7 @@ export function CarbonPointCard({ companyId }: { companyId: number | null }) {
         {eligible ? (
           <Link
             href="/owner/carbon-point"
-            className="btn-cta mt-4 flex w-full items-center justify-center gap-1.5 rounded-2xl bg-gradient-to-r from-brand-ink to-brand py-3.5 text-[14px] font-bold text-white"
+            className="btn-cta mt-4 flex w-full items-center justify-center gap-1.5 rounded-2xl bg-brand py-3.5 text-[14px] font-bold text-white"
           >
             신청서 초안 작성하러 가기
             <ArrowRight size={14} strokeWidth={2.4} />

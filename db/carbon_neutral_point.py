@@ -497,7 +497,7 @@ def notify_if_eligible(
 # (2026-08-25 — build_application_draft 주석 참고). 서식에 없는 항목이라 `fields`에 넣지
 # 않기로 했고, 그 세 항목 말고 계산값을 출처로 갖는 신청서 칸이 없다.
 SRC_MYDATA_BIZ = "마이데이터 · 사업자등록증명"
-SRC_BILL = "전기요금고지서 파싱값"
+SRC_BILL = "전기요금고지서"
 SRC_UNCONFIRMED = "출처 확인 중(data-plan §6.3)"
 SRC_OWNER_INPUT = "사장님 직접 입력"
 SRC_PORTAL = "탄소중립포인트 포털에서 직접 발급"
