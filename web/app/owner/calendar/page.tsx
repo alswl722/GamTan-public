@@ -10,12 +10,12 @@ import {
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-// 탄소 캘린더 — Figma "⑨ 탄소 캘린더" 시안. 월 그리드에 그 달 구매·탄소 배출
-// 내역을 날짜별 점으로 표시하고, 날짜를 탭하면 아래에 그날 전표가 상세히
-// 펼쳐진다. 조회 전용 — 여기서 데이터를 수정하지 않는다(확정/반려는 여전히
-// 담당자 HITL 몫). 에이전트 활동 로그(트레이스)는 여기 안 보여준다 — 사장님이
-// 보고 싶은 건 "이날 뭘 샀고 탄소가 얼마나 나왔는지"이지 AI 판단 과정이
-// 아니다(2026-08-19 사용자 피드백).
+// 탄소 캘린더 — Figma "⑨ 탄소 캘린더" 시안. 월 그리드에 그 달 구매·탄소 배출·
+// 업로드·탄소리포트 생성·탄소중립포인트 신청 내역을 날짜별 점으로 표시하고,
+// 날짜를 탭하면 아래에 그날 항목이 상세히 펼쳐진다. 조회 전용 — 여기서 데이터를
+// 수정하지 않는다(확정/반려는 여전히 담당자 HITL 몫). 에이전트 활동 로그
+// (트레이스)는 여기 안 보여준다 — 사장님이 보고 싶은 건 "이날 뭘 샀고 탄소가
+// 얼마나 나왔는지"이지 AI 판단 과정이 아니다(2026-08-19 사용자 피드백).
 
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
 
@@ -33,9 +33,19 @@ function buildWeeks(year: number, month: number): (number | null)[][] {
 }
 
 function eventDotColor(e: CalendarEvent): string {
+  if (e.entry_type === "upload") return "bg-amber-500";
+  if (e.entry_type === "report") return "bg-violet-500";
+  if (e.entry_type === "carbon_point_application") return "bg-emerald-500";
   if (e.scope === 1) return "bg-scope1";
   if (e.scope === 2) return "bg-scope2";
   return "bg-muted";
+}
+
+function entryTypeBadgeLabel(e: CalendarEvent): string {
+  if (e.entry_type === "upload") return "업로드";
+  if (e.entry_type === "report") return "탄소리포트";
+  if (e.entry_type === "carbon_point_application") return "탄소중립포인트 신청";
+  return e.source === "kepco" ? "전기고지서" : "세금계산서";
 }
 
 export default function CarbonCalendarPage() {
@@ -206,11 +216,11 @@ export default function CarbonCalendarPage() {
                         >
                           {day}
                         </span>
-                        <span className="flex h-1.5 items-center gap-0.5">
-                          {events.slice(0, 3).map((e, ei) => (
+                        <span className="flex h-2 items-center gap-1">
+                          {events.slice(0, 4).map((e, ei) => (
                             <span
                               key={ei}
-                              className={cn("h-1 w-1 rounded-full", eventDotColor(e))}
+                              className={cn("h-2 w-2 rounded-full ring-1 ring-white", eventDotColor(e))}
                             />
                           ))}
                         </span>
@@ -221,14 +231,26 @@ export default function CarbonCalendarPage() {
               ))}
             </div>
 
-            <div className="mt-3 flex items-center gap-3.5 px-1">
+            <div className="mt-3 flex flex-wrap items-center gap-x-3.5 gap-y-1.5 px-1">
               <span className="flex items-center gap-1 text-[10px] font-medium text-muted">
-                <span className="h-1.5 w-1.5 rounded-full bg-scope1" />
+                <span className="h-2 w-2 rounded-full bg-scope1" />
                 경유·유류(Scope1)
               </span>
               <span className="flex items-center gap-1 text-[10px] font-medium text-muted">
-                <span className="h-1.5 w-1.5 rounded-full bg-scope2" />
+                <span className="h-2 w-2 rounded-full bg-scope2" />
                 전기(Scope2)
+              </span>
+              <span className="flex items-center gap-1 text-[10px] font-medium text-muted">
+                <span className="h-2 w-2 rounded-full bg-amber-500" />
+                업로드
+              </span>
+              <span className="flex items-center gap-1 text-[10px] font-medium text-muted">
+                <span className="h-2 w-2 rounded-full bg-violet-500" />
+                탄소리포트
+              </span>
+              <span className="flex items-center gap-1 text-[10px] font-medium text-muted">
+                <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                탄소중립포인트 신청
               </span>
             </div>
           </div>
@@ -259,7 +281,8 @@ export default function CarbonCalendarPage() {
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between gap-2">
                         <span className="inline-block rounded bg-bg px-1.5 py-0.5 text-[9px] font-bold text-muted">
-                          {e.source === "kepco" ? "전기고지서" : "세금계산서"}
+                          {entryTypeBadgeLabel(e)}
+                          {e.count > 1 && ` · ${e.count}건`}
                         </span>
                         {e.emission_tco2e != null && (
                           <span className="text-[11px] font-bold text-brand-ink">

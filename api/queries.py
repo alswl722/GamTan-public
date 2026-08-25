@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 
 from db.document.document_requirements import required_documents
 from db.models import (
+    BorrowerEmissionInventory,
+    CarbonNeutralPointApplication,
     Classification,
     Company,
     InstitutionBorrower,
@@ -527,11 +529,27 @@ def _owner_visible_classification_filter():
 
 
 def get_calendar_events(session: Session, company_id: int, year: int, month: int) -> list[dict]:
-    """탄소 캘린더용 — 그 달의 날짜별 구매·탄소 배출 내역(전표 기준).
+    """탄소 캘린더용 — 그 달의 날짜별 구매·탄소 배출·업로드·리포트·신청 내역.
 
-    전표는 issue_date가 있고(nullable — 없으면 정확한 날짜에 못 꽂으므로 제외,
-    실패 가시성 원칙) 사장님에게 노출 가능한 분류(_owner_visible_classification_filter)가
-    붙은 건만 반환한다.
+    entry_type별로 날짜 산정 기준이 다르다:
+      - "voucher": issue_date(전표가 다루는 거래/사용월) 기준. nullable — 없으면
+        정확한 날짜에 못 꽂으므로 제외(실패 가시성 원칙). 사장님에게 노출 가능한
+        분류(_owner_visible_classification_filter)가 붙은 건만 반환. 건별로 그대로
+        나열(voucher_id가 개별 전표를 가리켜야 상세 조회가 되므로 묶지 않음).
+      - "upload": 전표가 실제로 수집·업로드된 시각(Voucher.created_at) 기준,
+        같은 날짜는 건수(count)로 묶어 날짜당 1개 이벤트로 반환한다(하루에
+        여러 건을 올려도 캘린더 점이 늘어나지 않게). issue_date와 다른 날짜에
+        찍힐 수 있다(예: 7월분 고지서를 8월에 업로드). HITL 대기 중인 건도
+        "업로드는 됐다"는 사실이라 분류 상태와 무관하게 포함.
+      - "report": 탄소리포트(PCAF 품질평가) 생성 시점(BorrowerEmissionInventory.created_at).
+        조회할 때마다 Scope별로 새 버전이 저장되는 구조라(db/pcaf_engine/pcaf_quality.py::
+        save_quality_assessment_version) 같은 날 여러 Scope가 갱신될 수 있는데,
+        캘린더에서는 날짜당 1개로 완전히 통합한다(건수는 count, 배출량은 그날
+        마지막으로 저장된 버전 값을 대표로 노출).
+      - "carbon_point_application": 탄소중립포인트 신청서 초안이 생성된 시점
+        (CarbonNeutralPointApplication.created_at). 실제 포털 제출일이 아니라
+        초안 생성일 — 제출일을 담는 컬럼은 아직 없다(CLAUDE.md §5 원칙10, status는
+        draft 이후 사장님이 수동 갱신하는 필드일 뿐 감탄이 추적하지 않음).
 
     에이전트 트레이스(결손 감지·이상치 검증 등 내부 판단 로그)는 여기 포함하지
     않는다 — 사장님이 캘린더에서 보고 싶은 건 "이날 뭘 샀고 탄소가 얼마나
@@ -566,6 +584,88 @@ def get_calendar_events(session: Session, company_id: int, year: int, month: int
             # api/queries.py::get_monthly_briefing_stats와 동일)
             "emission_tco2e": round(c.emission_co2e / 1000, 3) if c.emission_co2e is not None else None,
             "source": v.source,
+            "count": 1,
+        })
+
+    upload_rows = session.execute(
+        select(Voucher)
+        .where(Voucher.company_id == company_id)
+        .where(Voucher.created_at.isnot(None))
+        .where(func.extract("year", Voucher.created_at) == year)
+        .where(func.extract("month", Voucher.created_at) == month)
+        .order_by(Voucher.created_at)
+    ).scalars().all()
+
+    uploads_by_day: dict[str, list[Voucher]] = {}
+    for v in upload_rows:
+        uploads_by_day.setdefault(v.created_at.date().isoformat(), []).append(v)
+
+    for day, vouchers in uploads_by_day.items():
+        events.append({
+            "date": day,
+            "entry_type": "upload",
+            "voucher_id": None,
+            "scope": None,
+            "fuel_type": None,
+            "item_description": f"전표 {len(vouchers)}건 업로드",
+            "supply_amount_krw": None,
+            "emission_tco2e": None,
+            "source": "upload",
+            "count": len(vouchers),
+        })
+
+    report_rows = session.execute(
+        select(BorrowerEmissionInventory)
+        .where(BorrowerEmissionInventory.company_id == company_id)
+        .where(func.extract("year", BorrowerEmissionInventory.created_at) == year)
+        .where(func.extract("month", BorrowerEmissionInventory.created_at) == month)
+        .order_by(BorrowerEmissionInventory.created_at)
+    ).scalars().all()
+
+    reports_by_day: dict[str, list[BorrowerEmissionInventory]] = {}
+    for inv in report_rows:
+        reports_by_day.setdefault(inv.created_at.date().isoformat(), []).append(inv)
+
+    for day, invs in reports_by_day.items():
+        latest = invs[-1]  # order_by(created_at) 유지 순서라 마지막이 그날 최신
+        events.append({
+            "date": day,
+            "entry_type": "report",
+            "voucher_id": None,
+            "scope": None,
+            "fuel_type": None,
+            "item_description": f"{latest.reporting_year}년 탄소리포트 갱신",
+            "supply_amount_krw": None,
+            "emission_tco2e": round(latest.emission_tco2e, 3) if latest.emission_tco2e is not None else None,
+            "source": "report",
+            "count": len(invs),
+        })
+
+    application_rows = session.execute(
+        select(CarbonNeutralPointApplication)
+        .where(CarbonNeutralPointApplication.company_id == company_id)
+        .where(func.extract("year", CarbonNeutralPointApplication.created_at) == year)
+        .where(func.extract("month", CarbonNeutralPointApplication.created_at) == month)
+        .order_by(CarbonNeutralPointApplication.created_at)
+    ).scalars().all()
+
+    applications_by_day: dict[str, list[CarbonNeutralPointApplication]] = {}
+    for app in application_rows:
+        applications_by_day.setdefault(app.created_at.date().isoformat(), []).append(app)
+
+    for day, apps in applications_by_day.items():
+        latest = apps[-1]
+        events.append({
+            "date": day,
+            "entry_type": "carbon_point_application",
+            "voucher_id": None,
+            "scope": None,
+            "fuel_type": None,
+            "item_description": f"탄소중립포인트 신청서 초안 ({latest.target_year}년)",
+            "supply_amount_krw": None,
+            "emission_tco2e": None,
+            "source": "carbon_point",
+            "count": len(apps),
         })
 
     events.sort(key=lambda e: e["date"])
