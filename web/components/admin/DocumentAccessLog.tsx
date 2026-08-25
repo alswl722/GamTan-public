@@ -13,6 +13,7 @@ import { PaginationBar } from "@/components/admin/PaginationBar";
 
 const DOCUMENT_TYPE_LABEL: Record<string, string> = {
   tax_invoice: "세금계산서",
+  water_bill: "상수도고지서",
   electric_bill: "전기고지서",
   gas_bill: "도시가스고지서",
 };

@@ -534,6 +534,9 @@ export function SceneUpload({
     );
   }
 
+  // water_bill은 **의도적으로 빠져 있다** — 이 화면은 배출량 산정용 문서 3종 위저드이고,
+  // 수도는 탄소중립포인트 전용이라 파서가 생긴 뒤에도 여기에 들어올지는 별개 결정이다.
+  // 백엔드 게이트는 db/document/document_coverage.py::_DOCUMENT_TYPES 주석 참고.
   const canProceed = (["tax_invoice", "electric_bill", "gas_bill"] as DocType[]).every((d) => {
     const status = required[d];
     if (status === "not_applicable" || status === "optional") return true;

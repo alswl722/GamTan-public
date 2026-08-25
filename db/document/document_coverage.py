@@ -20,6 +20,13 @@ from db.models import (
     Voucher,
 )
 
+# water_bill은 **의도적으로 빠져 있다**(빠뜨린 게 아니다). 이 튜플이 업로드 그리드의
+# 열 목록이라, 넣으면 사장님 화면에 수도 칸이 생기는데 파서가 없어서 올리면 100% 실패한다
+# (db/document/document_text_extractor.py::_parse_by_type의 water_bill 분기).
+# 파서(db/water_bill_extraction.py)가 생기는 시점에 여기 + api/routers/owner.py의
+# _VALID_DOCUMENT_TYPES + web/components/SceneUpload.tsx를 함께 열면 된다.
+# 참고: statuses.get(dt, "optional") 기본값이 있어 required_documents()에 키가 없어도
+# 그리드는 깨지지 않고, upload_streak은 required 집합만 쓰므로 영향받지 않는다.
 _DOCUMENT_TYPES: tuple[DocumentType, ...] = ("tax_invoice", "electric_bill", "gas_bill")
 
 

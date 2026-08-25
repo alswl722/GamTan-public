@@ -332,6 +332,11 @@ export function answerAnomalyCheck(
 // GET /owner/{company_id}/documents/grid — db/document_coverage.py::document_upload_grid.
 // "데이터 업로드" 탭의 문서종류 × 월 그리드. status는 db/document_requirements.py
 // ::required_documents가 사장님이 체크한 연료 기준으로 정한 필수/선택/해당없음이다.
+// water_bill은 **의도적으로 빠져 있다.** 이 유니온은 단순 어휘 목록이 아니라
+// `Record<DocumentType, ...>`의 키로 전수 사용된다(app/owner/uploads/page.tsx의 라벨 맵,
+// SceneUpload.tsx의 entries) — 추가하면 그 Record들이 전부 water_bill 항목을 요구해서
+// 컴파일이 깨지고, 채우면 파서도 없는 수도 칸이 화면에 생긴다(실제로 tsc가 이걸 잡았다).
+// 즉 백엔드 _DOCUMENT_TYPES와 함께 열어야 하는 자리다.
 export type DocumentType = "tax_invoice" | "electric_bill" | "gas_bill";
 export type DocumentStatus = "required" | "optional" | "not_applicable";
 export interface DocumentGridRow {

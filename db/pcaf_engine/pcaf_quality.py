@@ -82,6 +82,9 @@ _UPGRADE_SCOPES = ("scope_1", "scope_2")
 
 # 결손월 안내를 web/app/owner/uploads 그리드(문서종류 × 월)의 실제 칸으로 딥링크
 # 시키기 위한 매핑 — db/document_requirements.py의 DocumentType과 동일 어휘.
+# water_bill은 여기 **해당 없음** — 이 매핑은 "배출 연료 → 그 연료를 증빙하는 문서"이고,
+# 수도는 이 프로젝트의 배출 계산 연료가 아니다(탄소중립포인트 감축률 전용). 넣으면 결손월
+# 안내가 배출량과 무관한 칸을 가리킨다.
 _FUEL_TO_DOCUMENT_TYPE = {"전기": "electric_bill", "가스": "gas_bill", "경유/유류": "tax_invoice"}
 
 

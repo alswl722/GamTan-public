@@ -28,6 +28,10 @@ from db.quality_issues import record_ingestion_failure
 REPO_ROOT = os.path.dirname(os.path.dirname(__file__))
 UPLOADS_DIR = os.path.join(REPO_ROOT, "data", "uploads")
 
+# water_bill은 여기 **넣지 않는다** — 어휘 누락이 아니라 설계다. 수도 사용량은 vouchers가
+# 아니라 별도 water_bills 테이블(0031)로 간다(data-plan §7.2). 수도는 이 프로젝트의 PCAF
+# 배출 계산 대상 연료가 아니고 탄소중립포인트 감축률 전용 데이터라서, 전표로 만들면
+# 배출량 파이프라인에 수도가 섞인다.
 DOCUMENT_TYPE_TO_VOUCHER_SOURCE = {
     "tax_invoice": "tax_invoice",
     "electric_bill": "electric_bill",

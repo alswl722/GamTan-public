@@ -116,6 +116,9 @@ from db.pcaf_engine.company_goals import (
 
 router = APIRouter(prefix="/owner", tags=["owner"])
 
+# water_bill은 **의도적으로 빠져 있다** — 업로드 요청 검증이라 넣는 순간 수도고지서
+# 업로드가 접수되고, 파서가 없어 job이 실패로 끝난다. 지금처럼 막아두면 검증 단계에서
+# 명확히 거절된다. 여는 시점은 db/document/document_coverage.py::_DOCUMENT_TYPES 주석 참고.
 _VALID_DOCUMENT_TYPES = ("tax_invoice", "electric_bill", "gas_bill")
 
 
