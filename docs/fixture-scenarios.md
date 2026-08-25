@@ -49,14 +49,15 @@ docstring에 명시)은 깨지 않았다 — MAIN은 여전히 자체 이상치(
 | 구미정밀(C001) | 세금계산서(경유) + 전기고지서 | 세금계산서는 완비, **전기고지서 2월만 결손** | 결손 감지 → 보완요청, 나머지는 정상 처리 |
 | 대경부품(C002) | 세금계산서(경유·휘발유) + 전기고지서 | 연료 데이터는 완비(Scope1 강함), **전기고지서 4개월(2·5·8·11월) 사용량 미확인 → 추정 청구** | Scope1은 자동계산, Scope2는 해당 월 HITL(추정치로 계산 불가) |
 | 성서테크(C003) | 전기요금고지서 | 12월 전기 사용량 급증(4,900→11,800kWh, 약 2.4배) — **청구서 어디에도 원인 설명 없음** | 순수 숫자 패턴만으로 이상치 탐지 → HITL 필수 |
-| 칠곡소재(C004) | 세금계산서(경유) + 전기고지서 | 9명 소규모, **완전히 정상적인 소액·저빈도 데이터** | 5~9인 벤치마크 밴드의 유일한 실표본 — 업종/규모 분포 비교의 기준점 |
-| 포항이엔지(C005) | 세금계산서(경유) + 전기고지서 | **7~8월 서류가 통째로 없음**(세금계산서·전기고지서 둘 다) | 두 달 연속 완전 공백 → 결측 감지 + 강한 보완요청 |
+| 칠곡소재(C004) | 세금계산서(경유) + 전기고지서 | 2024~2026 32개월, **전년 대비 연 약 8% 감축**(2026-08-25 재설계) | 목표 설정(company_goals) 시 "달성" 배지 데모 — 이전의 "정상 벤치마크" 역할은 백업본으로 이관 |
+| 포항이엔지(C005) | 세금계산서(경유) + 전기고지서 | 2024~2026 32개월, **전년 대비 연 약 4% 감축**(2026-08-25 재설계) | 목표 설정 시 "진행 중(미달성)" 카드 데모 — 이전의 "7~8월 공백" 역할은 백업본으로 이관 |
 | 대구정공(C006) | 세금계산서(경유) + 무관 파일 | 5월·9월에 진짜 연료 서류 대신 **카페 영수증이 업로드됨** | 문서분류가 "관계없는 파일"로 판정 → 자동 반려, 리포트 계산에서 제외 |
 
-핵심 축 3가지로 커버리지를 나눴다:
+핵심 축 4가지로 커버리지를 나눴다:
 1. **설명 가능 vs 설명 불가능한 이상치** — MAIN(비고란 있음) vs 성서테크(비고란 없음)
-2. **부분 결손의 정도** — 구미정밀(1개월), 대경부품(수치는 있으나 신뢰 불가 4개월), 포항이엔지(2개월 전체)
-3. **정상/대조군과 완전 오염** — 칠곡소재(깨끗한 벤치마크 데이터) vs 대구정공(엉뚱한 파일 오염)
+2. **부분 결손의 정도** — 구미정밀(1개월), 대경부품(수치는 있으나 신뢰 불가 4개월)
+3. **완전 오염** — 대구정공(엉뚱한 파일 오염)
+4. **전년 대비 감축 진행률** — 칠곡소재(달성 케이스) vs 포항이엔지(진행 중 케이스), `company_goals` 목표 카드 전용(§ 아래 "전년 대비 감축" 참고)
 
 ---
 
@@ -84,17 +85,30 @@ docstring에 명시)은 깨지 않았다 — MAIN은 여전히 자체 이상치(
 - 12월 발행일 2026-01-05로 YTD 구간까지 자연스럽게 걸침
 - 위치: `data/fixtures/electricity_bills/C003/` (12건 + `_manifest.csv`)
 
-### 칠곡소재(C004) — 세금계산서(경유) 12개월 + 전기고지서 12개월, 전부 정상
-- 9명 소기업 규모에 맞춰 월 1건(일부 달만 2건), 35~68L 소량, 공급자 1곳(칠곡주유소)만 사용
-- 전기고지서도 12개월 전부 존재, 1,850~2,120kWh 소규모 사용량
-- 5~9인 규모 밴드에서 유일하게 "1년치 계산 가능한 정상 데이터"를 가진 기업 — 업종 벤치마크
-  분포 비교의 기준점 역할(개정 지시서 §2-3 요구사항)
-- 위치: `data/fixtures/tax_invoices/C004/`(14건), `data/fixtures/electricity_bills/C004/`(12건)
+### 칠곡소재(C004) — 세금계산서(경유) 32개월 + 전기고지서 32개월, 전년 대비 강한 감축(2026-08-25 재설계)
+- **2026-08-25: 목표 설정(company_goals) 진행률이 0%로만 나오는 문제(팀 보고) 대응으로
+  전면 재설계됨.** 기존 "5~9인 벤치마크용 정상(증가 추세) 데이터"는
+  `data/fixtures_backup_2026-08-25/`에 백업 후 교체 — 재사용하려면 거기서 복원.
+- 기간 2024-01~2026-08(32개월, S001·S002와 같은 관례). 전기 사용량 연 약 8%,
+  경유 사용량 연 약 8% 감축(2024→2025→2026 YTD 일관 하락) — 목표 설정 시 "달성" 배지까지
+  보여줄 수 있는 강한 감축 케이스
+- 공급자 1곳(칠곡주유소), 월 1건 고정. 생성기: `scripts/generate_manufacturing_reduction_2yr.ps1`
+- 검증용 골든셋 `data/fixtures/electricity_bills/C004/_reduction_expected.csv`(S001·S002와
+  동일 포맷 — year_month별 전년동월 대비 감축률)
+- 위치: `data/fixtures/tax_invoices/C004/`(32건), `data/fixtures/electricity_bills/C004/`(32건)
+- **DB 적재 남음** — `scripts/ingest_manufacturing_fixtures.py --company C004`(Python/DATABASE_URL
+  필요, 이 배치를 만든 세션엔 둘 다 없어 실행까지는 못함)
 
-### 포항이엔지(C005) — 세금계산서(경유) 10개월 + 전기고지서 10개월, 7~8월 전체 공백
-- 1~6월, 9~12월만 존재 — 7월·8월은 세금계산서·전기고지서 **둘 다 파일이 없음**
-- 나머지 달은 월 2건, 75~90L 안정적인 정상 흐름 (포항해맞이주유소·영일대에너지)
-- 위치: `data/fixtures/tax_invoices/C005/`(20건), `data/fixtures/electricity_bills/C005/`(10건)
+### 포항이엔지(C005) — 세금계산서(경유) 32개월 + 전기고지서 32개월, 전년 대비 완만한 감축(2026-08-25 재설계)
+- C004와 같은 배경으로 재설계됨(위 참고) — 기존 "7~8월 전체 공백" 시나리오는
+  `data/fixtures_backup_2026-08-25/`에 백업.
+- 기간 2024-01~2026-08(32개월). 전기·경유 사용량 연 약 4% 감축 — C004보다 느린 속도라
+  목표 설정 시 "진행 중(미달성)" 카드를 보여주는 대조군 역할(같은 감축 시나리오 안에서
+  진행률 배지 두 상태를 다 시연 가능)
+- 공급자 1곳(포항해맞이주유소), 월 1건 고정(기존 2건/월에서 단순화). 생성기: 위와 동일
+- 검증용 골든셋: `data/fixtures/electricity_bills/C005/_reduction_expected.csv`
+- 위치: `data/fixtures/tax_invoices/C005/`(32건), `data/fixtures/electricity_bills/C005/`(32건)
+- **DB 적재 남음** — `scripts/ingest_manufacturing_fixtures.py --company C005`
 
 ### 대구정공(C006) — 세금계산서(경유) 10개월 + 무관 파일 2건(5월·9월)
 - 1~4,6~8,10~12월은 정상 세금계산서 월 2건(북구주유소·북대구에너지)
@@ -172,14 +186,14 @@ OCR로 구조 확인 후 대구시로 각색 — **대구시 자체 원본 검�
 data/fixtures/tax_invoices/MAIN/*.{pdf,jpg,png} + _manifest.csv        — 34건
 data/fixtures/tax_invoices/C001/*.{pdf,jpg,png} + _manifest.csv        — 24건
 data/fixtures/tax_invoices/C002/*.{pdf,jpg,png} + _manifest.csv        — 24건
-data/fixtures/tax_invoices/C004/*.{pdf,jpg,png} + _manifest.csv        — 14건
-data/fixtures/tax_invoices/C005/*.{pdf,jpg,png} + _manifest.csv        — 20건
+data/fixtures/tax_invoices/C004/*.{pdf,jpg,png} + _manifest.csv        — 32건(2026-08-25 재설계)
+data/fixtures/tax_invoices/C005/*.{pdf,jpg,png} + _manifest.csv        — 32건(2026-08-25 재설계)
 data/fixtures/tax_invoices/C006/*.{pdf,jpg,png} + _manifest.csv        — 22건(카페영수증 2건 포함)
 data/fixtures/electricity_bills/C001/*.{pdf,jpg,png} + _manifest.csv   — 11건
 data/fixtures/electricity_bills/C002/*.{pdf,jpg,png} + _manifest.csv   — 12건
 data/fixtures/electricity_bills/C003/*.{pdf,jpg,png} + _manifest.csv   — 12건
-data/fixtures/electricity_bills/C004/*.{pdf,jpg,png} + _manifest.csv   — 12건
-data/fixtures/electricity_bills/C005/*.{pdf,jpg,png} + _manifest.csv   — 10건
+data/fixtures/electricity_bills/C004/*.{pdf,jpg,png} + _manifest.csv + _reduction_expected.csv — 32건(2026-08-25 재설계)
+data/fixtures/electricity_bills/C005/*.{pdf,jpg,png} + _manifest.csv + _reduction_expected.csv — 32건(2026-08-25 재설계)
 data/fixtures/electricity_bills/S001/*.{pdf,jpg,png} + _manifest.csv + _reduction_expected.csv — 32건
 data/fixtures/electricity_bills/S002/*.{pdf,jpg,png} + _manifest.csv + _reduction_expected.csv — 32건
 data/fixtures/water_bills/S001/*.{pdf,jpg,png} + _manifest.csv         — 32건(정식 고지서)
@@ -193,9 +207,17 @@ scripts/generate_small_business_fixtures.ps1     — S001·S002 소상공인 전
                                                      골든셋 생성기(위 스크립트의 템플릿 재사용)
 scripts/generate_water_bill_fixtures.ps1         — S001·S002 수도요금고지서(정식 서식 +
                                                      알림톡 캡처) 생성기
+scripts/generate_manufacturing_reduction_2yr.ps1 — C004·C005 "전년 대비 감축" 재설계 생성기
+                                                     (전기+경유, 2024-01~2026-08, 감축률
+                                                     골든셋 포함, 2026-08-25 신규)
+scripts/ingest_manufacturing_fixtures.py         — 위 C004·C005 fixture를 실제 업로드
+                                                     파이프라인으로 DB에 반영(Python/
+                                                     DATABASE_URL 필요, 아직 미실행)
 ```
 
-총 323건(MAIN 34 + C001 35 + C002 36 + C003 12 + C004 26 + C005 30 + C006 22 + S001 64 + S002 64).
+총 395건(MAIN 34 + C001 35 + C002 36 + C003 12 + C004 64 + C005 64 + C006 22 + S001 64 + S002 64).
+C004·C005는 2026-08-25 재설계 이전 값(각 26·30건)이 `data/fixtures_backup_2026-08-25/`에
+남아있다 — 위 총계에는 재설계 후(현재) 값만 반영.
 
 재생성: PowerShell에서 각 스크립트 실행(Chrome headless 필요, 경로는 스크립트 상단 `$Chrome`
 변수 참고). 매 실행마다 파일을 덮어쓰므로 파일명·수치는 항상 동일하게 재현된다.
