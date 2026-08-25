@@ -138,7 +138,8 @@ def test_create_application_returns_draft_contract(client, db):
     session.commit()
 
     body = client.post(f"/owner/{cafe.id}/carbon-point/applications?target_year=2026").json()
-    assert set(body) == {"application_id", "status", "fields", "remaining_fields", "draft_document_url"}
+    assert set(body) == {"application_id", "status", "fields", "applicant_fields",
+                         "remaining_fields", "draft_document_url"}
     assert body["status"] == "draft"
     assert body["draft_document_url"] is None
     assert body["application_id"] is not None
@@ -215,3 +216,113 @@ def test_patch_application_of_other_company_is_404(client, db):
     r = client.patch(f"/owner/{factory.id}/carbon-point/applications/{app_id}",
                      json={"status": "approved"})
     assert r.status_code == 404
+
+
+# ── PATCH applications/{id}/applicant-input (4단계 위저드 3단계) ────────────
+#
+# 검증축: 부분 저장이 되고, 알 수 없는 필드명·닫힌 어휘 위반은 500이 아니라 422로 드러나고,
+# 테넌트 경계와 제출 이력 보호가 지켜진다.
+
+
+def _draft_id(client, company_id: int) -> int:
+    return client.post(
+        f"/owner/{company_id}/carbon-point/applications?target_year=2026"
+    ).json()["application_id"]
+
+
+def test_patch_applicant_input_saves_and_reports_missing(client, db):
+    session, inst, cafe, _ = db
+    _history(session, inst, cafe)
+    app_id = _draft_id(client, cafe.id)
+
+    r = client.patch(
+        f"/owner/{cafe.id}/carbon-point/applications/{app_id}/applicant-input",
+        json={"values": {"applicant_phone": "01011112222", "incentive_type": "cash"}},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["application_id"] == app_id
+    assert body["values"]["applicant_phone"] == "01011112222"
+    # 필수 미입력은 에러가 아니라 목록 — 화면이 "다음" 버튼을 막는 근거다.
+    assert "portal_id" in body["missing_required"]
+    assert "applicant_phone" not in body["missing_required"]
+    assert session.get(CarbonNeutralPointApplication, app_id).applicant_phone == "01011112222"
+
+
+def test_patch_applicant_input_rejects_unknown_field(client, db):
+    """오타 난 필드명이 조용히 버려지면 "저장했는데 값이 안 남는" 증상으로만 드러난다."""
+    session, inst, cafe, _ = db
+    _history(session, inst, cafe)
+    app_id = _draft_id(client, cafe.id)
+
+    r = client.patch(
+        f"/owner/{cafe.id}/carbon-point/applications/{app_id}/applicant-input",
+        json={"values": {"applicant_phne": "01011112222"}},
+    )
+    assert r.status_code == 422
+
+
+def test_patch_applicant_input_rejects_unknown_incentive_type(client, db):
+    """DB CHECK 위반을 500으로 흘리지 않고 422로 돌려준다."""
+    session, inst, cafe, _ = db
+    _history(session, inst, cafe)
+    app_id = _draft_id(client, cafe.id)
+
+    r = client.patch(
+        f"/owner/{cafe.id}/carbon-point/applications/{app_id}/applicant-input",
+        json={"values": {"incentive_type": "local_currency"}},
+    )
+    assert r.status_code == 422
+
+
+def test_patch_applicant_input_rejects_bad_date(client, db):
+    session, inst, cafe, _ = db
+    _history(session, inst, cafe)
+    app_id = _draft_id(client, cafe.id)
+
+    r = client.patch(
+        f"/owner/{cafe.id}/carbon-point/applications/{app_id}/applicant-input",
+        json={"values": {"business_open_date": "2019-13-99"}},
+    )
+    assert r.status_code == 422
+
+
+def test_patch_applicant_input_of_other_company_is_404(client, db):
+    """테넌트 경계 — id만 알면 남의 신청서에 연락처를 써넣을 수 있으면 안 된다."""
+    session, inst, cafe, factory = db
+    _history(session, inst, cafe)
+    app_id = _draft_id(client, cafe.id)
+
+    r = client.patch(
+        f"/owner/{factory.id}/carbon-point/applications/{app_id}/applicant-input",
+        json={"values": {"applicant_phone": "01011112222"}},
+    )
+    assert r.status_code == 404
+
+
+def test_patch_applicant_input_on_submitted_is_409(client, db):
+    """제출한 신청서는 수정하지 않는다 — 실제로 낸 내용과 기록이 어긋난다."""
+    session, inst, cafe, _ = db
+    _history(session, inst, cafe)
+    app_id = _draft_id(client, cafe.id)
+    client.patch(f"/owner/{cafe.id}/carbon-point/applications/{app_id}",
+                 json={"status": "submitted"})
+
+    r = client.patch(
+        f"/owner/{cafe.id}/carbon-point/applications/{app_id}/applicant-input",
+        json={"values": {"applicant_phone": "01011112222"}},
+    )
+    assert r.status_code == 409
+
+
+def test_get_application_returns_applicant_input(client, db):
+    """위저드를 다시 열었을 때 어디까지 썼는지 복원할 수 있어야 한다."""
+    session, inst, cafe, _ = db
+    _history(session, inst, cafe)
+    app_id = _draft_id(client, cafe.id)
+    client.patch(f"/owner/{cafe.id}/carbon-point/applications/{app_id}/applicant-input",
+                 json={"values": {"portal_id": "cafe0001"}})
+
+    body = client.get(f"/owner/{cafe.id}/carbon-point/applications/{app_id}").json()
+    assert body["applicant_input"]["portal_id"] == "cafe0001"
+    assert "portal_id" not in body["missing_required"]

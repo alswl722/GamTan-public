@@ -8,6 +8,7 @@
 때문이다. `Company`나 신규 테이블에 `business_type` 같은 저장형 컬럼을 만들지 말 것.
 """
 from dataclasses import dataclass
+from datetime import date, datetime, timezone
 from typing import Literal
 
 from sqlalchemy import select
@@ -485,26 +486,184 @@ SRC_UNCONFIRMED = "출처 확인 중(data-plan §6.3)"
 SRC_OWNER_INPUT = "사장님 직접 입력"
 SRC_PORTAL = "탄소중립포인트 포털에서 직접 발급"
 
-# 사장님이 직접 채워야 하는 항목(data-plan §6.3 "잔여 필드"). 서식에 있지만 감탄이 가진
-# 데이터로는 채울 수 없다.
+# 서식에 있지만 감탄도 사장님도 채울 수 없어 **안내만 하는** 항목.
+#
+# 0032 이전에는 휴대전화번호·전자메일·인센티브 유형·계좌정보 등이 전부 여기 있었다. 그건
+# 화면이 "초안 미리보기"뿐이라 사장님 입력을 받을 자리가 없었기 때문이고, 4단계 위저드의
+# 3단계가 그 입력을 받게 되면서 전부 `APPLICANT_FIELDS`로 옮겨갔다.
+#
+# 비밀번호만 남는다 — 탄소중립포인트 포털 계정의 비밀번호이고 가입 처리 후 포털이 임시번호를
+# 문자로 발급하는 흐름이라, 감탄이 값을 받아 보관해야 할 단계가 아예 없다. 타 기관
+# 자격증명을 대신 들고 있지 않는다(0032 주석 참고).
 REMAINING_FIELDS = [
-    "아이디(ID)/비밀번호 — 탄소중립포인트 포털에서 직접 발급받으셔야 해요(가입 신청 시 문자로 임시번호가 옵니다)",
-    "신청인 휴대전화번호",
-    "전자메일",
-    "인센티브 유형 — 상품권·현금·현금기부·그린카드포인트·기타 중 하나를 고르셔야 해요",
-    "금융정보(은행명 · 계좌번호) — 인센티브를 '현금'으로 고르실 때만 필요해요",
-    "법인번호 — 법인사업자만 해당해요(개인사업자는 비워 두세요)",
-    "우편번호 — 사업자등록증명에는 주소만 있고 우편번호가 없어요",
-    "고지서 고객번호 — 도시가스 · 지역난방",
-    "영업개시일자",
+    "비밀번호 — 감탄이 보관하지 않아요. 가입 신청 후 문자로 오는 임시번호로 포털에 접속해 직접 바꾸셔야 해요",
 ]
 
-# 서식에 있지만 **감탄 데이터로 채우지 않고 공란으로 두는** 항목.
+# 서식에 있지만 **상업시설 신청에는 해당 없어 화면에도 초안에도 넣지 않는** 항목.
+#
 # data-plan §6.3 지적: 문서명이 "사업자 참여 신청서(상업시설/공공기관/학교)"인데 가정용
 # 항목이 그대로 남아 있다(상업시설·가구 공용 템플릿 재활용 추정). 상업시설 신청에는 사실상
-# 무의미할 가능성이 높아 억지로 채우면 틀린 값이 된다 — 잔여 필드로도 넣지 않는다
-# (사장님에게 "채우세요"라고 안내할 근거도 없다).
+# 무의미할 가능성이 높아 억지로 채우면 틀린 값이 된다.
+#
+# 0032 전에는 `fields`에 value=null로 넣어 "해당 없음"을 화면에 노출했는데, 채울 수도 없고
+# 채울 필요도 없는 칸이 초안 미리보기를 길게 만들 뿐이라 아예 빼기로 했다(2026-08-25 결정).
+# 상수는 남겨둔다 — 가구용 서식(application_type='household')을 다루게 되면 이 목록이
+# "해당 없음"에서 "필수"로 바뀌는 축이 되기 때문이다.
 BLANK_BY_POLICY = ("거주 면적(m²)", "세대원 수", "전입일자")
+
+
+# ── 사장님 직접 입력 항목 (3단계 "없는 데이터 입력하기") ─────────────────────
+#
+# 서식에 있고, 감탄이 가진 데이터로는 채울 수 없고, 사장님이 답할 수 있는 항목의 명세다.
+# **라벨·필수여부·선택지 어휘를 전부 백엔드가 정한다** — `fields`의 라벨을 백엔드가 정하는
+# 것과 같은 원칙이고, 프론트는 이 배열을 순서대로 렌더한다. 서식이 개정되면 이 파일만 고친다.
+#
+# `input_type`이 UI 관심사인데 왜 백엔드에 있나: 선택지가 있는 항목(인센티브 유형)의 값
+# 어휘가 DB CHECK 제약과 같아야 해서다. 프론트가 옵션 목록을 따로 들고 있으면 제약과
+# 어긋나는 값을 보낼 수 있고, 그때 실패가 422로만 드러난다.
+#
+# 비밀번호는 여기 없다 — 받지 않는다(REMAINING_FIELDS 주석).
+
+# 인센티브 유형 5종 — DB CHECK(ck_cnp_applications_incentive_type)와 같은 어휘여야 한다.
+# 서식 원문 표기(①상품권 ②현금 ③현금기부 ④그린카드포인트 ⑤기타)를 라벨로 쓴다.
+INCENTIVE_TYPES: tuple[tuple[str, str], ...] = (
+    ("gift_certificate", "상품권"),
+    ("cash", "현금"),
+    ("cash_donation", "현금 기부"),
+    ("green_card_point", "그린카드 포인트"),
+    ("other", "기타"),
+)
+
+APPLICATION_KINDS: tuple[tuple[str, str], ...] = (
+    ("new", "가입 신청"),
+    ("change", "정보 변경 신청"),
+)
+
+
+@dataclass(frozen=True)
+class ApplicantField:
+    """3단계 입력 폼의 한 칸.
+
+    `visible_when`은 "다른 칸의 값이 특정 값일 때만 보인다"는 조건이다 — 서식이 명시한
+    조건부 항목을 그대로 옮긴 것이고(금융정보는 "②현금으로 선택한 분만", 기타 자유기재는
+    ⑤기타 선택 시만), 조건이 안 맞으면 프론트가 칸 자체를 렌더하지 않는다. 해당 없는 칸을
+    비활성으로 띄워두면 사장님이 "내가 뭘 안 채웠나" 헷갈린다.
+    """
+    key: str
+    label: str
+    input_type: str = "text"          # text | tel | email | date | select | radio
+    required: bool = False
+    group: str = ""
+    placeholder: str | None = None
+    help_text: str | None = None
+    options: tuple[tuple[str, str], ...] = ()
+    visible_when: tuple[str, str] | None = None   # (다른 필드 key, 그 값)
+
+    def as_dict(self) -> dict:
+        return {
+            "key": self.key,
+            "label": self.label,
+            "input_type": self.input_type,
+            "required": self.required,
+            "group": self.group,
+            "placeholder": self.placeholder,
+            "help_text": self.help_text,
+            "options": [{"value": v, "label": lb} for v, lb in self.options],
+            "visible_when": (
+                None if self.visible_when is None
+                else {"key": self.visible_when[0], "equals": self.visible_when[1]}
+            ),
+        }
+
+
+# 그룹 라벨 — 3단계 폼의 섹션 제목. 서식 1페이지의 묶음을 따른다.
+GROUP_SIGNUP = "신청 구분"
+GROUP_BUSINESS = "사업자 정보"
+GROUP_CONTACT = "연락처"
+GROUP_ADDRESS = "사업장 주소"
+GROUP_CUSTOMER_NO = "고지서 고객번호"
+GROUP_INCENTIVE = "인센티브"
+
+# 필수(*) 표시는 서식 원문의 별표를 그대로 따랐다 — 아이디, 신청인 휴대전화번호, 주소,
+# 인센티브 유형, 고지서 고객번호(전기).
+APPLICANT_FIELDS: tuple[ApplicantField, ...] = (
+    ApplicantField(
+        key="application_kind", label="신청 구분", input_type="radio", required=True,
+        group=GROUP_SIGNUP, options=APPLICATION_KINDS,
+    ),
+    ApplicantField(
+        key="portal_id", label="아이디(ID)", required=True, group=GROUP_SIGNUP,
+        placeholder="영문·숫자 8~20자",
+        help_text="탄소중립포인트 포털에서 쓸 아이디를 정해 적어주세요. 비밀번호는 가입 후 문자로 오는 임시번호로 직접 설정하시게 됩니다.",
+    ),
+    ApplicantField(
+        key="corporate_registration_no", label="법인번호", group=GROUP_BUSINESS,
+        placeholder="000000-0000000",
+        help_text="법인사업자만 적으시면 돼요. 개인사업자는 비워 두세요.",
+    ),
+    ApplicantField(
+        key="business_open_date", label="영업개시일자", input_type="date",
+        group=GROUP_BUSINESS,
+        help_text="사업자등록증명에 개업일자가 없어 직접 확인이 필요해요.",
+    ),
+    ApplicantField(
+        key="applicant_phone", label="신청인 휴대전화번호", input_type="tel", required=True,
+        group=GROUP_CONTACT, placeholder="'-' 없이 숫자만 입력",
+        help_text="가입 확인과 인센티브 지급 안내를 문자로 받으실 번호예요.",
+    ),
+    ApplicantField(
+        key="applicant_email", label="전자메일", input_type="email", group=GROUP_CONTACT,
+        placeholder="example@email.com",
+    ),
+    ApplicantField(
+        key="postal_code", label="우편번호", group=GROUP_ADDRESS, placeholder="00000",
+        help_text="사업자등록증명에는 주소만 있고 우편번호가 없어요.",
+    ),
+    ApplicantField(
+        key="road_address", label="도로명 주소", required=True, group=GROUP_ADDRESS,
+        placeholder="대구광역시 중구 ○○로 00",
+    ),
+    ApplicantField(
+        key="address_detail", label="상세 주소", group=GROUP_ADDRESS,
+        placeholder="동·층·호",
+    ),
+    ApplicantField(
+        key="electric_customer_number", label="전기", required=True, group=GROUP_CUSTOMER_NO,
+        help_text="전기요금고지서에서 읽어 미리 채워 드려요. 값이 비어 있거나 다르면 고지서를 보고 고쳐주세요.",
+    ),
+    ApplicantField(key="water_customer_number", label="수도", group=GROUP_CUSTOMER_NO),
+    ApplicantField(key="city_gas_customer_number", label="도시가스", group=GROUP_CUSTOMER_NO),
+    ApplicantField(
+        key="district_heating_customer_number", label="지역난방", group=GROUP_CUSTOMER_NO,
+    ),
+    ApplicantField(
+        key="incentive_type", label="인센티브 유형", input_type="select", required=True,
+        group=GROUP_INCENTIVE, options=INCENTIVE_TYPES,
+        help_text="관할 지방자치단체가 시행하는 유형 중 하나만 고르실 수 있어요. 그린카드 미가입자는 그린카드 포인트를 고를 수 없습니다.",
+    ),
+    ApplicantField(
+        key="incentive_type_other", label="기타 유형", group=GROUP_INCENTIVE,
+        visible_when=("incentive_type", "other"),
+    ),
+    # 서식: "금융계좌는 인센티브 유형을 ②현금으로 선택하신 분에 한하여 기입하시면 됩니다."
+    ApplicantField(
+        key="bank_name", label="은행명", group=GROUP_INCENTIVE,
+        visible_when=("incentive_type", "cash"),
+    ),
+    ApplicantField(
+        key="account_number", label="계좌번호", group=GROUP_INCENTIVE,
+        placeholder="'-' 없이 숫자만 입력", visible_when=("incentive_type", "cash"),
+    ),
+    ApplicantField(
+        key="account_holder", label="예금주", group=GROUP_INCENTIVE,
+        visible_when=("incentive_type", "cash"),
+    ),
+)
+
+APPLICANT_FIELD_KEYS: frozenset[str] = frozenset(f.key for f in APPLICANT_FIELDS)
+
+# 날짜로 저장하는 키 — 문자열("2026-08-25")로 들어오므로 저장 전에 date로 바꾼다.
+_DATE_KEYS = frozenset({"business_open_date"})
 
 
 def _latest_extracted(session: Session, company_id: int, document_type: str) -> dict:
@@ -607,35 +766,162 @@ def build_application_draft(
         # "예상 감축률" 문구로 통일 — 확정치처럼 표기하지 않는다(develop-plan §2.3).
         {"label": "예상 감축률", "value": None if rate is None else f"{rate}%", "source": SRC_CALC_ESTIMATE},
     ]
-    fields += [{"label": label, "value": None, "source": "서식에 있으나 상업시설 신청에는 해당 없음"}
-               for label in BLANK_BY_POLICY]
+    # BLANK_BY_POLICY(거주 면적·세대원 수·전입일자)는 `fields`에 넣지 않는다 — 상업시설
+    # 신청에 해당 없는 칸을 "해당 없음"으로 띄워두면 초안 미리보기만 길어진다(2026-08-25).
 
     # draft 레코드는 자격을 충족했을 때만 남긴다 — 미달 기업의 신청서를 DB에 쌓지 않는다
     # (rate_approvals가 근거 없는 요청을 거부하는 것과 같은 결).
+    #
+    # 이미 있는 draft는 **재사용해서 갱신한다**(0032 이후). 위저드 3단계에서 받은 사장님
+    # 입력이 같은 행에 붙어 있어서, POST마다 새 행을 만들면 화면을 다시 열 때마다 입력이
+    # 사라진다. 반대로 status가 draft가 아닌 행(사장님이 제출했다고 표시한 행)은 절대
+    # 건드리지 않고 새 draft를 만든다 — 제출 이력을 덮어쓰면 안 된다(원칙8과 같은 결).
     application = None
     if info["eligible"]:
-        application = CarbonNeutralPointApplication(
-            company_id=company_id,
-            application_type="business",
-            baseline_year=baseline_year,
-            target_year=target,
-            # 수도·가스는 파싱이 없어 **키를 아예 넣지 않는다** — 0을 넣으면 "안 썼다"와
-            # "아직 모른다"가 뭉개진다(원칙7).
-            baseline_usage_json={"electricity_kwh": result.baseline_usage_kwh},
-            target_usage_json={"electricity_kwh": result.target_usage_kwh},
-            reduction_rate_pct=rate,
-            eligible=True,
-            status="draft",
-        )
-        session.add(application)
+        application = _reusable_draft(session, company_id, target)
+        if application is None:
+            application = CarbonNeutralPointApplication(
+                company_id=company_id,
+                application_type="business",
+                baseline_year=baseline_year,
+                target_year=target,
+                status="draft",
+            )
+            session.add(application)
+        application.baseline_year = baseline_year
+        # 수도·가스는 파싱이 없어 **키를 아예 넣지 않는다** — 0을 넣으면 "안 썼다"와
+        # "아직 모른다"가 뭉개진다(원칙7).
+        application.baseline_usage_json = {"electricity_kwh": result.baseline_usage_kwh}
+        application.target_usage_json = {"electricity_kwh": result.target_usage_kwh}
+        application.reduction_rate_pct = rate
+        application.eligible = True
         session.commit()
+
+    # 3단계 입력 명세 + 지금까지 저장된 값. 전기 고객번호는 고지서 파싱값을 기본값으로
+    # 깔아준다 — 사장님이 고칠 수 있게 폼에도 남기되(서식 필수 항목) 빈칸부터 시작하지 않는다.
+    saved = applicant_saved_values(application)
+    # setdefault를 쓰면 안 된다 — applicant_saved_values는 미입력 항목도 key를 None으로 채워
+    # 반환하므로 key가 항상 존재한다. 값이 비었는지로 판단해야 한다.
+    if not saved.get("electric_customer_number"):
+        saved["electric_customer_number"] = _electric_customer_number(session, company_id)
+    applicant_fields = [dict(spec.as_dict(), value=saved.get(spec.key)) for spec in APPLICANT_FIELDS]
+
+    # 초안 미리보기(`fields`)에도 사장님이 채운 값이 반영돼야 한다 — 같은 화면의 2·4단계가
+    # 서로 다른 값을 보여주면 안 된다. 라벨이 겹치는 항목만 덮어쓴다.
+    _merge_applicant_into_fields(fields, saved)
 
     return {
         "application_id": application.id if application is not None else None,
         "status": "draft",
         "fields": fields,
+        "applicant_fields": applicant_fields,
         "remaining_fields": list(REMAINING_FIELDS),
         # 초안 파일 생성은 이번 범위 밖(hwp 서식 렌더링 미착수) — 프론트가 이 값이 null이면
         # 다운로드 버튼을 비활성으로 둔다.
         "draft_document_url": None,
     }
+
+
+def _reusable_draft(
+    session: Session, company_id: int, target_year: int
+) -> CarbonNeutralPointApplication | None:
+    """같은 기업·같은 감축년도의 **미제출(draft)** 초안. 없으면 None.
+
+    submitted/approved/rejected 행은 반환하지 않는다 — 이미 제출한 신청서를 다시 계산한
+    값으로 덮어쓰면 사장님이 실제로 낸 내용과 기록이 어긋난다.
+    """
+    return session.execute(
+        select(CarbonNeutralPointApplication)
+        .where(CarbonNeutralPointApplication.company_id == company_id)
+        .where(CarbonNeutralPointApplication.target_year == target_year)
+        .where(CarbonNeutralPointApplication.status == "draft")
+        .order_by(CarbonNeutralPointApplication.id.desc())
+    ).scalars().first()
+
+
+def applicant_saved_values(application: CarbonNeutralPointApplication | None) -> dict:
+    """저장된 사장님 입력값 — `APPLICANT_FIELDS`의 key → 값. date는 ISO 문자열로 낸다."""
+    if application is None:
+        return {}
+    values: dict[str, str | None] = {}
+    for key in APPLICANT_FIELD_KEYS:
+        raw = getattr(application, key, None)
+        values[key] = raw.isoformat() if isinstance(raw, date) else raw
+    return values
+
+
+# 초안 미리보기의 라벨 ↔ 입력 key 대응. `fields`는 서식 순서대로 사람이 읽는 목록이고
+# `applicant_fields`는 폼이라 라벨 문구가 다를 수 있어(예: "전기" vs "고지서 고객번호 — 전기")
+# 자동 매칭에 의존하지 않고 명시적으로 적는다.
+_FIELD_LABEL_TO_KEY = {
+    "신청인 휴대전화번호": "applicant_phone",
+    "전자메일": "applicant_email",
+    "고지서 고객번호 — 전기": "electric_customer_number",
+    "고지서 고객번호 — 수도": "water_customer_number",
+}
+
+
+def _merge_applicant_into_fields(fields: list[dict], saved: dict) -> None:
+    """사장님이 채운 값을 초안 미리보기 항목에 덮어쓴다(제자리 수정)."""
+    for field in fields:
+        key = _FIELD_LABEL_TO_KEY.get(field["label"])
+        if key is not None and saved.get(key):
+            field["value"] = saved[key]
+
+
+def save_applicant_input(
+    session: Session, company_id: int, application_id: int, values: dict
+) -> dict:
+    """3단계 입력 저장 — `PATCH .../applications/{id}/applicant-input` 본문 처리.
+
+    부분 저장을 허용한다(전달된 key만 갱신) — 사장님이 폼을 다 채우기 전에 나가도 지금까지
+    쓴 게 남아야 한다. 그래서 필수 항목 검사를 여기서 하지 않는다. "필수인데 비었다"는
+    응답의 `missing_required`로 알려주고, 그걸 근거로 화면이 다음 단계 버튼을 막는다.
+
+    `APPLICANT_FIELDS`에 없는 key는 조용히 무시하지 않고 호출부(라우터)가 422로 거른다 —
+    오타 난 필드명이 조용히 버려지면 "저장했는데 값이 안 남는" 증상으로만 드러난다.
+
+    status가 draft가 아닌 행은 갱신하지 않는다(제출 이력 보호) — 라우터가 409로 막는다.
+    """
+    row = session.get(CarbonNeutralPointApplication, application_id)
+    if row is None or row.company_id != company_id:
+        raise LookupError("application not found")
+    if row.status != "draft":
+        raise PermissionError("이미 제출한 신청서는 수정할 수 없어요")
+
+    for key, raw in values.items():
+        # 빈 문자열은 "지웠다"는 뜻이라 null로 저장한다 — ""와 null이 섞이면 미입력 판정이
+        # 두 갈래가 된다.
+        value = None if raw is None or (isinstance(raw, str) and raw.strip() == "") else raw
+        if key in _DATE_KEYS and isinstance(value, str):
+            value = date.fromisoformat(value)
+        setattr(row, key, value)
+
+    row.applicant_input_updated_at = datetime.now(timezone.utc)
+    session.commit()
+
+    saved = applicant_saved_values(row)
+    return {
+        "application_id": row.id,
+        "values": saved,
+        "missing_required": missing_required_keys(saved),
+    }
+
+
+def missing_required_keys(saved: dict) -> list[str]:
+    """필수인데 아직 안 채워진 입력 key — 화면의 "다음" 버튼 활성 조건.
+
+    `visible_when` 조건이 안 맞아 화면에 안 나오는 칸은 검사하지 않는다 — 인센티브를
+    상품권으로 골랐다면 계좌번호는 애초에 물어보지 않았으므로 미입력이 정상이다.
+    """
+    missing = []
+    for spec in APPLICANT_FIELDS:
+        if not spec.required:
+            continue
+        if spec.visible_when is not None:
+            dep_key, dep_value = spec.visible_when
+            if saved.get(dep_key) != dep_value:
+                continue
+        if not saved.get(spec.key):
+            missing.append(spec.key)
+    return missing

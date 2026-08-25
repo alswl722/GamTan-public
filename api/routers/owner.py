@@ -28,6 +28,7 @@
 - POST  /owner/{company_id}/carbon-point/applications 신청서 초안 생성(자격 충족 시 draft 저장)
 - GET   /owner/{company_id}/carbon-point/applications/{id}   초안 단건 조회
 - PATCH /owner/{company_id}/carbon-point/applications/{id}   제출 이후 상태를 사장님이 직접 갱신
+- PATCH /owner/{company_id}/carbon-point/applications/{id}/applicant-input  4단계 위저드 3단계 입력 저장
 
 GET /admin/alerts(은행 담당자용 포트폴리오 전체)와 같은 판정 로직
 (db/alerts.py::detect_alerts)을 재사용하되 자기 기업으로만 필터한다 —
@@ -40,7 +41,7 @@ from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -63,9 +64,15 @@ from api.queries import (
 from db.owner_briefing import FuelMonthStat, compute_fuel_deltas, get_briefing_paragraphs
 from db.alerts import detect_alerts
 from db.carbon_neutral_point import (
+    APPLICANT_FIELD_KEYS,
+    APPLICATION_KINDS,
+    INCENTIVE_TYPES,
     SETTLEMENT_MONTHS,
+    applicant_saved_values,
     build_application_draft,
     evaluate_eligibility,
+    missing_required_keys,
+    save_applicant_input,
 )
 from db.document.document_coverage import (
     delete_source_document,
@@ -701,6 +708,40 @@ class CarbonPointApplicationIn(BaseModel):
     status: Literal["submitted", "approved", "rejected"]
 
 
+class CarbonPointApplicantInputIn(BaseModel):
+    """3단계("없는 데이터 입력하기") 부분 저장 본문.
+
+    필드를 하나씩 선언하지 않고 dict로 받는다 — 항목 명세의 정본이
+    `db/carbon_neutral_point.py::APPLICANT_FIELDS` 하나여야 하기 때문이다. 여기에 필드를
+    또 나열하면 서식이 개정될 때 두 곳을 고쳐야 하고, 한쪽을 놓치면 "화면엔 있는데 저장이
+    안 되는" 조용한 버그가 된다. 대신 알 수 없는 key는 아래에서 422로 명확히 거른다.
+    """
+
+    values: dict[str, str | None]
+
+    @field_validator("values")
+    @classmethod
+    def _known_keys_only(cls, values: dict[str, str | None]) -> dict[str, str | None]:
+        unknown = sorted(set(values) - APPLICANT_FIELD_KEYS)
+        if unknown:
+            raise ValueError(f"알 수 없는 입력 항목: {', '.join(unknown)}")
+        return values
+
+    @field_validator("values")
+    @classmethod
+    def _closed_vocabularies(cls, values: dict[str, str | None]) -> dict[str, str | None]:
+        """선택지가 정해진 항목은 DB CHECK와 같은 어휘만 받는다 — 제약 위반을 500이 아니라
+        422로 돌려주기 위해서다(어느 값이 틀렸는지도 응답에 남는다)."""
+        for key, allowed in (
+            ("incentive_type", {v for v, _ in INCENTIVE_TYPES}),
+            ("application_kind", {v for v, _ in APPLICATION_KINDS}),
+        ):
+            value = values.get(key)
+            if value and value not in allowed:
+                raise ValueError(f"{key}는 {sorted(allowed)} 중 하나여야 해요 (받은 값: {value})")
+        return values
+
+
 @router.get("/{company_id}/carbon-point/eligibility")
 def carbon_point_eligibility(
     company_id: int,
@@ -764,6 +805,9 @@ def get_carbon_point_application(
         "eligible": row.eligible,
         "draft_document_url": row.draft_document_url,
         "created_at": row.created_at.isoformat() if row.created_at else None,
+        # 사장님이 3단계에서 채운 값 — 위저드를 다시 열었을 때 어디까지 썼는지 복원하는 데 쓴다.
+        "applicant_input": applicant_saved_values(row),
+        "missing_required": missing_required_keys(applicant_saved_values(row)),
     }
 
 
@@ -786,3 +830,30 @@ def update_carbon_point_application(
     row.status = body.status
     session.commit()
     return {"application_id": row.id, "status": row.status}
+
+
+@router.patch("/{company_id}/carbon-point/applications/{application_id}/applicant-input")
+def update_carbon_point_applicant_input(
+    company_id: int,
+    application_id: int,
+    body: CarbonPointApplicantInputIn,
+    session: Session = Depends(get_session),
+):
+    """신청서 4단계 위저드 3단계 — 감탄이 가질 수 없는 항목을 사장님이 직접 채운다.
+
+    부분 저장이다(보낸 key만 갱신) — 폼을 다 채우기 전에 화면을 벗어나도 지금까지 쓴 게
+    남아야 한다. 그래서 필수 항목 미입력을 에러로 만들지 않고 `missing_required`로 돌려주고,
+    화면이 그걸 근거로 다음 단계 버튼을 막는다.
+
+    이미 제출한(status != draft) 신청서는 409로 거절한다 — 사장님이 실제로 낸 내용과 기록이
+    어긋나면 안 된다. 감탄이 책임지는 범위는 draft까지다(data-plan §3.2).
+    """
+    try:
+        return save_applicant_input(session, company_id, application_id, body.values)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="application not found")
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except ValueError as exc:
+        # date.fromisoformat 실패 등 — 형식 오류를 500으로 흘리지 않는다.
+        raise HTTPException(status_code=422, detail=f"입력 형식이 올바르지 않아요: {exc}")

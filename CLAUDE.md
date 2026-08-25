@@ -44,7 +44,7 @@
 - **테스트는 대응하는 소스 서브디렉토리와 이름을 맞춘다**: `db/document/*.py` → `tests/document/`, `db/pcaf_engine/*.py` → `tests/pcaf_engine/`, `db/reports/*.py` → `tests/reports/`. 라우터가 소스를 감싸서 호출할 뿐 직접 import하지 않는 TestClient 통합 테스트(`test_admin.py`, `test_owner_quality.py` 등)는 억지로 끼워 넣지 말고 `tests/` 루트에 둔다.
 - 이동 시 `git mv`로 이력을 보존하고, 그룹 내부 상호 import와 외부(api/, tests/) 참조처를 모두 새 경로로 고친 뒤 관련 테스트를 반드시 재실행해 통과를 확인한다.
 
-## 4. DB 테이블 (22개 + 소상공인 트랙 3개 계획됨)
+## 4. DB 테이블 (25개 — v0.1 코어 8 + v1 기관/PCAF 14 + 소상공인 트랙 3)
 
 세부 컬럼·제약은 정본 `db/models.py`, 사람이 읽기 쉬운 표는 `docs/db-schema.md` 참고. 두 세대로 나뉜다.
 
@@ -76,9 +76,9 @@
 21. `fx_rates` — 환율
 22. `rate_approval_requests` — 우대금리·설비금융 안내 승인요청 큐 (사장님 요청 → 은행 담당자 승인/반려, 여신 결정 아님 — 원칙10)
 
-**소상공인 탄소중립포인트 트랙 (3개, 계획됨 — 아직 Alembic revision 없음)** — `docs/small-business-green-supply-develop-plan.md` §2.2·§7, `docs/small-business-green-supply-data-plan.md` §7.2~§7.4가 정본. 착수 조건은 §7 각주 참고.
+**소상공인 탄소중립포인트 트랙 (3개, 적용됨 — `0030`·`0031`·`0032`)** — `docs/small-business-green-supply-develop-plan.md` §2.2·§7, `docs/small-business-green-supply-data-plan.md` §7.2~§7.4가 정본.
 
-23. `carbon_neutral_point_applications` — 탄소중립포인트 에너지분야 신청서 초안(기준/목표년도 사용량, 예상 감축률 `reduction_rate_pct`, 자격 여부, draft까지만 감탄이 갱신)
+23. `carbon_neutral_point_applications` — 탄소중립포인트 에너지분야 신청서 초안(기준/목표년도 사용량, 예상 감축률 `reduction_rate_pct`, 자격 여부, draft까지만 감탄이 갱신). `0032`에서 **사장님 직접 입력 항목**(연락처·주소·인센티브 유형·계좌정보·고지서 고객번호·영업개시일자)이 컬럼으로 추가됨 — 신청서 4단계 위저드(`/owner/carbon-point`) 3단계가 여기에 부분 저장한다. 포털 비밀번호 컬럼은 의도적으로 없다(타 기관 자격증명은 보관하지 않음)
 24. `carbon_neutral_point_enrollments` — 탄소중립포인트 가입 여부·인센티브 종류(현금/그린카드 포인트, 1회성 가입)
 25. `water_bills` — 상수도 요금고지서(수도 사용량, §7.2 실 서식 미확보 상태라 스키마만 우선 준비, 파싱 로직은 서식 확보 후)
 

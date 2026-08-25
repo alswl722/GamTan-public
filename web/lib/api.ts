@@ -596,4 +596,98 @@ export function getOwnerBriefing(
   return apiGet(`/owner/${companyId}/briefing${q}`);
 }
 
+// ── 소상공인 탄소중립포인트 (docs/small-business-green-supply-data-plan.md §9.1) ──
+//
+// 2026-08-25에 web/lib/carbon-point-fixture.ts를 걷고 실제 API로 붙였다. 타입은 그
+// fixture가 백엔드 응답 스키마와 필드명까지 맞춰 뒀던 것을 그대로 옮긴 것이라 컴포넌트
+// 수정 없이 교체됐다. `?cp=` 시나리오 토글도 함께 사라졌다.
+
+/** 저장하지 않고 조회마다 계산되는 값(data-plan §5·§6.1) — 전기고지서 계약종별에서 유도된다. */
+export type BusinessScaleHint = "제조업/산업체" | "소상공인/상업시설" | "미확인";
+
+export interface CarbonPointEligibility {
+  business_scale_hint: BusinessScaleHint;
+  baseline_year: number;
+  target_year: number;
+  /** 감탄의 자체 **예상치**. 계산에 필요한 데이터가 없으면 null(0이 아니다 — CLAUDE.md 원칙7). */
+  reduction_rate_pct: number | null;
+  eligible: boolean;
+  /** 예: "상수도 요금고지서(수도 사용량)" — 무엇이 없어서 정확도가 떨어지는지 그대로 노출한다. */
+  missing_data: string[];
+}
+
+export function getCarbonPointEligibility(
+  companyId: number,
+  targetYear?: number,
+): Promise<CarbonPointEligibility> {
+  const q = targetYear ? `?target_year=${targetYear}` : "";
+  return apiGet<CarbonPointEligibility>(`/owner/${companyId}/carbon-point/eligibility${q}`);
+}
+
+export interface CarbonPointDraftField {
+  label: string;
+  /** 아직 못 채운 항목은 null — 빈 문자열로 가리지 않는다(실패 가시성). */
+  value: string | null;
+  source: string;
+}
+
+/** 3단계("없는 데이터 입력하기") 폼 한 칸의 명세 + 현재 값.
+ *
+ * 라벨·필수여부·선택지 어휘까지 백엔드(`db/carbon_neutral_point.py::APPLICANT_FIELDS`)가
+ * 정본이다 — 프론트가 옵션 목록을 따로 들고 있으면 DB CHECK 제약과 어긋나는 값을 보낼 수
+ * 있고, 그때 실패가 422로만 드러난다. 서식이 개정되면 백엔드만 고친다. */
+export interface CarbonPointApplicantField {
+  key: string;
+  label: string;
+  input_type: "text" | "tel" | "email" | "date" | "select" | "radio";
+  required: boolean;
+  group: string;
+  placeholder: string | null;
+  help_text: string | null;
+  options: { value: string; label: string }[];
+  /** 다른 칸의 값이 이 값일 때만 보인다(서식의 조건부 항목). 조건이 안 맞으면 렌더하지 않는다. */
+  visible_when: { key: string; equals: string } | null;
+  value: string | null;
+}
+
+export interface CarbonPointDraft {
+  application_id: number | null;
+  status: "draft" | "submitted" | "approved" | "rejected";
+  fields: CarbonPointDraftField[];
+  applicant_fields: CarbonPointApplicantField[];
+  /** 감탄도 사장님도 여기서 채울 수 없어 안내만 하는 항목(현재는 포털 비밀번호뿐). */
+  remaining_fields: string[];
+  /** 초안 파일 생성이 아직 없어 항상 null — 화면은 다운로드 버튼을 비활성으로 둔다. */
+  draft_document_url: string | null;
+}
+
+/** 초안 생성 — 같은 기업·같은 감축년도의 미제출 초안이 있으면 그 행을 재사용해 갱신한다.
+ * 그래서 위저드를 다시 열어도 3단계 입력이 살아 있다. */
+export function createCarbonPointApplication(
+  companyId: number,
+  targetYear?: number,
+): Promise<CarbonPointDraft> {
+  const q = targetYear ? `?target_year=${targetYear}` : "";
+  return apiPost<CarbonPointDraft>(`/owner/${companyId}/carbon-point/applications${q}`);
+}
+
+export interface CarbonPointApplicantInputResult {
+  application_id: number;
+  values: Record<string, string | null>;
+  /** 필수인데 아직 안 채워진 key — 화면이 "다음" 버튼을 막는 근거. */
+  missing_required: string[];
+}
+
+/** 3단계 입력 저장(부분 저장). 보낸 key만 갱신되므로 폼을 다 채우기 전에도 호출할 수 있다. */
+export function saveCarbonPointApplicantInput(
+  companyId: number,
+  applicationId: number,
+  values: Record<string, string | null>,
+): Promise<CarbonPointApplicantInputResult> {
+  return apiPatch<CarbonPointApplicantInputResult>(
+    `/owner/${companyId}/carbon-point/applications/${applicationId}/applicant-input`,
+    { values },
+  );
+}
+
 export { BASE_URL };
