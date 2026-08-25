@@ -24,8 +24,18 @@ import { useSyncExternalStore } from "react";
  * 항상 true인 플래그는 정보량이 없고, "예상치" 표기는 프론트 정적 문구가 담당한다).
  */
 
-/** 저장하지 않고 조회마다 계산되는 값(data-plan §5·§6.1) — 전기고지서 계약종별에서 유도된다. */
-export type BusinessScaleHint = "제조업/산업체" | "소상공인/상업시설" | "미확인";
+/** 저장하지 않고 조회마다 계산되는 값(data-plan §5·§6.1) — 전기고지서 계약종별에서 유도된다.
+ *
+ * "가정용/개인참여"는 2026-08-25 추가(법인참여만 지원하기로 확정). 주택용 계약은 우리 트랙
+ * 대상이 아니다 — 제도가 가정용을 포함하는 건 개인참여 트랙이고, 아래 ELECTRICITY_POINT_TIERS는
+ * 별표2 상업(법인) 기준이라 포인트가 3~4배 다르다. 화면 분기는 `=== "소상공인/상업시설"`
+ * 비교로만 이뤄지므로 카드는 자동으로 숨고, "미확인" 안내 박스도 뜨지 않는다(의도된 동작 —
+ * 계약종별을 못 읽은 게 아니라 읽었고 대상이 아니므로 재업로드를 안내하면 거짓이 된다). */
+export type BusinessScaleHint =
+  | "제조업/산업체"
+  | "소상공인/상업시설"
+  | "가정용/개인참여"
+  | "미확인";
 
 /** GET /owner/{company_id}/carbon-point/eligibility */
 export interface CarbonPointEligibility {

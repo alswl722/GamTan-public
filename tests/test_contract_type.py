@@ -11,7 +11,12 @@ from sqlalchemy.orm import Session
 
 from db.carbon_neutral_point import business_scale_hint
 from db.document.contract_type import normalize_contract_type_class
-from db.document.document_text_extractor import parse_document_text
+from db.document.document_text_extractor import (
+    _CONTRACT_TYPE_VALUE_RE,
+    _CUSTOMER_NUMBER_RE,
+    _optional_token_after_label,
+    parse_document_text,
+)
 from db.models import Base, Company, FinancialInstitution, SourceDocument
 
 FIXTURES = "data/fixtures/electricity_bills"
@@ -87,6 +92,28 @@ def test_billed_amount_is_not_the_due_date(path, expected_amount):
     assert not (20_000_000 < amount < 21_000_000), "납기일(YYYYMMDD)을 금액으로 읽었다"
 
 
+@pytest.mark.parametrize(
+    "line,contract_type,customer_number",
+    [
+        # 실측 버그(2026-08-25): 콜론 구분 서식에서 계약종별·고객번호가 **둘 다** 안 읽혔다.
+        # 라벨 정규식이 콜론을 소비하지 않아 값이 ": 산업용(을) 고압A"로 시작했고,
+        # value_re.match()가 0번 위치에서 콜론에 걸려 실패했다. scripts/generate_upload_docs.py
+        # 가 만드는 서식이 이쪽이라 데모 기업 전기고지서가 조용히 "미확인"으로 떨어져 있었다.
+        ("청구월: 2025-01 계약종별: 산업용(을) 고압A", "산업용(을)", None),
+        ("고객번호: 0284-1193-55", None, "0284-1193-55"),
+        # 기존 공백 구분 서식(S001·S002 fixture)은 그대로 동작해야 한다 — 회귀 방어.
+        ("고객번호 0355-7712-90 계약종별 일반용(을)", "일반용(을)", "0355-7712-90"),
+        # 전각 콜론 — OCR이 한글 문서에서 실제로 뱉는 문자.
+        ("계약종별 ： 주택용전력", "주택용전력", None),
+        # 자간이 벌어진 라벨 + 콜론 (_label_pattern이 이미 처리하던 축과의 조합).
+        ("계 약 종 별 : 일반용(갑)", "일반용(갑)", None),
+    ],
+)
+def test_label_value_separator_variants(line, contract_type, customer_number):
+    assert _optional_token_after_label(line, "계약종별", _CONTRACT_TYPE_VALUE_RE) == contract_type
+    assert _optional_token_after_label(line, "고객번호", _CUSTOMER_NUMBER_RE) == customer_number
+
+
 def test_contract_type_absent_is_not_a_parse_failure():
     """계약종별·고객번호가 없어도 파싱 자체는 성공해야 한다 — 없으면 배출량 계산이
     안 되는 필드가 아니므로 기존 업로드를 회귀시키면 안 된다."""
@@ -141,12 +168,29 @@ def test_hint_industrial(db, company):
     assert business_scale_hint(db, c.id) == "제조업/산업체"
 
 
-@pytest.mark.parametrize("cls", ["commercial", "residential"])
-def test_hint_commercial_covers_residential(db, company, cls):
-    """주택용도 소상공인 쪽으로 본다 — 제도 대상이 가정용·상업용 전기다(§6.2)."""
+@pytest.mark.parametrize(
+    "cls,expected",
+    [
+        ("commercial", "소상공인/상업시설"),
+        # 2026-08-25 확정(법인참여만 지원): 주택용은 우리 트랙 대상이 아니다. 종전엔
+        # commercial로 묶었는데, 제도가 가정용을 포함하는 건 개인참여 트랙이고 화면
+        # 구간표는 별표2 상업(법인) 기준이라 포인트가 3~4배 다르다 — 주택용을 상업
+        # 구간표로 안내하면 받을 금액을 과대 안내하게 된다.
+        ("residential", "가정용/개인참여"),
+    ],
+)
+def test_hint_separates_residential_from_commercial(db, company, cls, expected):
     c, inst = company
     _add_bill(db, c, inst, 2026, 1, cls)
-    assert business_scale_hint(db, c.id) == "소상공인/상업시설"
+    assert business_scale_hint(db, c.id) == expected
+
+
+def test_residential_is_not_unknown(db, company):
+    """주택용을 "미확인"으로 흘리지 않는다 — 화면이 "계약종별을 못 읽었어요"로 재업로드를
+    안내하는데, 실제로는 멀쩡히 읽었고 대상이 아닐 뿐이라 거짓 안내가 된다."""
+    c, inst = company
+    _add_bill(db, c, inst, 2026, 1, "residential")
+    assert business_scale_hint(db, c.id) != "미확인"
 
 
 def test_hint_unknown_when_no_electric_bill(db, company):

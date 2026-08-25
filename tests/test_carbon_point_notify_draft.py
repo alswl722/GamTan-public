@@ -114,6 +114,26 @@ def test_manufacturing_is_not_calculated_at_all(setup):
     assert info["eligible"] is False
 
 
+def test_residential_is_not_calculated_and_asks_for_nothing(setup):
+    """주택용도 계산하지 않는다(2026-08-25 확정: 법인참여만 지원).
+
+    제조업과 다른 점은 `missing_data`가 비어야 한다는 것이다 — 계약종별을 못 읽은 게
+    아니라 읽었고 대상이 아니므로, 사장님에게 더 올릴 게 있다고 말하면 거짓이 된다.
+    """
+    db, company, inst = setup
+    for year in (2024, 2025):
+        for m in range(1, 13):
+            _bill(db, company, inst, year, m, 100.0, contract_class="residential")
+    for m in range(1, 7):
+        _bill(db, company, inst, 2026, m, 10.0, contract_class="residential")  # 90% 감축이어도
+
+    info = evaluate_eligibility(db, company.id, 2026, 1)
+    assert info["business_scale_hint"] == "가정용/개인참여"
+    assert info["reduction_rate_pct"] is None
+    assert info["eligible"] is False
+    assert info["missing_data"] == []
+
+
 def test_unknown_contract_type_surfaces_as_missing_data(setup):
     db, company, inst = setup
     _bill(db, company, inst, 2026, 1, 90.0, contract_class=None)
