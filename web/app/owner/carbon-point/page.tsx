@@ -91,6 +91,16 @@ export default function CarbonPointApplicationPage() {
 
   const refund = estimateRefund(eligibility.reduction_rate_pct);
 
+  // 2단계는 감탄이 실제로 채운 항목만 보여준다.
+  //
+  // 백엔드 `draft.fields`는 서식 전체 미리보기라(build_application_draft) 감탄이 채운 칸과
+  // 사장님이 채울 칸이 섞여 있다 — 휴대전화번호·전자메일은 마이데이터 5종에 없는 항목이고,
+  // 수도 고객번호는 파싱 범위 밖이라 항상 null로 온다. 그걸 2단계에 "아직 없어요"로 띄우면
+  // "이미 있는 데이터 채우기 / 확인만 해주세요"라는 단계 문구와 정면으로 어긋난다.
+  // 값을 감추는 게 아니다 — 같은 항목을 3단계 입력 폼(`applicant_fields`)이 필수 표시까지
+  // 달아 그대로 물어본다. 없는 걸 없다고 말하는 자리를 3단계 하나로 모으는 것이다.
+  const filledFields = draft === null ? [] : draft.fields.filter((f) => f.value !== null);
+
   const steps: StepperStep[] = [
     {
       label: "탄소 측정 완료",
@@ -111,12 +121,6 @@ export default function CarbonPointApplicationPage() {
               {refund !== null && ` · 예상 환급액 ${refund.krw.toLocaleString()}원`}
             </p>
           </div>
-
-          {eligibility.missing_data.length > 0 && (
-            <p className="mt-2.5 text-[11px] leading-relaxed text-faint">
-              아직 없는 자료: {eligibility.missing_data.join(" · ")}
-            </p>
-          )}
 
           {eligibility.eligible ? (
             <button
@@ -165,15 +169,19 @@ export default function CarbonPointApplicationPage() {
         draft === null ? null : (
           <div>
             <p className="text-[12px] leading-relaxed text-muted">
-              마이데이터와 고지서에서 읽어 감탄이 대신 채운 항목이에요. 확인만 해주세요.
+              마이데이터와 고지서에서 읽어 감탄이 대신 채운 {filledFields.length}개 항목이에요.
             </p>
-            <div className="mt-3">
-              <DraftFieldList fields={draft.fields} />
-            </div>
+            {/* 채운 항목이 하나도 없으면 빈 카드를 띄우지 않는다 — 측정을 끝낸 뒤에만
+                여기까지 오므로 실제로는 상호·사업자번호·사용량이 항상 있다. */}
+            {filledFields.length > 0 && (
+              <div className="mt-2.5">
+                <DraftFieldList fields={filledFields} />
+              </div>
+            )}
             <button
               type="button"
               onClick={() => setActive(2)}
-              className="btn-cta mt-4 flex w-full items-center justify-center gap-1.5 rounded-2xl bg-gradient-to-r from-brand-ink to-brand py-3.5 text-[14px] font-bold text-white"
+              className="btn-cta mt-3.5 flex w-full items-center justify-center gap-1.5 rounded-2xl bg-gradient-to-r from-brand-ink to-brand py-3 text-[14px] font-bold text-white"
             >
               다음
               <ArrowRight size={14} strokeWidth={2.4} />
@@ -186,18 +194,12 @@ export default function CarbonPointApplicationPage() {
       content:
         draft === null || draft.application_id === null ? null : (
           <div>
-            <p className="text-[12px] leading-relaxed text-muted">
-              마이데이터에 없어 사장님만 아는 항목이에요. 쓰는 대로 저장되니 중간에 나가셔도
-              괜찮아요.
-            </p>
-            <div className="mt-3.5">
-              <ApplicantInputForm
-                companyId={companyId}
-                applicationId={draft.application_id}
-                fields={draft.applicant_fields}
-                onMissingRequiredChange={setMissingRequired}
-              />
-            </div>
+            <ApplicantInputForm
+              companyId={companyId}
+              applicationId={draft.application_id}
+              fields={draft.applicant_fields}
+              onMissingRequiredChange={setMissingRequired}
+            />
 
             {draft.remaining_fields.length > 0 && (
               <div className="mt-4 rounded-2xl bg-bg px-3.5 py-3">
@@ -234,32 +236,21 @@ export default function CarbonPointApplicationPage() {
       label: "신청서 다운로드",
       content:
         draft === null ? null : (
+          // 설명 문구를 전부 걷어낸 화면이다(2026-08-25). 접수 안내·비활성 이유·비보장
+          // 문구가 버튼 하나 위아래로 세 덩이 붙어 있어 마지막 단계가 읽히지 않았다.
+          // 비보장 문구의 지정 렌더 위치는 `CarbonPointCard`이고(develop-plan §3.3 —
+          // data-plan §6.2가 API 플래그가 아니라 프론트 정적 문구로 강제한 그 자리) 거기엔
+          // 그대로 남아 있다. 비활성 버튼은 `draft_document_url`이 null인 동안 눌리지
+          // 않는다 — 없는 파일을 있는 척 내려주지 않는다(CLAUDE.md §6 실패 가시성).
           <div>
-            <p className="text-[12px] leading-relaxed text-muted">
-              접수는 사장님이 탄소중립포인트 포털에서 직접 하셔야 해요. 감탄은 서식을 채워
-              드리는 데까지 도와드려요.
-            </p>
-
-            {/* draft_document_url이 null인 동안은 비활성 — 초안 생성 기능이 아직 없고,
-                없는데 있는 척 가짜 파일을 내려주지 않는다(CLAUDE.md §6 실패 가시성). */}
             <button
               type="button"
               disabled={draft.draft_document_url === null}
-              className="btn-cta mt-4 flex w-full items-center justify-center gap-1.5 rounded-2xl bg-brand py-3.5 text-[14.5px] font-extrabold text-white disabled:opacity-50"
+              className="btn-cta flex w-full items-center justify-center gap-1.5 rounded-2xl bg-brand py-3.5 text-[14.5px] font-extrabold text-white disabled:opacity-50"
             >
               <Download size={15} strokeWidth={2.4} />
               신청서 내려받기
             </button>
-            {draft.draft_document_url === null && (
-              <p className="mt-2 text-center text-[11px] text-faint">
-                초안 파일 생성 기능은 준비 중이에요.
-              </p>
-            )}
-
-            <p className="mt-4 text-[11px] leading-relaxed text-faint">
-              예상 감축률 기준으로 채운 초안이며, 실제 심사·지급은 한국환경공단이 반기마다
-              자체 계산해 진행합니다. 감탄의 계산값은 공식 판정이 아니에요.
-            </p>
           </div>
         ),
     },
@@ -272,10 +263,6 @@ export default function CarbonPointApplicationPage() {
         <br />
         네 단계로 끝내요.
       </h1>
-      <p className="mt-2 text-[12.5px] leading-relaxed text-muted">
-        에너지 분야 · 한국환경공단
-      </p>
-
       <div className="mt-5 border-t border-line" />
 
       <ApplicationStepper

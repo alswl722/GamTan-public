@@ -11,9 +11,11 @@ import {
  * 입력할 내용보다 칸이 훨씬 커서 뭘 넣는 칸인지 감이 안 온다. 그 외는 전부 한 줄 전체다
  * (모바일 1단 기준 — 참고한 데스크톱 2단 폼을 앱 폭에 맞춰 재구성한 결과).
  *
- * 전기 고객번호는 좁힐 후보였지만 안내 문구(help_text)가 붙어 있어 전체 폭으로 둔다. */
+ * 전기 고객번호는 안내 문구 때문에 전체 폭으로 뒀었는데, 도움말을 전부 걷어내면서
+ * (2026-08-25, `APPLICANT_FIELDS` 주석) 나머지 고객번호 3종과 같이 좁은 칸으로 맞췄다. */
 const NARROW_KEYS = new Set([
   "postal_code",
+  "electric_customer_number",
   "water_customer_number",
   "city_gas_customer_number",
   "district_heating_customer_number",
