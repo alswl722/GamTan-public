@@ -13,7 +13,12 @@ from typing import Literal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from db.models import Classification, SourceDocument, Voucher
+from db.models import (
+    CarbonNeutralPointApplication,
+    Classification,
+    SourceDocument,
+    Voucher,
+)
 
 BusinessScaleHint = Literal["제조업/산업체", "소상공인/상업시설", "미확인"]
 
@@ -308,3 +313,313 @@ def settlement_period(
     end_year, end_month = window[-1]
     payout_year, payout_month = _next_payout(end_year, end_month)
     return SettlementPeriod(start_year, start_month, end_year, end_month, payout_year, payout_month)
+
+
+# ── 자격 판정 결과 조립 (API·알림·신청서 공용) ──────────────────────────────
+
+# 아직 감축률에 반영하지 못한 에너지원. 원문 브레인스토밍은 전기·수도·도시가스 3종을
+# 포인트 지급 대상으로 명시하는데 수도·가스는 파싱 로직이 없다(develop-plan §2.5) —
+# 전기만으로 계산하면 실제보다 부정확해진다는 사실을 숨기지 않고 missing_data로 노출한다.
+MISSING_WATER = "상수도 요금고지서(수도 사용량)"
+MISSING_GAS = "도시가스 요금고지서(가스 사용량)"
+MISSING_CONTRACT_TYPE = "전기요금고지서의 계약종별"
+
+
+def evaluate_eligibility(
+    session: Session,
+    company_id: int,
+    target_year: int,
+    target_start_month: int = 1,
+    *,
+    strategy: BaselineStrategy = DEFAULT_BASELINE_STRATEGY,
+    months: int = SETTLEMENT_MONTHS,
+) -> dict:
+    """자격 판정 결과 — `GET /owner/{id}/carbon-point/eligibility` 응답 본문.
+
+    필드명·타입은 프론트 `CarbonPointEligibility`와 **동일해야 한다**(web/lib/
+    carbon-point-fixture.ts) — fixture를 이 응답으로 교체할 때 컴포넌트를 안 고치려면
+    필드명까지 같아야 한다. `is_estimate` 같은 플래그는 넣지 않는다(2026-08-21 확정,
+    이 경로는 항상 예상치만 반환하므로 항상 true인 플래그는 정보량이 없다).
+
+    제조업(산업용 전기)은 제도상 원천 제외라 감축률을 아예 계산하지 않는다(§6.2) —
+    계산해서 숨기는 게 아니라 계산 자체를 안 한다.
+    """
+    hint = business_scale_hint(session, company_id)
+    missing: list[str] = []
+
+    if hint == HINT_UNKNOWN:
+        missing.append(MISSING_CONTRACT_TYPE)
+
+    if hint != HINT_COMMERCIAL:
+        # 제조업·미확인은 감축률을 계산하지 않는다. reduction_rate_pct는 0이 아니라
+        # null이다 — "감축 안 했다"가 아니라 "판정 대상이 아니다/모른다"이므로(원칙7).
+        return {
+            "business_scale_hint": hint,
+            "baseline_year": target_year - 1,
+            "target_year": target_year,
+            "reduction_rate_pct": None,
+            "eligible": False,
+            "missing_data": missing,
+        }
+
+    monthly = monthly_electricity_usage(session, company_id)
+    result = compute_reduction_rate(
+        monthly, target_year, target_start_month, strategy=strategy, months=months
+    )
+    if result.reason is not None:
+        missing.append(result.reason)
+    # 수도·가스는 파싱이 없어 항상 미반영이다 — 감축률이 계산됐을 때만 알린다(계산도 안 된
+    # 상태에서 이것까지 나열하면 무엇이 진짜 걸림돌인지 흐려진다).
+    if result.reduction_rate_pct is not None:
+        missing.extend([MISSING_WATER, MISSING_GAS])
+
+    years_back = 1 if result.used_newcomer_fallback else 2
+    return {
+        "business_scale_hint": hint,
+        "baseline_year": target_year - years_back,
+        "target_year": target_year,
+        "reduction_rate_pct": result.reduction_rate_pct,
+        "eligible": result.eligible,
+        "missing_data": missing,
+    }
+
+
+# ── 알림 트리거 ─────────────────────────────────────────────────────────────
+
+# owner_notifications.type — 이 컬럼엔 CHECK 제약이 없어(String(30) 자유형식) 값을
+# 코드에서만 관리한다. 기존 값 3종: classification_sent | document_processed |
+# document_failed. 30자 제한 안에 들어간다(21자).
+NOTIFICATION_TYPE_ELIGIBLE = "carbon_point_eligible"
+
+
+def notify_if_eligible(
+    session: Session,
+    company_id: int,
+    target_year: int,
+    target_start_month: int = 1,
+    **kwargs,
+) -> "OwnerNotification | None":
+    """자격 충족 시 사장님 알림 생성. 이미 있으면 만들지 않고 None.
+
+    "등급 상승 후보 판정" 패턴(`db/pcaf_engine/rate_approvals.py::create_rate_request`)에서
+    가져온 것: **근거 없이는 레코드를 만들지 않는다.** 거기서 활동자료가 없으면
+    NoUpgradeCandidateError로 거부하는 것과 같은 이유로, 여기서는 자격 미충족·계산 불가면
+    조용히 None을 반환한다(빈 알림으로 배너를 채우지 않는 기존 관례 —
+    api/routers/admin.py의 `if sent_count > 0` 가드와 같은 결).
+
+    중복 방지: **이 테이블의 첫 중복 방지 로직이다.** owner_notifications엔 유니크 제약도
+    기존 dedup 코드도 없다(기존 3종은 잡·전송 액션당 1건이라 문제가 없었다). 여기서는
+    조회마다 판정이 돌아 같은 알림이 계속 쌓일 수 있어 가드가 필요하다 — 같은 기업·같은
+    타입의 **안 읽은** 알림이 있으면 새로 만들지 않는다.
+    이 방식의 한계를 알고 쓴다: 동시 요청 레이스를 막지 못한다(SourceDocument가
+    `(company_id, file_hash)` 유니크로 최종 방어선을 둔 것과 대조된다). 폴링으로 읽는 배너라
+    최악의 결과가 "알림 2개"뿐이어서 마이그레이션까지 하지 않았다 — 문제가 되면
+    `(company_id, type, 정산구간키)` 유니크 인덱스를 새 revision으로 추가하면 된다.
+
+    비보장 문구는 여기 담지 않는다 — data-plan §6.2가 "예상치" 표기를 API가 아니라 프론트
+    정적 문구로 강제하기로 확정했다(`CarbonPointCard`가 이미 렌더). 대신 message 자체를
+    확정적으로 쓰지 않는다("예상 감축률", "확정"·"지급 확정" 금지).
+    """
+    from db.models import OwnerNotification
+
+    info = evaluate_eligibility(session, company_id, target_year, target_start_month, **kwargs)
+    if not info["eligible"]:
+        return None
+
+    existing = session.execute(
+        select(OwnerNotification)
+        .where(OwnerNotification.company_id == company_id)
+        .where(OwnerNotification.type == NOTIFICATION_TYPE_ELIGIBLE)
+        .where(OwnerNotification.read_at.is_(None))
+    ).scalars().first()
+    if existing is not None:
+        return None
+
+    rate = info["reduction_rate_pct"]
+    note = OwnerNotification(
+        company_id=company_id,
+        type=NOTIFICATION_TYPE_ELIGIBLE,
+        message=(
+            f"예상 감축률이 {rate}%로 탄소중립포인트 신청 기준({THRESHOLD_PCT:.0f}%)을 넘었어요. "
+            "신청서 초안을 만들어 뒀으니 확인해 보세요."
+        ),
+        # message는 완성된 문장, payload는 문구를 다시 조립할 수 있는 원자료 —
+        # 0023 마이그레이션 docstring이 정한 이 테이블의 규약.
+        payload={
+            "reduction_rate_pct": rate,
+            "threshold_pct": THRESHOLD_PCT,
+            "baseline_year": info["baseline_year"],
+            "target_year": info["target_year"],
+            "missing_data": info["missing_data"],
+        },
+    )
+    session.add(note)
+    session.commit()
+    return note
+
+
+# ── 신청서 초안 ─────────────────────────────────────────────────────────────
+
+# fields[].source 어휘 — 프론트 fixture(getDraftFixture)가 쓰는 문자열과 맞춘다.
+SRC_MYDATA_BIZ = "마이데이터 · 사업자등록증명"
+SRC_CALC = "감탄 계산값"
+SRC_CALC_ESTIMATE = "감탄 계산값(예상치)"
+SRC_BILL = "전기요금고지서 파싱값"
+SRC_UNCONFIRMED = "출처 확인 중(data-plan §6.3)"
+SRC_OWNER_INPUT = "사장님 직접 입력"
+SRC_PORTAL = "탄소중립포인트 포털에서 직접 발급"
+
+# 사장님이 직접 채워야 하는 항목(data-plan §6.3 "잔여 필드"). 서식에 있지만 감탄이 가진
+# 데이터로는 채울 수 없다.
+REMAINING_FIELDS = [
+    "아이디(ID)/비밀번호 — 탄소중립포인트 포털에서 직접 발급받으셔야 해요(가입 신청 시 문자로 임시번호가 옵니다)",
+    "신청인 휴대전화번호",
+    "전자메일",
+    "인센티브 유형 — 상품권·현금·현금기부·그린카드포인트·기타 중 하나를 고르셔야 해요",
+    "금융정보(은행명 · 계좌번호) — 인센티브를 '현금'으로 고르실 때만 필요해요",
+    "법인번호 — 법인사업자만 해당해요(개인사업자는 비워 두세요)",
+    "우편번호 — 사업자등록증명에는 주소만 있고 우편번호가 없어요",
+    "고지서 고객번호 — 도시가스 · 지역난방",
+    "영업개시일자",
+]
+
+# 서식에 있지만 **감탄 데이터로 채우지 않고 공란으로 두는** 항목.
+# data-plan §6.3 지적: 문서명이 "사업자 참여 신청서(상업시설/공공기관/학교)"인데 가정용
+# 항목이 그대로 남아 있다(상업시설·가구 공용 템플릿 재활용 추정). 상업시설 신청에는 사실상
+# 무의미할 가능성이 높아 억지로 채우면 틀린 값이 된다 — 잔여 필드로도 넣지 않는다
+# (사장님에게 "채우세요"라고 안내할 근거도 없다).
+BLANK_BY_POLICY = ("거주 면적(m²)", "세대원 수", "전입일자")
+
+
+def _latest_extracted(session: Session, company_id: int, document_type: str) -> dict:
+    """해당 문서종류의 최신 `extracted_json`. 없으면 빈 dict."""
+    row = session.execute(
+        select(SourceDocument.extracted_json)
+        .where(SourceDocument.company_id == company_id)
+        .where(SourceDocument.document_type == document_type)
+        .order_by(SourceDocument.id.desc())
+    ).scalars().first()
+    return row or {}
+
+
+def _electric_customer_number(session: Session, company_id: int) -> str | None:
+    """전기 고객번호 — 최신 전기고지서에서 파싱된 값(0029 이후 업로드분에만 있다)."""
+    rows = session.execute(
+        select(SourceDocument.extracted_json)
+        .where(SourceDocument.company_id == company_id)
+        .where(SourceDocument.document_type == "electric_bill")
+        .order_by(SourceDocument.year.desc().nullslast(), SourceDocument.month.desc().nullslast(),
+                  SourceDocument.id.desc())
+    ).scalars().all()
+    for extracted in rows:
+        if extracted and extracted.get("customer_number"):
+            return str(extracted["customer_number"])
+    return None
+
+
+def build_application_draft(
+    session: Session,
+    company_id: int,
+    target_year: int,
+    target_start_month: int = 1,
+    *,
+    strategy: BaselineStrategy = DEFAULT_BASELINE_STRATEGY,
+    months: int = SETTLEMENT_MONTHS,
+) -> dict:
+    """신청서 초안 생성 — `POST /owner/{id}/carbon-point/applications` 응답 본문.
+
+    반환 구조는 프론트 `CarbonPointDraft`와 동일하다(web/lib/carbon-point-fixture.ts):
+    `application_id`, `status`, `fields[{label, value, source}]`, `remaining_fields`,
+    `draft_document_url`. **라벨 문구까지 백엔드가 정한다** — 프론트는 배열을 그대로 렌더한다.
+
+    LLM은 개입하지 않는다(원칙1) — 모든 수치는 `compute_reduction_rate()` 결과를 그대로
+    문자열로 옮긴다. 채울 수 없는 값은 빈 문자열이 아니라 `None`이다(실패 가시성).
+
+    data-plan §6.3이 "마이데이터 사업자등록증명 (기존)"으로 적어둔 항목 중 주소·연락처는
+    실제로 그 페이로드에 없었다(2026-08-24 코드 확인). 둘의 성격이 달라 다르게 처리했다:
+
+    - **주소**: 실제 사업자등록증명원에는 인쇄돼 나오는 항목인데 우리 mock 범위에서만
+      빠져 있었다(회계 합성데이터 가이드의 `key_fields`가 "사업자번호, 기업명"으로 좁게
+      잡힌 데서 비롯). `_synthetic_business_registration`에 `site_addr`를 추가해 채운다.
+    - **휴대전화번호·전자메일**: 마이데이터 5종(국세청·중소벤처기업부·한전 발급 서류)
+      어디에도 없다. 실서비스라면 은행 내부 고객정보에서 와야 하는데 그건 마이데이터가
+      아니고 연동 가능성도 우리가 결정할 수 없다 — mock으로 지어내면 "이미 가진 데이터"인
+      척하게 되므로 잔여 필드로 둔다.
+    """
+    info = evaluate_eligibility(
+        session, company_id, target_year, target_start_month, strategy=strategy, months=months
+    )
+    # 제조업·미확인은 사용량도 계산하지 않는다 — evaluate_eligibility가 감축률을 아예
+    # 계산하지 않는 것과 같은 기준을 지킨다. 감축률은 null인데 사용량만 채워 보내면
+    # "계산은 했는데 결과만 감췄다"처럼 보여 §6.2의 원천 제외 취지와 어긋난다.
+    if info["business_scale_hint"] == HINT_COMMERCIAL:
+        result = compute_reduction_rate(
+            monthly_electricity_usage(session, company_id),
+            target_year, target_start_month, strategy=strategy, months=months,
+        )
+    else:
+        result = ReductionResult(None, False, None, None, 0, strategy, False,
+                                 reason="탄소중립포인트 에너지분야 신청 대상이 아니에요")
+    biz = _latest_extracted(session, company_id, "business_registration")
+    company_name = biz.get("company_name")
+    representative = biz.get("representative")
+
+    def _kwh(value: float | None) -> str | None:
+        return None if value is None else f"전기 {value:,.0f} kWh"
+
+    baseline_year, target = info["baseline_year"], info["target_year"]
+    rate = info["reduction_rate_pct"]
+    fields = [
+        {"label": "상호(법인명)", "value": company_name, "source": SRC_MYDATA_BIZ},
+        {"label": "대표자 성명", "value": representative, "source": SRC_MYDATA_BIZ},
+        {"label": "사업자등록번호", "value": biz.get("business_registration_no"), "source": SRC_MYDATA_BIZ},
+        {"label": "사업장 주소", "value": biz.get("site_addr"), "source": SRC_MYDATA_BIZ},
+        # 연락처·전자메일은 마이데이터 5종 어디에도 없다 — 국세청·중소벤처기업부·한전이
+        # 주는 서류라서다. 실서비스라면 은행이 이미 가진 고객정보에서 와야 하지만 그건
+        # 마이데이터가 아니라 은행 내부 데이터이고(InstitutionBorrower에 연락처 컬럼이
+        # 없는 이유), 그 연동 가능성은 우리가 결정할 수 없다. mock으로 지어내면 "이미
+        # 가진 데이터"인 척하게 되므로 잔여 필드로 둔다(2026-08-24 결정).
+        {"label": "신청인 휴대전화번호", "value": None, "source": SRC_OWNER_INPUT},
+        {"label": "전자메일", "value": None, "source": SRC_OWNER_INPUT},
+        {"label": "고지서 고객번호 — 전기", "value": _electric_customer_number(session, company_id),
+         "source": SRC_BILL},
+        # 수도 파싱이 이번 범위 밖이라 항상 null(develop-plan §2.5).
+        {"label": "고지서 고객번호 — 수도", "value": None, "source": SRC_OWNER_INPUT},
+        {"label": f"기준년도({baseline_year}) 사용량", "value": _kwh(result.baseline_usage_kwh),
+         "source": SRC_CALC},
+        {"label": f"감축년도({target}) 사용량", "value": _kwh(result.target_usage_kwh), "source": SRC_CALC},
+        # "예상 감축률" 문구로 통일 — 확정치처럼 표기하지 않는다(develop-plan §2.3).
+        {"label": "예상 감축률", "value": None if rate is None else f"{rate}%", "source": SRC_CALC_ESTIMATE},
+    ]
+    fields += [{"label": label, "value": None, "source": "서식에 있으나 상업시설 신청에는 해당 없음"}
+               for label in BLANK_BY_POLICY]
+
+    # draft 레코드는 자격을 충족했을 때만 남긴다 — 미달 기업의 신청서를 DB에 쌓지 않는다
+    # (rate_approvals가 근거 없는 요청을 거부하는 것과 같은 결).
+    application = None
+    if info["eligible"]:
+        application = CarbonNeutralPointApplication(
+            company_id=company_id,
+            application_type="business",
+            baseline_year=baseline_year,
+            target_year=target,
+            # 수도·가스는 파싱이 없어 **키를 아예 넣지 않는다** — 0을 넣으면 "안 썼다"와
+            # "아직 모른다"가 뭉개진다(원칙7).
+            baseline_usage_json={"electricity_kwh": result.baseline_usage_kwh},
+            target_usage_json={"electricity_kwh": result.target_usage_kwh},
+            reduction_rate_pct=rate,
+            eligible=True,
+            status="draft",
+        )
+        session.add(application)
+        session.commit()
+
+    return {
+        "application_id": application.id if application is not None else None,
+        "status": "draft",
+        "fields": fields,
+        "remaining_fields": list(REMAINING_FIELDS),
+        # 초안 파일 생성은 이번 범위 밖(hwp 서식 렌더링 미착수) — 프론트가 이 값이 null이면
+        # 다운로드 버튼을 비활성으로 둔다.
+        "draft_document_url": None,
+    }

@@ -24,6 +24,10 @@
 - GET   /owner/{company_id}/goal                홈 화면 목표 카드 — 활성 목표 + 재계산된 진행률·체크리스트
 - POST  /owner/{company_id}/goal                목표 확정(배출량 감축 | 등급·혜택 상승) — 기존 활성 목표는 superseded
 - POST  /owner/{company_id}/goal/{goal_id}/cancel  목표 취소
+- GET   /owner/{company_id}/carbon-point/eligibility  탄소중립포인트 자격 판정(감탄 예상치)
+- POST  /owner/{company_id}/carbon-point/applications 신청서 초안 생성(자격 충족 시 draft 저장)
+- GET   /owner/{company_id}/carbon-point/applications/{id}   초안 단건 조회
+- PATCH /owner/{company_id}/carbon-point/applications/{id}   제출 이후 상태를 사장님이 직접 갱신
 
 GET /admin/alerts(은행 담당자용 포트폴리오 전체)와 같은 판정 로직
 (db/alerts.py::detect_alerts)을 재사용하되 자기 기업으로만 필터한다 —
@@ -58,6 +62,11 @@ from api.queries import (
 )
 from db.owner_briefing import FuelMonthStat, compute_fuel_deltas, get_briefing_paragraphs
 from db.alerts import detect_alerts
+from db.carbon_neutral_point import (
+    SETTLEMENT_MONTHS,
+    build_application_draft,
+    evaluate_eligibility,
+)
 from db.document.document_coverage import (
     delete_source_document,
     document_pending_review_count,
@@ -74,7 +83,15 @@ from db.gov_support.matching import (
     raw_text_by_program_id,
 )
 from db.pcaf_engine.k_taxonomy import k_taxonomy_leads_for_company
-from db.models import Classification, Company, DocumentUploadJob, OwnerNotification, SourceDocument, Voucher
+from db.models import (
+    CarbonNeutralPointApplication,
+    Classification,
+    Company,
+    DocumentUploadJob,
+    OwnerNotification,
+    SourceDocument,
+    Voucher,
+)
 from db.pcaf_engine.pcaf_quality import default_reporting_year
 from db.pcaf_engine.rate_products import rate_product_status_for_company
 from db.quality_issues import record_ingestion_failure
@@ -664,3 +681,105 @@ def cancel_goal_endpoint(company_id: int, goal_id: int, session: Session = Depen
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     return {"cancelled": True, "goal_id": goal_id}
+
+
+# ── 소상공인 탄소중립포인트 (data-plan.md §9.1) ─────────────────────────────
+#
+# 응답 필드명은 프론트 `web/lib/carbon-point-fixture.ts`의
+# CarbonPointEligibility·CarbonPointDraft와 **동일해야 한다** — 그 fixture를 이 API로
+# 교체할 때 컴포넌트를 안 고치는 게 목적이다.
+#
+# 판정 대상 구간은 쿼리로 받는다. 정산 구간이 6개월이라는 건 확정이지만(회계 확인),
+# 구간 시작점이 "가입월 다음 달"인지 "달력 반기 고정"인지는 미확정이라
+# (develop-plan.md §2.2) 프론트가 명시적으로 넘기게 두고 기본값만 정해둔다.
+
+
+class CarbonPointApplicationIn(BaseModel):
+    status: Literal["submitted", "approved", "rejected"]
+
+
+@router.get("/{company_id}/carbon-point/eligibility")
+def carbon_point_eligibility(
+    company_id: int,
+    target_year: int | None = None,
+    target_start_month: int = 1,
+    months: int = SETTLEMENT_MONTHS,
+    session: Session = Depends(get_session),
+):
+    """탄소중립포인트 자격 판정 — 화면의 자격 카드·홈 알림 배너가 쓴다.
+
+    `reduction_rate_pct`는 감탄의 **자체 예상치**이고 공식 판정이 아니다(CLAUDE.md 원칙10) —
+    실제 판정은 한국환경공단이 반기마다 자체 계산한다. "예상치" 표기는 API 플래그가 아니라
+    프론트 정적 문구가 담당한다(data-plan.md §6.2 확정).
+
+    제조업(산업용 전기)은 제도상 원천 제외라 감축률을 아예 계산하지 않는다 — 프론트는
+    `business_scale_hint`로 카드 자체를 숨긴다.
+    """
+    year = target_year or datetime.now(timezone.utc).year
+    return evaluate_eligibility(
+        session, company_id, year, target_start_month, months=months
+    )
+
+
+@router.post("/{company_id}/carbon-point/applications")
+def create_carbon_point_application(
+    company_id: int,
+    target_year: int | None = None,
+    target_start_month: int = 1,
+    months: int = SETTLEMENT_MONTHS,
+    session: Session = Depends(get_session),
+):
+    """신청서 초안 생성 — 자격을 충족한 경우에만 draft 레코드를 남긴다.
+
+    미달 기업도 초안 미리보기(fields)는 받지만 `application_id`가 null이다 — 신청 대상이
+    아닌 기업의 신청서를 DB에 쌓지 않는다(rate-requests가 근거 없는 요청을 거부하는 것과
+    같은 결). 초안에 들어가는 모든 수치는 계산 함수 결과를 그대로 대입하며 LLM은 개입하지
+    않는다(원칙1).
+    """
+    year = target_year or datetime.now(timezone.utc).year
+    return build_application_draft(
+        session, company_id, year, target_start_month, months=months
+    )
+
+
+@router.get("/{company_id}/carbon-point/applications/{application_id}")
+def get_carbon_point_application(
+    company_id: int, application_id: int, session: Session = Depends(get_session)
+):
+    """초안 단건 조회 — 다른 기업 소유는 404로 막는다(테넌트 경계, 기존 goal·documents 패턴)."""
+    row = session.get(CarbonNeutralPointApplication, application_id)
+    if row is None or row.company_id != company_id:
+        raise HTTPException(status_code=404, detail="application not found")
+    return {
+        "application_id": row.id,
+        "status": row.status,
+        "baseline_year": row.baseline_year,
+        "target_year": row.target_year,
+        "baseline_usage_json": row.baseline_usage_json,
+        "target_usage_json": row.target_usage_json,
+        "reduction_rate_pct": row.reduction_rate_pct,
+        "eligible": row.eligible,
+        "draft_document_url": row.draft_document_url,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+@router.patch("/{company_id}/carbon-point/applications/{application_id}")
+def update_carbon_point_application(
+    company_id: int,
+    application_id: int,
+    body: CarbonPointApplicationIn,
+    session: Session = Depends(get_session),
+):
+    """사장님이 제출 이후 상태를 직접 갱신한다 — 감탄은 `draft`까지만 책임진다.
+
+    실제 신청 접수는 사장님이 탄소중립포인트 포털에서 직접 하고(data-plan.md §3.2 범위 제한),
+    승인·반려 결과도 감탄이 알 수 없으므로 수동 필드다. `draft`로 되돌리는 건 허용하지
+    않는다 — 이미 제출한 사실을 지우는 셈이라 이력이 왜곡된다.
+    """
+    row = session.get(CarbonNeutralPointApplication, application_id)
+    if row is None or row.company_id != company_id:
+        raise HTTPException(status_code=404, detail="application not found")
+    row.status = body.status
+    session.commit()
+    return {"application_id": row.id, "status": row.status}

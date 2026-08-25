@@ -41,7 +41,20 @@ _FINANCIAL_YEAR = 2025
 
 def _synthetic_business_registration(company: Company) -> dict:
     business_no = f"{200 + company.id:03d}-81-{10000 + company.id:05d}"
-    return {"business_registration_no": business_no, "company_name": company.name, "representative": "○○○"}
+    return {
+        "business_registration_no": business_no,
+        "company_name": company.name,
+        "representative": "○○○",
+        # 사업장 소재지 — 실제 사업자등록증명원에 인쇄돼 나오는 항목인데 그동안 mock에
+        # 빠져 있었다(2026-08-24 추가). 탄소중립포인트 신청서가 사업장 주소를 요구하고
+        # (data-plan §6.3) 그 출처를 사업자등록증명으로 적어뒀는데, 정작 이 페이로드에
+        # 없어서 초안이 주소를 못 채우고 있었다.
+        # Company엔 주소 컬럼이 없고 region은 "대구 중구" 수준의 광역값이라, 그 값을
+        # 살리고 세부 주소는 mock임이 드러나는 형태로 만든다 — 실제 지번을 지어내면
+        # 합성값을 진짜 주소처럼 보이게 만드는 셈이다(§3.3 과장 방지와 같은 결).
+        # 우편번호는 사업자등록증명에 없으므로 여기도 넣지 않는다(신청서 잔여 필드).
+        "site_addr": f"{company.region or '대구광역시'} ○○로 {company.id:02d}",
+    }
 
 
 def _synthetic_vat_tax_base(company: Company) -> dict:
