@@ -71,6 +71,13 @@ def test_electric_bill_parses_date_amount_quantity():
         # (db/document_text_extractor.py::month_end_issue_date_str).
         "issue_date": "2025-01-31",
         "document_type": "electric_bill",
+        # 2026-08-25 추가. 이 테스트는 콜론 구분 서식("계약종별: 산업용(을) 고압A")을
+        # 쓰면서도 계약종별이 **빠진** 결과를 기대값으로 굳혀두고 있었다 — 라벨 정규식이
+        # 콜론을 소비하지 않아 값 매칭이 실패하던 버그를 그대로 정답으로 박아둔 셈이다.
+        # 그래서 이 버그는 테스트를 다 통과한 채로 공유 DB까지 흘러갔다(구미정밀 등
+        # 데모 기업 전기고지서가 "미확인"으로 떨어져 있었다).
+        "contract_type": "산업용(을)",
+        "contract_type_class": "industrial",
     }
 
 

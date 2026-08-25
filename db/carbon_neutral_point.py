@@ -21,22 +21,32 @@ from db.models import (
     Voucher,
 )
 
-BusinessScaleHint = Literal["제조업/산업체", "소상공인/상업시설", "미확인"]
+BusinessScaleHint = Literal["제조업/산업체", "소상공인/상업시설", "가정용/개인참여", "미확인"]
 
 # 프론트(web/lib/carbon-point-fixture.ts::BusinessScaleHint)와 문자열까지 같아야 한다 —
 # API 응답이 이 값을 그대로 나르고 화면 분기가 문자열 비교로 이뤄진다.
 HINT_INDUSTRIAL: BusinessScaleHint = "제조업/산업체"
 HINT_COMMERCIAL: BusinessScaleHint = "소상공인/상업시설"
+HINT_RESIDENTIAL: BusinessScaleHint = "가정용/개인참여"
 HINT_UNKNOWN: BusinessScaleHint = "미확인"
 
 _CLASS_TO_HINT: dict[str, BusinessScaleHint] = {
     "industrial": HINT_INDUSTRIAL,
-    # 주택용도 "소상공인/상업시설"로 본다 — 제도상 대상이 가정용·상업용 전기이고(§6.2),
-    # 사업장이 주택용 계약을 쓰는 경우(주택 겸용 점포 등)도 산업용이 아니라는 점에서
-    # 판별 목적상 같은 편에 선다. 개인참여 vs 법인참여 구분은 별개 축이며 아직 열린
-    # 질문이다(develop-plan §2.6) — 그 결정이 나면 이 매핑이 아니라 축이 하나 늘어난다.
     "commercial": HINT_COMMERCIAL,
-    "residential": HINT_COMMERCIAL,
+    # 주택용은 **우리 트랙 대상이 아니다(2026-08-25 확정: 법인참여만 지원)**.
+    #
+    # 종전엔 "소상공인/상업시설"로 묶었다(주택 겸용 점포 고려 + 제도상 대상이 가정용·상업용
+    # 전기라서). 하지만 제도가 가정용을 포함하는 건 **개인참여 트랙**이고, 화면에 노출 중인
+    # 구간표는 별표2 **상업(법인)** 기준이다(포인트가 3~4배 다르다). 법인참여만 지원하기로
+    # 정한 이상 주택용 명의를 상업 구간표로 안내하면 받을 금액을 과대 안내하게 된다.
+    #
+    # 기존 값 재사용이 왜 안 되나 — 둘 다 사실과 다른 말을 하게 된다:
+    #   HINT_UNKNOWN  : "계약종별을 못 읽었다"는 뜻이라 화면이 재업로드를 안내한다.
+    #                   실제로는 멀쩡히 읽었고 대상이 아닐 뿐이다(거짓 안내).
+    #   HINT_INDUSTRIAL: 주택용 계약을 쓰는 카페를 제조업이라고 부르게 된다.
+    # 그래서 값을 하나 늘렸다. 프론트는 `=== "소상공인/상업시설"` 비교로만 분기하므로
+    # 카드는 자동으로 숨고, "미확인" 안내 박스도 뜨지 않는다 — 원하는 동작 그대로다.
+    "residential": HINT_RESIDENTIAL,
 }
 
 
@@ -48,10 +58,14 @@ def business_scale_hint(session: Session, company_id: int) -> BusinessScaleHint:
     더 예전 문서를 본다: 최신 한 장이 파싱 실패했다고 판별을 포기하면, 직전 달에 멀쩡히
     읽은 값이 있는데도 "미확인"으로 떨어진다.
 
-    "미확인"을 반환하는 경우는 둘이고 호출부에서 구분할 필요는 없다(둘 다 §6.1 HITL
-    재확인 대상):
-      - 전기고지서가 아예 없다(신규 온보딩 직후)
+    "미확인"을 반환하는 경우는 둘이다:
+      - 전기고지서가 아예 없다(신규 온보딩 직후) → 업로드 안내
       - 있지만 계약종별을 읽지 못했거나 4종에 안 맞는 계약이다(`unknown`)
+
+    후자는 한때 HITL 재확인 대상으로 설계할 참이었는데, 실제 사례를 열어보니 파서 버그
+    였다(콜론 구분 서식에서 라벨 뒤 값 매칭 실패, 2026-08-25 수정). 버그를 고친 뒤
+    "읽었어야 하는데 못 읽은" 건은 0건이라 별도 HITL 경로를 만들지 않았다 — 남는 건
+    농사용·교육용처럼 진짜로 4종에 없는 계약이고, 그건 자격이 없는 게 맞다.
     """
     stmt = (
         select(SourceDocument.contract_type_class)

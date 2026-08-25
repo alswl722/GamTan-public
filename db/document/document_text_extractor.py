@@ -342,7 +342,13 @@ def _optional_token_after_label(text: str, label: str, value_re: re.Pattern) -> 
     라벨이 있어도 값 모양이 안 맞으면 None을 준다 — 판별은 "미확인"으로 흘러 HITL 재확인
     대상이 되고, 값을 지어내지 않는다(실패 가시성).
     """
-    label_re = re.compile(_label_pattern(label))
+    # 라벨 뒤 구분자(콜론)를 라벨 쪽에서 먹는다. 이게 없으면 값이 ": 산업용(을) 고압A"로
+    # 시작해 value_re.match()가 0번 위치에서 콜론에 걸려 전부 실패한다 — 실제로 구미정밀
+    # 전기고지서("청구월: 2025-01 계약종별: 산업용(을) 고압A")가 이 때문에 계약종별·고객번호
+    # 둘 다 못 읽혀 business_scale_hint가 "미확인"으로 떨어져 있었다(2026-08-25 실측).
+    # S001·S002 fixture는 공백 구분("계약종별 일반용(을)")이라 이 결함이 안 드러났다.
+    # 전각 콜론(：)도 함께 받는다 — OCR이 한글 문서에서 실제로 뱉는 문자다.
+    label_re = re.compile(_label_pattern(label) + r"\s*[:：]?")
     for line in text.split("\n"):
         m = label_re.search(line)
         if m is None:
