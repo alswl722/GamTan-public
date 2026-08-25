@@ -3,19 +3,16 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import {
+  getCarbonPointEligibility,
   getCompanyId,
   getGovSupportCandidates,
   getKTaxonomyLeads,
   getRateCandidate,
+  type BusinessScaleHint,
   type GovSupportCandidatesResponse,
   type KTaxonomyLeadsResponse,
   type RateCandidateResponse,
 } from "@/lib/api";
-import {
-  getEligibilityFixture,
-  resolveScenario,
-  useCarbonPointScenario,
-} from "@/lib/carbon-point-fixture";
 import { RateProductCard } from "@/components/RateProductCard";
 import { KTaxonomyCard } from "@/components/KTaxonomyCard";
 import { GovSupportCard } from "@/components/GovSupportCard";
@@ -43,44 +40,47 @@ import { CarbonPointCard } from "@/components/CarbonPointCard";
  *   "미확인"           → 현행 3종 유지 + 계약종별 확인 안내(HITL, data-plan §6.1).
  *                        판별 실패 상태에서 이미 받던 안내를 없애는 쪽이 손해가 크다
  *
- * hint는 지금 fixture라 동기값이지만, §9.1 API로 바뀌면 이 지점이 자연스럽게 2단
- * 로딩(hint 먼저 → 카드 조회)이 된다 — 아래 `hintReady` 게이트가 그 자리다. */
+ * 2026-08-25에 fixture를 걷고 §9.1 API로 붙이면서 실제 2단 로딩이 됐다 — hint를 먼저
+ * 받고(`scaleHint`), 소상공인이 아닐 때만 제조업 카드 3종을 조회한다. 소상공인 사업장에
+ * 쓸데없는 조회 3건을 보내지 않는 게 원래 의도였고, 이제 그게 실제로 지켜진다. */
 export default function OwnerBenefitsPage() {
   const [companyId, setCompanyId] = useState<number | null>(null);
+  const [scaleHint, setScaleHint] = useState<BusinessScaleHint | null>(null);
   const [rate, setRate] = useState<RateCandidateResponse | null>(null);
   const [taxonomy, setTaxonomy] = useState<KTaxonomyLeadsResponse | null>(null);
   const [govSupport, setGovSupport] = useState<GovSupportCandidatesResponse | null>(null);
 
-  const scenario = useCarbonPointScenario();
-  const scaleHint = getEligibilityFixture(scenario).business_scale_hint;
   const isSmallBusiness = scaleHint === "소상공인/상업시설";
-  // fixture는 항상 즉시 값을 주므로 지금은 상수 true — API 연동 시 이 자리에
-  // eligibility 응답 도착 여부가 들어간다(그때부터 실제 2단 로딩이 된다).
-  const hintReady = true;
+  const hintReady = scaleHint !== null;
 
   useEffect(() => {
-    // 소상공인 분기에서는 제조업 카드 3종을 아예 안 그리니 조회도 하지 않는다.
-    // 훅 값(scenario) 대신 쿼리를 다시 읽는 이유: 이 effect는 하이드레이션 직후에도
-    // 한 번 도는데 그 시점의 훅 값은 서버 스냅숏(기본 시나리오)일 수 있다. effect는
-    // 항상 클라이언트에서만 실행되므로 window를 직접 읽는 게 확실하다.
-    const commercial =
-      getEligibilityFixture(resolveScenario(window.location.search)).business_scale_hint ===
-      "소상공인/상업시설";
-
+    let cancelled = false;
     getCompanyId()
-      .then((id) => {
+      .then(async (id) => {
+        if (cancelled) return;
         setCompanyId(id);
-        if (commercial) return null;
-        return Promise.all([getRateCandidate(id), getKTaxonomyLeads(id), getGovSupportCandidates(id)]);
-      })
-      .then((res) => {
-        if (res === null) return;
-        const [r, t, g] = res;
+
+        // 사업 규모부터 확인한다 — 소상공인 분기에서는 제조업 카드 3종을 아예 안 그리니
+        // 조회도 하지 않는다(느린 gov-support 조회 25초 타임아웃을 헛돌리지 않는다).
+        const { business_scale_hint } = await getCarbonPointEligibility(id);
+        if (cancelled) return;
+        setScaleHint(business_scale_hint);
+        if (business_scale_hint === "소상공인/상업시설") return;
+
+        const [r, t, g] = await Promise.all([
+          getRateCandidate(id),
+          getKTaxonomyLeads(id),
+          getGovSupportCandidates(id),
+        ]);
+        if (cancelled) return;
         setRate(r);
         setTaxonomy(t);
         setGovSupport(g);
       })
       .catch((err) => console.error("금융 혜택 조회 실패:", err));
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // 소상공인 분기는 3종을 조회하지 않으므로 companyId만 확정되면 그릴 준비가 끝난다.

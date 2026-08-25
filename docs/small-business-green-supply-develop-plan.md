@@ -312,14 +312,26 @@ fetch 없이 화면·문구·분기까지만 만들고, **fixture 모듈 하나�
 
 | 파일 | 구분 | 역할 |
 | --- | --- | --- |
-| `web/lib/carbon-point-fixture.ts` | 신규 | §9.1 응답 타입 + 시나리오 4종 + `resolveScenario()`. **연동 시 삭제 대상** |
+| ~~`web/lib/carbon-point-fixture.ts`~~ | 삭제(2026-08-25) | §9.1 API 연동 완료로 예고대로 삭제. 응답 타입·fetch는 `web/lib/api.ts`, 제도 상수(임계값·포인트 단가·`estimateRefund`)는 `web/lib/carbon-point.ts`로 분리 |
 | `web/components/OnboardingRewardBanner.tsx` | 신규(병합됨) | ~~§3.1 온보딩 리워드 배너~~ — 개발 제외(2026-08-24). 이미 dev에 있어 유지·제거는 협의 필요 |
-| `web/components/CarbonPointCard.tsx` | 신규 | §3.3 자격 요약 카드(혜택 페이지) |
-| `web/components/CarbonPointDraftSheet.tsx` | 신규 | §3.3 신청서 초안 바텀시트 |
-| `web/components/CarbonPointNoticeBanner.tsx` | 신규 | §3.3 홈 화면 신청 가능 알림 배너. 지금은 props 없음(fixture라 `companyId`를 쓸 곳이 없어 unused 경고를 만들지 않으려고) — API 연동 시 생긴다 |
+| `web/components/CarbonPointCard.tsx` | 신규 | §3.3 자격 요약 카드(혜택 페이지). CTA는 `/owner/carbon-point`로 이동 |
+| ~~`web/components/CarbonPointDraftSheet.tsx`~~ | 삭제(2026-08-25) | 초안 미리보기 바텀시트 → 4단계 위저드 라우트로 승격. 항목 목록은 `web/components/carbon-point/DraftFieldList.tsx`로 분리 |
+| `web/app/owner/carbon-point/page.tsx` | 신규(2026-08-25) | 신청서 4단계 위저드 — ①탄소 측정 완료 ②이미 있는 데이터 채우기 ③없는 데이터 입력하기 ④신청서 다운로드 |
+| `web/components/carbon-point/ApplicationStepper.tsx` | 신규(2026-08-25) | 세로 번호 스테퍼(현재 단계만 펼치는 아코디언) |
+| `web/components/carbon-point/DraftFieldList.tsx` | 신규(2026-08-25) | 감탄이 채운 항목 읽기 전용 목록(2·4단계 공용) |
+| `web/components/carbon-point/ApplicantInputForm.tsx` | 신규(2026-08-25) | 3단계 입력 폼. 칸 목록은 백엔드 `applicant_fields` 명세를 그대로 렌더, blur 시 부분 저장 |
+| `web/components/CarbonPointNoticeBanner.tsx` | 신규 | §3.3 홈 화면 신청 가능 알림 배너. API 연동으로 `companyId` prop이 생겼다(2026-08-25) |
 | `web/components/SceneConsent.tsx` | 수정 | `phase === "done"`에 §3.1 배너 삽입 |
-| `web/app/owner/benefits/page.tsx` | 수정 | §3.2 3분기 |
+| `web/app/owner/benefits/page.tsx` | 수정 | §3.2 3분기. fixture 대신 eligibility를 조회해 실제 2단 로딩이 됐다 |
 | `web/app/owner/page.tsx` | 수정 | §3.3 홈 배너 삽입 |
+
+> **2026-08-25 — 신청서 화면이 시트에서 4단계 위저드 라우트로 바뀜.** 3단계에서 사장님
+> 입력을 실제로 받아 저장하게 되면서(`alembic/versions/0032_cnp_application_applicant_fields.py`)
+> 바텀시트로는 좁아 `/owner/carbon-point`로 승격했다. 입력 항목 명세의 정본은
+> `db/carbon_neutral_point.py::APPLICANT_FIELDS`이고 프론트는 그 배열을 렌더만 한다 —
+> 서식이 개정되면 백엔드만 고친다. 포털 비밀번호는 받지 않고(타 기관 자격증명),
+> `거주 면적`·`세대원 수`·`전입일자`는 초안에서 아예 제외한다(상업시설 해당 없음).
+> 아래 `?cp=` 시나리오 토글 문단은 fixture와 함께 사라진 과거 결정 이력이다.
 
 시나리오 토글은 URL 쿼리 `?cp=`로 한다. 쿼리 파싱은 `useSyncExternalStore`로 한다 —
 `useCarbonPointScenario()` 훅이 `popstate`를 구독하고 서버 스냅숏으로 기본 시나리오를 준다.
