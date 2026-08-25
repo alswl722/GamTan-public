@@ -765,6 +765,47 @@ class CarbonNeutralPointApplication(Base):
     draft_document_url = Column(String(500))  # 초안 파일 경로. 생성 전까진 null
     created_at = Column(DateTime(timezone=True), default=now)
 
+    # ── 사장님 직접 입력 항목 (0032에서 추가) ────────────────────────────────
+    #
+    # 신청서 초안 화면이 4단계 위저드로 바뀌며 3단계("없는 데이터 입력하기")의 입력값을
+    # 여기에 영속화한다. 위 컬럼들이 "감탄이 계산한 값"이라면 아래는 "감탄이 가질 수 없어
+    # 사장님에게 받은 값"이다 — 출처가 다르므로 초안 필드의 `source` 문구도 다르다
+    # (SRC_OWNER_INPUT).
+    #
+    # 전부 nullable이다: 3단계를 중간에 이탈해도 부분 입력이 남아야 하고, 0032 이전
+    # 레코드엔 값이 없다.
+    #
+    # ⚠️ 비밀번호 컬럼은 의도적으로 없다 — 서식의 비밀번호 칸은 탄소중립포인트 포털
+    # 계정의 것이고, 가입 후 포털이 임시번호를 문자로 발급하는 흐름이라 감탄이 보관해야
+    # 할 단계가 없다. 타 기관 자격증명을 대신 들고 있지 않는다.
+    #
+    # `거주 면적`·`세대원 수`·`전입일자`도 컬럼이 없다 — 상업시설 신청에는 해당 없어
+    # BLANK_BY_POLICY가 빈칸으로 내보낸다. 반면 `영업개시일자`(business_open_date)는
+    # 사업자에게 유효하지만 마이데이터 사업자등록증명에 개업일자가 없어 직접 입력이다.
+    application_kind = Column(String(20))              # new(가입신청) | change(정보변경신청)
+    portal_id = Column(String(20))                     # 아이디(ID). 비밀번호는 받지 않는다
+    corporate_registration_no = Column(String(20))     # 법인번호 — 법인사업자만 해당
+    applicant_phone = Column(String(30))
+    applicant_email = Column(String(255))
+    postal_code = Column(String(10))                   # 사업자등록증명에 없어 직접 입력
+    road_address = Column(String(255))
+    address_detail = Column(String(255))
+    incentive_type = Column(String(30))                # enrollments.point_type과 같은 어휘
+    incentive_type_other = Column(String(100))         # ⑤기타( ) 자유기재
+    # 서식이 "인센티브 유형을 ②현금으로 선택한 분만" 기입하라고 명시한 칸.
+    bank_name = Column(String(50))
+    account_number = Column(String(50))
+    account_holder = Column(String(50))
+    # 고지서 고객번호 4종(서식의 전기·수도·도시가스·지역난방). 전기는 고지서 파싱으로
+    # 채워지지만 파싱 실패 시 사장님이 덮어쓸 수 있어야 해서 컬럼을 둔다.
+    electric_customer_number = Column(String(50))
+    water_customer_number = Column(String(50))
+    city_gas_customer_number = Column(String(50))
+    district_heating_customer_number = Column(String(50))
+    business_open_date = Column(Date)
+    # 3단계를 마지막으로 저장한 시각 — created_at(초안 생성 시각)과 구분된다.
+    applicant_input_updated_at = Column(DateTime(timezone=True))
+
     __table_args__ = (
         CheckConstraint(
             "application_type IN ('business', 'household')",
@@ -773,6 +814,17 @@ class CarbonNeutralPointApplication(Base):
         CheckConstraint(
             "status IN ('draft', 'submitted', 'approved', 'rejected')",
             name="ck_cnp_applications_status",
+        ),
+        # enrollments.point_type과 같은 5종 — 같은 제도의 같은 선택지라 두 테이블에 다른
+        # 값이 들어가면 초안과 가입 기록이 어긋난다. 'local_currency'는 서식에 없어 제외.
+        CheckConstraint(
+            "incentive_type IS NULL OR incentive_type IN "
+            "('gift_certificate', 'cash', 'cash_donation', 'green_card_point', 'other')",
+            name="ck_cnp_applications_incentive_type",
+        ),
+        CheckConstraint(
+            "application_kind IS NULL OR application_kind IN ('new', 'change')",
+            name="ck_cnp_applications_application_kind",
         ),
         Index("ix_cnp_applications_company", "company_id"),
     )

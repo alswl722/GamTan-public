@@ -11,6 +11,9 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from db.carbon_neutral_point import (
+    APPLICANT_FIELDS,
+    BLANK_BY_POLICY,
+    INCENTIVE_TYPES,
     MISSING_CONTRACT_TYPE,
     MISSING_GAS,
     MISSING_WATER,
@@ -19,7 +22,9 @@ from db.carbon_neutral_point import (
     THRESHOLD_PCT,
     build_application_draft,
     evaluate_eligibility,
+    missing_required_keys,
     notify_if_eligible,
+    save_applicant_input,
 )
 from db.models import (
     Base,
@@ -218,7 +223,8 @@ def test_draft_matches_frontend_contract(setup):
 
     draft = build_application_draft(db, company.id, 2026, 1)
 
-    assert set(draft) == {"application_id", "status", "fields", "remaining_fields", "draft_document_url"}
+    assert set(draft) == {"application_id", "status", "fields", "applicant_fields",
+                          "remaining_fields", "draft_document_url"}
     assert draft["status"] == "draft"
     assert draft["draft_document_url"] is None
     for f in draft["fields"]:
@@ -251,7 +257,11 @@ def test_draft_fills_address_from_mydata(setup):
 
 def test_contact_fields_are_owner_input(setup):
     """휴대전화번호·전자메일은 마이데이터 5종에 없다(국세청·중소벤처기업부·한전 서류) —
-    은행 내부 고객정보를 mock으로 지어내지 않고 사장님 입력으로 둔다(2026-08-24 결정)."""
+    은행 내부 고객정보를 mock으로 지어내지 않고 사장님 입력으로 둔다(2026-08-24 결정).
+
+    0032 이후 이 항목들은 "안내만 하는 잔여 필드"가 아니라 3단계 입력 폼(`applicant_fields`)의
+    칸이다 — 화면이 실제로 값을 받아 저장하게 됐다.
+    """
     db, company, inst = setup
     _eligible_history(db, company, inst)
 
@@ -260,28 +270,74 @@ def test_contact_fields_are_owner_input(setup):
     for label in ("신청인 휴대전화번호", "전자메일"):
         assert by_label[label]["value"] is None
         assert by_label[label]["source"] == "사장님 직접 입력"
-        assert label in " ".join(draft["remaining_fields"])
+
+    by_key = {f["key"]: f for f in draft["applicant_fields"]}
+    assert by_key["applicant_phone"]["required"] is True
+    assert by_key["applicant_email"]["required"] is False
 
 
-def test_draft_blanks_household_leftover_fields(setup):
-    """서식에 남은 가정용 항목은 감탄 데이터로 채우지 않고, 잔여 필드로도 넣지 않는다."""
+def test_draft_omits_household_leftover_fields(setup):
+    """서식에 남은 가정용 항목은 초안에 아예 넣지 않는다(2026-08-25).
+
+    이전엔 value=null로 "해당 없음"을 노출했는데, 채울 수도 없고 채울 필요도 없는 칸이
+    미리보기만 길게 만들어서 제외로 바꿨다. 입력 폼에도 없어야 한다.
+    """
     db, company, inst = setup
     _eligible_history(db, company, inst)
     draft = build_application_draft(db, company.id, 2026, 1)
 
-    by_label = {f["label"]: f for f in draft["fields"]}
-    for label in ("거주 면적(m²)", "세대원 수", "전입일자"):
-        assert by_label[label]["value"] is None
+    labels = {f["label"] for f in draft["fields"]}
+    for label in BLANK_BY_POLICY:
+        assert label not in labels
         assert label not in " ".join(draft["remaining_fields"])
+    assert not ({f["label"] for f in draft["applicant_fields"]} & set(BLANK_BY_POLICY))
 
 
-def test_draft_lists_owner_input_fields(setup):
+def test_remaining_fields_only_carry_password_notice(setup):
+    """잔여 필드는 "감탄도 사장님도 여기서 채울 수 없는 것"만 남는다.
+
+    비밀번호는 탄소중립포인트 포털 계정의 것이라 감탄이 받아 보관할 단계가 없다 —
+    타 기관 자격증명을 대신 들고 있지 않는다. 입력 폼에도 비밀번호 칸이 없어야 한다.
+    """
     db, company, inst = setup
     _eligible_history(db, company, inst)
-    remaining = build_application_draft(db, company.id, 2026, 1)["remaining_fields"]
-    assert remaining == list(REMAINING_FIELDS)
-    joined = " ".join(remaining)
-    assert "인센티브 유형" in joined and "계좌번호" in joined
+    draft = build_application_draft(db, company.id, 2026, 1)
+
+    assert draft["remaining_fields"] == list(REMAINING_FIELDS)
+    assert "비밀번호" in " ".join(draft["remaining_fields"])
+    keys = {f["key"] for f in draft["applicant_fields"]}
+    assert not any("password" in k or "비밀번호" in k for k in keys)
+
+
+def test_applicant_fields_expose_form_spec(setup):
+    """3단계 폼 명세는 백엔드가 정본이다 — 라벨·필수여부·선택지 어휘까지."""
+    db, company, inst = setup
+    _eligible_history(db, company, inst)
+    applicant_fields = build_application_draft(db, company.id, 2026, 1)["applicant_fields"]
+
+    assert [f["key"] for f in applicant_fields] == [f.key for f in APPLICANT_FIELDS]
+    for f in applicant_fields:
+        assert set(f) == {"key", "label", "input_type", "required", "group",
+                          "placeholder", "help_text", "options", "visible_when", "value"}
+
+    by_key = {f["key"]: f for f in applicant_fields}
+    # 인센티브 유형 선택지는 DB CHECK와 같은 어휘여야 한다.
+    assert [o["value"] for o in by_key["incentive_type"]["options"]] == [
+        v for v, _ in INCENTIVE_TYPES
+    ]
+    # 금융정보는 서식이 "②현금으로 선택한 분에 한하여"라고 명시한 조건부 항목이다.
+    assert by_key["account_number"]["visible_when"] == {"key": "incentive_type", "equals": "cash"}
+
+
+def test_electric_customer_number_prefilled_from_bill(setup):
+    """전기 고객번호는 고지서 파싱값을 폼 기본값으로 깔아준다 — 서식 필수 항목인데
+    빈칸부터 시작하게 두면 이미 아는 값을 사장님이 다시 찾아 적게 된다."""
+    db, company, inst = setup
+    _eligible_history(db, company, inst)
+
+    by_key = {f["key"]: f
+              for f in build_application_draft(db, company.id, 2026, 1)["applicant_fields"]}
+    assert by_key["electric_customer_number"]["value"] == "0355-7712-90"
 
 
 def test_draft_persists_row_only_when_eligible(setup):
@@ -312,3 +368,139 @@ def test_draft_does_not_persist_when_not_eligible(setup):
     draft = build_application_draft(db, company.id, 2026, 1)
     assert draft["application_id"] is None
     assert db.execute(select(CarbonNeutralPointApplication)).scalars().all() == []
+
+
+# ── 3단계 사장님 직접 입력 저장 (0032) ──────────────────────────────────────
+
+
+def test_draft_reuses_existing_draft_row(setup):
+    """POST를 다시 불러도 draft 행이 늘어나지 않는다.
+
+    위저드를 다시 열 때마다 새 행이 생기면 3단계에서 받은 입력이 매번 사라진다 —
+    입력이 붙어 있는 행을 재사용하고 계산값만 갱신한다.
+    """
+    db, company, inst = setup
+    _eligible_history(db, company, inst)
+
+    first = build_application_draft(db, company.id, 2026, 1)["application_id"]
+    second = build_application_draft(db, company.id, 2026, 1)["application_id"]
+
+    assert first == second
+    assert len(db.execute(select(CarbonNeutralPointApplication)).scalars().all()) == 1
+
+
+def test_draft_reuse_preserves_applicant_input(setup):
+    """재계산이 사장님 입력을 지우지 않는다."""
+    db, company, inst = setup
+    _eligible_history(db, company, inst)
+    app_id = build_application_draft(db, company.id, 2026, 1)["application_id"]
+
+    save_applicant_input(db, company.id, app_id, {"applicant_phone": "01012345678"})
+    draft = build_application_draft(db, company.id, 2026, 1)
+
+    by_key = {f["key"]: f for f in draft["applicant_fields"]}
+    assert by_key["applicant_phone"]["value"] == "01012345678"
+    # 초안 미리보기에도 같은 값이 반영돼야 한다 — 같은 화면의 두 단계가 다른 값을 보이면 안 된다.
+    by_label = {f["label"]: f for f in draft["fields"]}
+    assert by_label["신청인 휴대전화번호"]["value"] == "01012345678"
+
+
+def test_draft_does_not_touch_submitted_row(setup):
+    """제출했다고 표시한 신청서는 재계산 대상이 아니다 — 새 draft를 따로 만든다."""
+    db, company, inst = setup
+    _eligible_history(db, company, inst)
+    submitted_id = build_application_draft(db, company.id, 2026, 1)["application_id"]
+    db.get(CarbonNeutralPointApplication, submitted_id).status = "submitted"
+    db.commit()
+
+    new_id = build_application_draft(db, company.id, 2026, 1)["application_id"]
+
+    assert new_id != submitted_id
+    assert db.get(CarbonNeutralPointApplication, submitted_id).status == "submitted"
+
+
+def test_save_applicant_input_is_partial(setup):
+    """보낸 key만 갱신한다 — 폼을 다 채우기 전에 나가도 지금까지 쓴 게 남아야 한다."""
+    db, company, inst = setup
+    _eligible_history(db, company, inst)
+    app_id = build_application_draft(db, company.id, 2026, 1)["application_id"]
+
+    save_applicant_input(db, company.id, app_id, {"applicant_phone": "01011112222"})
+    result = save_applicant_input(db, company.id, app_id, {"applicant_email": "a@b.com"})
+
+    assert result["values"]["applicant_phone"] == "01011112222"
+    assert result["values"]["applicant_email"] == "a@b.com"
+
+
+def test_save_applicant_input_blank_becomes_null(setup):
+    """빈 문자열은 "지웠다"는 뜻이라 null로 저장한다 — ""와 null이 섞이면 미입력 판정이
+    두 갈래가 된다(원칙7과 같은 결)."""
+    db, company, inst = setup
+    _eligible_history(db, company, inst)
+    app_id = build_application_draft(db, company.id, 2026, 1)["application_id"]
+
+    save_applicant_input(db, company.id, app_id, {"applicant_email": "a@b.com"})
+    result = save_applicant_input(db, company.id, app_id, {"applicant_email": "   "})
+
+    assert result["values"]["applicant_email"] is None
+    assert db.get(CarbonNeutralPointApplication, app_id).applicant_email is None
+
+
+def test_save_applicant_input_parses_date(setup):
+    """영업개시일자는 date 컬럼이라 ISO 문자열을 변환해 저장하고, 다시 ISO로 돌려준다."""
+    db, company, inst = setup
+    _eligible_history(db, company, inst)
+    app_id = build_application_draft(db, company.id, 2026, 1)["application_id"]
+
+    result = save_applicant_input(db, company.id, app_id, {"business_open_date": "2019-03-14"})
+
+    assert result["values"]["business_open_date"] == "2019-03-14"
+    assert db.get(CarbonNeutralPointApplication, app_id).business_open_date.year == 2019
+
+
+def test_save_applicant_input_reports_missing_required(setup):
+    """필수 미입력은 에러가 아니라 목록으로 돌려준다 — 화면이 다음 단계 버튼을 막는 근거."""
+    db, company, inst = setup
+    _eligible_history(db, company, inst)
+    app_id = build_application_draft(db, company.id, 2026, 1)["application_id"]
+
+    result = save_applicant_input(db, company.id, app_id, {"applicant_phone": "01011112222"})
+
+    assert "applicant_phone" not in result["missing_required"]
+    assert "portal_id" in result["missing_required"]
+    # 전기 고객번호는 고지서에서 읽혔지만 아직 저장 전이라 미입력으로 잡힌다 — 화면은
+    # 파싱값을 기본값으로 채워 보여주고 저장 시 함께 보낸다.
+    assert "electric_customer_number" in result["missing_required"]
+
+
+def test_missing_required_skips_hidden_conditional_fields():
+    """화면에 안 나오는 조건부 칸은 미입력으로 세지 않는다 — 인센티브를 상품권으로 골랐다면
+    계좌번호는 애초에 물어보지 않았다."""
+    filled = {
+        "application_kind": "new", "portal_id": "cafe0001",
+        "applicant_phone": "01011112222", "road_address": "대구 중구 ○○로 11",
+        "electric_customer_number": "0355-7712-90",
+    }
+    assert missing_required_keys({**filled, "incentive_type": "gift_certificate"}) == []
+    assert missing_required_keys({**filled, "incentive_type": "cash"}) == []
+
+
+def test_save_applicant_input_rejects_other_company(setup):
+    db, company, inst = setup
+    _eligible_history(db, company, inst)
+    app_id = build_application_draft(db, company.id, 2026, 1)["application_id"]
+
+    with pytest.raises(LookupError):
+        save_applicant_input(db, company.id + 999, app_id, {"applicant_phone": "01011112222"})
+
+
+def test_save_applicant_input_rejects_submitted(setup):
+    """이미 제출한 신청서는 수정하지 않는다 — 사장님이 실제로 낸 내용과 기록이 어긋난다."""
+    db, company, inst = setup
+    _eligible_history(db, company, inst)
+    app_id = build_application_draft(db, company.id, 2026, 1)["application_id"]
+    db.get(CarbonNeutralPointApplication, app_id).status = "submitted"
+    db.commit()
+
+    with pytest.raises(PermissionError):
+        save_applicant_input(db, company.id, app_id, {"applicant_phone": "01011112222"})

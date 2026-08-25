@@ -1,18 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import Link from "next/link";
+import { useEffect, useState } from "react";
 import { ArrowRight, Check, FileText, Leaf } from "lucide-react";
+import { getCarbonPointEligibility, type CarbonPointEligibility } from "@/lib/api";
 import {
   CARBON_POINT_GAUGE_MAX_PCT,
   CARBON_POINT_THRESHOLD_PCT,
-  FIXTURE_BADGE_LABEL,
   KRW_PER_POINT,
   estimateRefund,
-  getDraftFixture,
-  getEligibilityFixture,
-  useCarbonPointScenario,
-} from "@/lib/carbon-point-fixture";
-import { CarbonPointDraftSheet } from "@/components/CarbonPointDraftSheet";
+} from "@/lib/carbon-point";
 
 /** 감축률 게이지 — 기준선(5%)을 눈금으로 찍어 "넘었는지"를 색이 아니라 위치로 보여준다.
  * 상한(10%)을 넘는 값은 막대가 꽉 찬 상태로 고정된다. */
@@ -45,8 +42,8 @@ function ReductionGauge({ pct }: { pct: number }) {
  * 소상공인 전용 섹션. docs/small-business-green-supply-develop-plan.md §3.3 정본.
  *
  * RateProductCard·KTaxonomyCard·GovSupportCard와 같은 자기완결형 패턴을 따른다
- * ({ companyId }만 받고, 보여줄 게 없으면 스스로 숨는다). 다만 데이터 출처는 아직
- * fetch가 아니라 fixture다(§3.0 — 백엔드 §9.1 API 미구현).
+ * ({ companyId }만 받고, 보여줄 게 없으면 스스로 숨는다). 2026-08-25에 fixture를 걷고
+ * §9.1 API(GET /owner/{id}/carbon-point/eligibility)에 붙였다.
  *
  * 이름이 data-plan.md §10.1의 `GovSupportCard`가 아닌 이유: 그 이름은 이미 정부
  * 지원사업 매칭 카드가 점유하고 있다(web/components/GovSupportCard.tsx).
@@ -56,11 +53,22 @@ function ReductionGauge({ pct }: { pct: number }) {
  * "미확인"도 노출하지 않는다(판별 실패 상태에서 자격을 말할 수 없다) — 그 경우의
  * 계약종별 재확인 안내는 페이지(§3.2)가 담당한다. */
 export function CarbonPointCard({ companyId }: { companyId: number | null }) {
-  const scenario = useCarbonPointScenario();
-  const eligibility = getEligibilityFixture(scenario);
-  const [draftOpen, setDraftOpen] = useState(false);
+  const [eligibility, setEligibility] = useState<CarbonPointEligibility | null>(null);
 
-  if (companyId === null) return null;
+  useEffect(() => {
+    if (companyId === null) return;
+    let cancelled = false;
+    getCarbonPointEligibility(companyId)
+      .then((res) => {
+        if (!cancelled) setEligibility(res);
+      })
+      .catch((err) => console.error("탄소중립포인트 자격 조회 실패:", err));
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId]);
+
+  if (companyId === null || eligibility === null) return null;
   if (eligibility.business_scale_hint !== "소상공인/상업시설") return null;
 
   const { reduction_rate_pct, eligible, missing_data } = eligibility;
@@ -154,14 +162,13 @@ export function CarbonPointCard({ companyId }: { companyId: number | null }) {
         {/* 신청서 초안은 자격을 충족했을 때만 열어준다(data-plan §6.2 — 판정이 통과한
             경우에만 신청 절차로 이어진다). 미달일 때는 왜 아직 안 되는지만 알려준다. */}
         {eligible ? (
-          <button
-            type="button"
-            onClick={() => setDraftOpen(true)}
+          <Link
+            href="/owner/carbon-point"
             className="btn-cta mt-4 flex w-full items-center justify-center gap-1.5 rounded-2xl bg-gradient-to-r from-brand-ink to-brand py-3.5 text-[14px] font-bold text-white"
           >
-            신청서 초안 보기
+            신청서 초안 작성하러 가기
             <ArrowRight size={14} strokeWidth={2.4} />
-          </button>
+          </Link>
         ) : (
           <p className="mt-4 text-[12px] leading-relaxed text-muted">
             예상 감축률이 {CARBON_POINT_THRESHOLD_PCT}%를 넘으면 신청서 초안을 만들어 드려요.
@@ -173,20 +180,7 @@ export function CarbonPointCard({ companyId }: { companyId: number | null }) {
         <p className="mt-3 text-[11px] leading-relaxed text-faint">
           예상 감축률 기준이며, 실제 심사·지급은 한국환경공단이 진행합니다.
         </p>
-
-        <div className="mt-2">
-          <span className="inline-block rounded-full bg-line px-2 py-0.5 text-[10px] font-semibold text-faint">
-            {FIXTURE_BADGE_LABEL}
-          </span>
-        </div>
       </div>
-
-      {draftOpen && (
-        <CarbonPointDraftSheet
-          draft={getDraftFixture(scenario)}
-          onClose={() => setDraftOpen(false)}
-        />
-      )}
     </div>
   );
 }
