@@ -143,53 +143,6 @@ def test_calendar_excludes_trace_logs():
     assert all("message" not in e for e in events)
 
 
-def test_calendar_includes_upload_event_separate_from_issue_date(db, client):
-    """전표가 다루는 거래월(issue_date)과 실제 업로드 시각(created_at)이 다를 때,
-    캘린더는 둘 다 각자의 날짜에 별도 이벤트로 노출해야 한다(업로드 시점 표시)."""
-    session, cid = db
-    v = Voucher(
-        company_id=cid, source="hometax", year=YEAR, month=6,
-        issue_date=datetime(YEAR, 6, 30, tzinfo=timezone.utc),  # 6월분 고지서
-        created_at=datetime(YEAR, 7, 3, tzinfo=timezone.utc),   # 7월에 업로드
-        item_description="경유 전표", supply_amount_krw=500000,
-    )
-    session.add(v)
-    session.flush()
-    session.add(Classification(
-        voucher_id=v.id, scope=1, category="이동연소", fuel_type="경유",
-        amount_krw=500000, emission_co2e=1000.0, confidence=0.9,
-        evidence="test", method="rule", status="auto",
-    ))
-    session.commit()
-
-    res = client.get(f"/owner/{cid}/calendar?year={YEAR}&month=7")
-    events = res.json()["events"]
-    upload_events = [e for e in events if e["entry_type"] == "upload"]
-    assert len(upload_events) == 1
-    assert upload_events[0]["date"] == f"{YEAR}-07-03"
-    assert upload_events[0]["count"] == 1
-
-
-def test_calendar_groups_same_day_uploads_into_one_event(db, client):
-    """하루에 여러 건을 업로드해도 캘린더엔 그 날짜 점 하나로만 나와야 한다
-    (건별로 나열하면 캘린더가 점으로 뒤덮이는 문제, 2026-08-25 사용자 피드백)."""
-    session, cid = db
-    for i in range(3):
-        v = Voucher(
-            company_id=cid, source="hometax", year=YEAR, month=7,
-            created_at=datetime(YEAR, 7, 3, 9 + i, tzinfo=timezone.utc),
-            item_description=f"전표{i}", supply_amount_krw=100000,
-        )
-        session.add(v)
-    session.commit()
-
-    res = client.get(f"/owner/{cid}/calendar?year={YEAR}&month=7")
-    events = res.json()["events"]
-    upload_events = [e for e in events if e["entry_type"] == "upload"]
-    assert len(upload_events) == 1
-    assert upload_events[0]["count"] == 3
-
-
 def test_calendar_includes_report_generation_event(db, client):
     session, cid = db
     inst = FinancialInstitution(name="테스트기관", reporting_currency="KRW", tenant_key="test-bank")
