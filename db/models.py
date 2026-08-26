@@ -221,6 +221,30 @@ class LlmCache(Base):
     last_used_at = Column(DateTime(timezone=True), default=now)
 
 
+class ReductionTodoRerankCache(Base):
+    """감축 실천 ToDo 순서 재배치(db/pcaf_engine/reduction_todo.py::_llm_rerank_todos)
+    캐시 — LlmCache와 달리 입력이 텍스트 한 줄이 아니라 (기업, todos 후보 집합,
+    연료별 배출량 요약) 조합이라 별도 테이블로 둔다. 홈 화면 카드가 열릴 때마다
+    같은 조합이면 재계산 없이 순서만 재사용한다.
+
+    cache_key = SHA256(company_id + 정렬된 todos id 목록 + fuel_summary) — 새
+    전표가 들어와 배출량이 바뀌거나 설비 신호 구성이 바뀌면 키 자체가 달라져
+    자동으로 무효화된다(별도 만료 로직 불필요)."""
+    __tablename__ = "reduction_todo_rerank_cache"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    cache_key = Column(String(64), nullable=False, unique=True)  # SHA256
+    ordered_ids = Column(JSON, nullable=False)  # LLM이 정한 candidate id 순서
+    hit_count = Column(Integer, default=0)
+    created_at = Column(DateTime(timezone=True), default=now)
+    last_used_at = Column(DateTime(timezone=True), default=now)
+
+    __table_args__ = (
+        Index("ix_reduction_todo_rerank_cache_company", "company_id"),
+    )
+
+
 class IndustryDistribution(Base):
     """업종별 배출량 분포 — 환경정보공개시스템, 벤치마킹 + 이상치 검증용 (도구④)"""
     __tablename__ = "industry_distributions"

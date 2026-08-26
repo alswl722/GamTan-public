@@ -349,6 +349,50 @@ export function getKTaxonomyLeads(companyId: number): Promise<KTaxonomyLeadsResp
   return apiGet<KTaxonomyLeadsResponse>(`/owner/${companyId}/k-taxonomy-leads`);
 }
 
+// GET /owner/{company_id}/reduction-todo — db/pcaf_engine/reduction_todo.py::
+// reduction_todo_for_company. 정본: docs/reduction-todo-plan.md.
+//
+// 문장 자체는 전부 정적 카탈로그다(원칙1 — LLM은 문장을 짓지 않는다). 설비
+// 신호가 매칭되면 LLM이 이 기업의 연료별 배출량·업종·동종업계 비교를 보고
+// 이미 매칭된 후보들의 순서만 재배치할 수 있다(§15).
+//
+// business_scale_hint는 db/carbon_neutral_point.py::business_scale_hint()를 그대로
+// 반환한 값 — 이 엔드포인트가 새로 판정하지 않는다. 소상공인("소상공인/상업시설")은
+// 설비 신호(2층)가 원래 약한 트랙이라 todos가 항상 FALLBACK_TIPS로 채워진다(탄소중립
+// 포인트 트랙과 감축률을 중복 계산하지 않기 위해 — CarbonPointCard가 이미 그 숫자를
+// 다룬다). 제조업은 설비 신호가 있으면 그 설비의 동사형 문장이 우선되고, 없으면
+// 마찬가지로 tips로 폴백한다. todos는 항상 최소 1개 이상 채워진다(§6 빈 화면 금지).
+//
+// 2026-08-26: 이전엔 응답에 goals(3층 기준부하 숫자) 필드가 함께 있었으나,
+// 화면 어디에도 렌더링되지 않는 죽은 필드로 확인돼 제거했다 — 그 계산 자체는
+// 백엔드에서 LLM 선별의 입력으로는 계속 쓰인다(응답에만 안 나갈 뿐).
+//
+// 2026-08-26: reorder_status 추가 — LLM 재배치가 그 자리에서 기다리지 않고
+// BackgroundTasks로 넘어가기 시작하면서(Gemini 타임아웃이 응답 전체를 막던
+// 문제 실측 대응), 지금 보이는 순서가 "이미 개인화된 최종 결과"인지 "아직
+// 기본 순서를 보여주는 중"인지 화면에서 구분할 수 있어야 했다(사용자 지적:
+// "AI분석 중이면 분석중이라고 떠야할거같음"). "ready"=캐시된 순서(재배치
+// 완료 또는 애초에 재배치 대상 아님), "pending"=원래 순서를 우선 보여주는
+// 중, 백그라운드에서 재배치가 진행 중. 설비 신호 자체가 없어(소상공인 포함)
+// FALLBACK_TIPS로 빠지는 경로엔 이 필드가 아예 없다 — 재배치 대상이 아니므로
+// "분석 중"이라고 할 것도 없다("매칭 결과 없을시에는 기본 폴백" 사용자 확정).
+export interface ReductionTodoItem {
+  id: string;
+  label: string; // 동사형 할 일 문장 — 카드의 메인 콘텐츠
+  note: string | null; // 부가 설명(출처·근거) — 있을 수도 없을 수도 있음
+}
+export interface ReductionTodoResponse {
+  business_scale_hint: string; // "제조업/산업체" | "소상공인/상업시설" | "가정용/개인참여" | "미확인"
+  todos: ReductionTodoItem[]; // 항상 최소 1개
+  reorder_status?: "ready" | "pending"; // 설비 신호 경로에서만 존재
+}
+
+/** 홈 화면 "이번주 할 일" 카드 — 동사형 할 일 문장(todos)을 반환한다. 항상
+ * 채워지므로 이 응답만으로 빈 상태 분기 없이 카드를 그릴 수 있다. */
+export function getReductionTodo(companyId: number): Promise<ReductionTodoResponse> {
+  return apiGet<ReductionTodoResponse>(`/owner/${companyId}/reduction-todo`);
+}
+
 // GET /owner/{company_id}/anomaly-checks — api/queries.py::get_pending_anomaly_checks.
 // 이상치 되묻기(docs/tasks.md) — 에이전트가 코드로 판별한 이상치를 사장님에게
 // "맞나요?" 확인받는다. 숫자는 절대 안 받는다 — 예/아니오/모르겠어요만.

@@ -41,8 +41,18 @@ def _freeze_coverage_year(monkeypatch):
 
 
 def _stub_llm_classify(text: str, amount: int, rule_hint=None) -> dict:
-    """키워드 기반 완벽 분류 스텁 — LLM 대상(애매 표현) 건에 결정론적 응답."""
-    if "가스" in text or "LNG" in text or "난방유" not in text and "난방" in text:
+    """키워드 기반 완벽 분류 스텁 — LLM 대상(애매 표현) 건에 결정론적 응답.
+
+    "가스/전기 아니면 무조건 경유"인 else 분기가 있어, R058(설비 유지보수비,
+    db/scenarios.py의 공통 설비 신호 전표)처럼 세 연료 어디에도 안 걸리는
+    문구가 LLM으로 위임되면 실제로는 scope=None(설비투자 불명확, 실측 확인
+    api/agent/llm_classify.py)이어야 하는데 이 스텁만 "경유"로 오분류해
+    _check_anomalies()의 Scope1 이상치 판정을 오염시켰다(2026-08-25 실측
+    — 정상 시나리오에서 12월 경유 총량에 설비 전표 금액이 섞여 이상치로 잡힘).
+    rule_hint로 "설비투자 불명확" 계열이 넘어오면 그 판단을 그대로 따른다."""
+    if rule_hint is not None and rule_hint.get("category") in ("감축투자 후보", "설비투자 불명확"):
+        scope, category, fuel = None, rule_hint["category"], "없음"
+    elif "가스" in text or "LNG" in text or "난방유" not in text and "난방" in text:
         scope, category, fuel = 1, "고정연소", "도시가스"
     elif "전기" in text or "전력" in text or "한전" in text:
         scope, category, fuel = 2, "간접배출", "전기"
