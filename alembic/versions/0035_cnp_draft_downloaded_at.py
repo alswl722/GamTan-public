@@ -15,15 +15,12 @@ data-plan §3.2), 실제로 눌러줄 이유가 사장님에겐 거의 없다. �
 **첫 다운로드만 기록한다**(라우터가 null일 때만 채운다). 재다운로드로 날짜를 갱신하면
 캘린더의 과거 이벤트가 사라져 이동한다 — 이미 일어난 일이 사라지면 안 된다.
 
-⚠️ **리비전 번호 주의(2026-08-26).** 이 파일은 `0033`에서 갈라진다. 공유 DB는 이미
-`0034`(reduction_todo_rerank_cache)로 스탬프돼 있는데 그 리비전은 아직 dev에 병합되지
-않은 브랜치(`feat/reduction-todo-catalog`)에만 있다. `0034`에 의존하게 만들면 그 브랜치가
-리베이스·폐기될 때 이 파일이 실행 불가가 되므로, 병합되지 않은 것에 기대지 않고 `0033`에서
-갈랐다. 두 브랜치가 만나는 시점에 head가 둘이 되므로 **머지 리비전이 필요하다**
-(`alembic merge -m "..." 0034 0035`). 갈라짐을 감추지 않고 드러내는 쪽을 택한 것이다.
+이 revision을 만든 시점에 `0034`(reduction_todo_rerank_cache)가 아직 dev에 병합되지 않아
+`0033`에서 갈라둔 적이 있다. PR #129가 병합되면서 `0034`를 선행으로 되돌렸다 — 갈라놓을
+이유가 사라졌고 `0033→0034→0035` 선형이라 머지 리비전이 필요 없다.
 
 Revision ID: 0035
-Revises: 0033
+Revises: 0034
 Create Date: 2026-08-26 00:00:00.000000
 
 """
@@ -35,7 +32,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = '0035'
-down_revision: Union[str, Sequence[str], None] = '0033'
+down_revision: Union[str, Sequence[str], None] = '0034'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
