@@ -142,6 +142,26 @@ body {
   opacity: 0.6;
 }
 
+/* 감축 실천 ToDo 카드("이번 달엔 이렇게 해보세요") — 은은하게 숨쉬는 민트
+   그림자. 사용자 지시: "해당 컴포넌트 배경 이펙트를 움직이는 그림자 넣어봐".
+   shadow-float(브랜드 톤 rgba(0, 150, 127, ...))을 기준으로 강도만 오갔다 —
+   btn-cta 호버가 같은 색을 쓰는 것과 같은 결, 새 색을 도입하지 않는다.
+   느린 주기(5s)로 은은하게만 움직여 카드가 산만해지지 않게 한다. */
+@keyframes card-glow {
+  0%,
+  100% {
+    box-shadow: var(--shadow-card);
+  }
+  50% {
+    box-shadow:
+      0 1px 2px rgba(23, 24, 28, 0.04),
+      0 16px 40px -12px rgba(0, 150, 127, 0.28);
+  }
+}
+.card-glow {
+  animation: card-glow 5s ease-in-out infinite;
+}
+
 /* 에이전트/분류 진행 중 점 3개 — 통통 튀는 느낌을 주려고 오버슈트 이징 사용 */
 @keyframes dot-bounce {
   0%,

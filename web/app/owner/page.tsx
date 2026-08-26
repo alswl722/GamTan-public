@@ -17,6 +17,7 @@ import {
 import OwnerNotificationBanner from "@/components/OwnerNotificationBanner";
 import CarbonPointNoticeBanner from "@/components/CarbonPointNoticeBanner";
 import { GoalBox } from "@/components/GoalCard";
+import { ReductionTodoCard } from "@/components/ReductionTodoCard";
 import { GoalSheet } from "@/components/GoalSheet";
 
 /** 사장님 앱 메인 화면 — 계정(로그인) 개념이 없어 기업을 직접 골라야 한다.
@@ -263,6 +264,8 @@ export default function OwnerHomePage() {
           }}
         />
       )}
+
+      {selectedId !== null && <ReductionTodoCard companyId={selectedId} />}
 
       {selectedId !== null && <OwnerNotificationBanner companyId={selectedId} />}
       {selectedId !== null && <CarbonPointNoticeBanner companyId={selectedId} />}
