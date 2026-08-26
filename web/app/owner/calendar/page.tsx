@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -141,7 +142,13 @@ export default function CarbonCalendarPage() {
             href="/owner/briefing"
             className="btn-cta flex items-center gap-2.5 rounded-2xl bg-brand-soft px-3.5 py-3"
           >
-            <span className="text-2xl leading-none">🌳</span>
+            <Image
+              src="/woodi_letter_1.png"
+              alt="우디"
+              width={624}
+              height={830}
+              className="h-11 w-auto shrink-0 object-contain"
+            />
             <span className="flex-1">
               <span className="block text-[12px] font-bold text-brand-ink">
                 우디의 {cursor.month}월 브리핑 도착!

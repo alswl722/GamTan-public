@@ -90,6 +90,7 @@ from db.gov_support.matching import (
     raw_text_by_program_id,
 )
 from db.pcaf_engine.k_taxonomy import k_taxonomy_leads_for_company
+from db.pcaf_engine.reduction_todo import reduction_todo_for_company, run_rerank_and_cache
 from db.models import (
     CarbonNeutralPointApplication,
     Classification,
@@ -554,6 +555,42 @@ def k_taxonomy_leads(company_id: int, session: Session = Depends(get_session)):
     데이터를 자기 기업으로 좁혀 재사용한다(db/k_taxonomy.py::k_taxonomy_leads_for_company).
     """
     return {"leads": k_taxonomy_leads_for_company(session, company_id)}
+
+
+@router.get("/{company_id}/reduction-todo")
+def reduction_todo(
+    company_id: int,
+    background_tasks: BackgroundTasks,
+    session: Session = Depends(get_session),
+):
+    """홈 화면 "이번주 할 일" 카드 — 동사형 할 일 문장(todos).
+
+    정본: docs/reduction-todo-plan.md. 문장 자체는 전부 정적 카탈로그다(원칙1
+    — LLM은 문장을 짓지 않는다). 설비 신호가 매칭되면 LLM이 이 기업의 연료별
+    배출량·업종·동종업계 비교를 보고 이미 매칭된 후보들의 **순서만** 재배치할
+    수 있다(§15) — 문장은 절대 안 바뀐다.
+
+    2026-08-26: 재배치를 그 자리에서 기다리지 않는다(Gemini 호출이 타임아웃
+    나면 응답 전체가 막히는 문제 실측 — 포항이엔지·대구정공, 504
+    DEADLINE_EXCEEDED). 캐시가 있으면 즉시 그 순서(`reorder_status: "ready"`),
+    없으면 원래 순서를 우선 보여주며(`reorder_status: "pending"`) 실제 재배치는
+    BackgroundTasks로 넘긴다 — 완료되면 캐시에 쌓여 다음 방문부터 반영된다.
+    설비 신호가 없어(소상공인 포함) 처음부터 재배치 대상이 아닌 경우엔
+    reorder_status 필드 자체가 없다("매칭 결과 없을시에는 기본 폴백" 사용자
+    확정) — 이때는 검증 불가능해 카탈로그 정식 목표에 못 들어가는 정적 참고
+    팁(FALLBACK_TIPS, §6)으로 채운다. todos는 항상 채워져 있어 카드가 빈
+    화면이 되지 않는다.
+
+    months를 생략해 db/pcaf_engine/reduction_actions.py::monthly_by_fuel()의
+    기본 동작(전체 기간 합산)을 그대로 쓴다 — 롤링 12개월 윈도우
+    (company_goals.py::_trailing_months)는 그 모듈 내부 전용이라 여기서
+    재계산하지 않는다.
+    """
+    result = reduction_todo_for_company(session, company_id)
+    job = result.pop("_rerank_background_job", None)
+    if job is not None:
+        background_tasks.add_task(run_rerank_and_cache, *job)
+    return result
 
 
 @router.get("/{company_id}/gov-support-candidates")
