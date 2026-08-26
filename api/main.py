@@ -45,6 +45,10 @@ app.add_middleware(
     ],
     allow_methods=["*"],
     allow_headers=["*"],
+    # 첨부파일 다운로드가 서버가 정한 파일명을 쓸 수 있게 노출한다 — CORS 기본값은
+    # 응답 헤더 중 몇 개만 JS에 보여주고 Content-Disposition은 가린다. 안 열어두면
+    # 프론트가 파일명을 못 읽어 자기가 지어낸 이름으로 저장한다(신청서 초안 다운로드).
+    expose_headers=["Content-Disposition"],
 )
 
 # 라우터 등록 (기존 health 는 아래 그대로 유지)

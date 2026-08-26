@@ -27,6 +27,7 @@
 - GET   /owner/{company_id}/carbon-point/eligibility  탄소중립포인트 자격 판정(감탄 예상치)
 - POST  /owner/{company_id}/carbon-point/applications 신청서 초안 생성(자격 충족 시 draft 저장)
 - GET   /owner/{company_id}/carbon-point/applications/{id}   초안 단건 조회
+- GET   /owner/{company_id}/carbon-point/applications/{id}/draft.pdf  초안 PDF(실물 서식 4쪽)
 - PATCH /owner/{company_id}/carbon-point/applications/{id}   제출 이후 상태를 사장님이 직접 갱신
 - PATCH /owner/{company_id}/carbon-point/applications/{id}/applicant-input  4단계 위저드 3단계 입력 저장
 
@@ -39,8 +40,10 @@ import asyncio
 import os
 from datetime import datetime, timezone
 from typing import Literal
+from urllib.parse import quote
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -69,11 +72,13 @@ from db.carbon_neutral_point import (
     INCENTIVE_TYPES,
     SETTLEMENT_MONTHS,
     applicant_saved_values,
+    application_print_values,
     build_application_draft,
     evaluate_eligibility,
     missing_required_keys,
     save_applicant_input,
 )
+from db.reports.cnp_application_pdf import build_application_draft_pdf
 from db.document.document_coverage import (
     delete_source_document,
     document_pending_review_count,
@@ -811,6 +816,44 @@ def get_carbon_point_application(
         "applicant_input": applicant_saved_values(row),
         "missing_required": missing_required_keys(applicant_saved_values(row)),
     }
+
+
+@router.get("/{company_id}/carbon-point/applications/{application_id}/draft.pdf")
+def download_carbon_point_draft(
+    company_id: int, application_id: int, session: Session = Depends(get_session)
+):
+    """신청서 초안 PDF — 실물 서식(4쪽) 위에 값을 얹어 즉석 생성한다.
+
+    파일을 디스크에 두지 않는 이유는 `draft_document_path()` 주석 참고 — 초안은 제출 전까지
+    계속 바뀌는 문서라, 요청 시점에 만들어야 화면에 보이는 값과 PDF가 항상 같다.
+
+    **필수 항목이 비어 있어도 내려준다**(2026-08-26 결정). 빈 칸은 빈 칸으로 인쇄되고
+    사장님이 손으로 채운다 — 어디가 비었는지는 위저드 3단계가 `missing_required`로 이미
+    알려준다. 대신 없는 값을 그럴싸하게 채우지 않는다.
+
+    남의 초안은 404다(테넌트 경계, 위 조회·수정과 같은 규칙).
+    """
+    row = session.get(CarbonNeutralPointApplication, application_id)
+    if row is None or row.company_id != company_id:
+        raise HTTPException(status_code=404, detail="application not found")
+
+    pdf_bytes = build_application_draft_pdf(
+        application_print_values(session, company_id, row)
+    )
+    # 탄소 캘린더가 이 시각을 쓴다 — **첫 다운로드만** 기록한다(0035 주석). 재다운로드로
+    # 갱신하면 캘린더의 과거 이벤트가 이동해 이미 일어난 일이 사라진다. PDF 생성이 성공한
+    # 뒤에 찍는다 — 실패한 요청을 "내려받았다"로 기록하지 않는다.
+    if row.draft_downloaded_at is None:
+        row.draft_downloaded_at = datetime.now(timezone.utc)
+        session.commit()
+    # HTTP 헤더는 latin-1만 허용해 한글 파일명을 그대로 못 넣는다 — RFC 6266의
+    # filename*=UTF-8'' 로 퍼센트 인코딩한다(admin.py 원본문서 다운로드와 같은 방식).
+    filename = quote(f"탄소중립포인트_참여신청서_초안_{row.target_year}.pdf")
+    return StreamingResponse(
+        iter([pdf_bytes]),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"},
+    )
 
 
 @router.patch("/{company_id}/carbon-point/applications/{application_id}")

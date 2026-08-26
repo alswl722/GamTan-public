@@ -72,6 +72,50 @@ export async function apiDelete<T>(
   return res.json() as Promise<T>;
 }
 
+/** 첨부파일 다운로드 — 본문을 Blob으로 받고 서버가 정한 파일명을 함께 돌려준다.
+ *
+ * `<a href>`로 바로 걸지 않는 이유: 실패했을 때 브라우저가 에러 JSON을 새 탭에 그대로
+ * 보여주게 된다. fetch로 받으면 호출부가 에러 배너를 띄울 수 있다(실패 가시성).
+ *
+ * 파일명은 RFC 6266 `filename*=UTF-8''`(한글 파일명)을 먼저 보고 없으면 `filename=`을 쓴다.
+ * 헤더를 못 읽으면 null — 그때는 호출부가 기본 이름을 정한다(서버가 CORS
+ * `expose_headers`에 Content-Disposition을 열어둬야 읽힌다, api/main.py 참고).
+ */
+export async function apiDownload(
+  path: string,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+): Promise<{ blob: Blob; filename: string | null }> {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    cache: "no-store",
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => null);
+    throw new Error(detail?.detail ?? `API ${path} 실패: ${res.status}`);
+  }
+  const disposition = res.headers.get("Content-Disposition") ?? "";
+  const utf8 = /filename\*=UTF-8''([^;]+)/i.exec(disposition);
+  const plain = /filename="?([^";]+)"?/i.exec(disposition);
+  const filename = utf8
+    ? decodeURIComponent(utf8[1])
+    : plain
+      ? plain[1]
+      : null;
+  return { blob: await res.blob(), filename };
+}
+
+/** Blob을 사용자 디스크로 저장시킨다(임시 object URL + 클릭). */
+export function saveBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 /** multipart 업로드 전용 — Content-Type을 fetch가 boundary 포함해 자동 설정하게 둔다. */
 export async function apiUpload<T>(
   path: string,
@@ -537,7 +581,8 @@ export function cancelCompanyGoal(
 // 배출·리포트·신청 내역을 반환. entry_type이 "voucher"인 건만 사장님에게
 // 노출 가능한 분류로 필터링됨(담당자 확정·전송 완료 건 — HITL 대기 중인 건은
 // 안 보임). "report"(탄소리포트 생성 시점)·"carbon_point_application"(탄소중립
-// 포인트 신청서 초안 생성일)은 분류 상태와 무관하게 노출됨. 에이전트 트레이스
+// 포인트 신청서 초안을 **내려받은** 날 — 초안 생성일이 아니다, 2026-08-26 변경)은
+// 분류 상태와 무관하게 노출됨. 에이전트 트레이스
 // (결손 감지·이상치 검증 등 내부 판단 로그)는 포함하지 않는다 — 사장님이 보고
 // 싶은 건 "이날 뭘 샀고 탄소가 얼마나 나왔는지"이지 AI 활동 일지가 아니다.
 export type CalendarEntryType = "voucher" | "report" | "carbon_point_application";
@@ -682,8 +727,21 @@ export interface CarbonPointDraft {
   applicant_fields: CarbonPointApplicantField[];
   /** 감탄도 사장님도 여기서 채울 수 없어 안내만 하는 항목(현재는 포털 비밀번호뿐). */
   remaining_fields: string[];
-  /** 초안 파일 생성이 아직 없어 항상 null — 화면은 다운로드 버튼을 비활성으로 둔다. */
+  /** 초안 PDF 다운로드 경로. 자격 미달이면 draft 레코드가 없어 null이고, 화면은
+   * 다운로드 버튼을 비활성으로 둔다. 필수 항목이 비어 있어도 경로는 온다 —
+   * 빈 칸은 빈 칸으로 인쇄해 사장님이 손으로 채운다. */
   draft_document_url: string | null;
+}
+
+/** 신청서 초안 PDF — 실물 서식(4쪽) 위에 값을 얹어 서버가 즉석 생성한다.
+ * 저장된 파일이 아니라 요청 시점 생성이라 3단계 입력을 고치면 바로 반영된다. */
+export function downloadCarbonPointDraft(
+  companyId: number,
+  applicationId: number,
+): Promise<{ blob: Blob; filename: string | null }> {
+  return apiDownload(
+    `/owner/${companyId}/carbon-point/applications/${applicationId}/draft.pdf`,
+  );
 }
 
 /** 초안 생성 — 같은 기업·같은 감축년도의 미제출 초안이 있으면 그 행을 재사용해 갱신한다.
