@@ -503,31 +503,52 @@ export function SceneUpload({
               />
             </label>
 
-            {fileEntries.length > 0 && (
-              <div className="mt-2.5 space-y-1.5">
-                {fileEntries.map((entry) =>
-                  entry.status === "error" ? (
+            {fileEntries.length > 0 && (() => {
+              const uploading = fileEntries.filter((e) => e.status === "uploading");
+              const errors = fileEntries.filter((e) => e.status === "error");
+              const done = fileEntries.filter((e) => e.status === "done");
+              return (
+                <div className="mt-2.5 space-y-1.5">
+                  {uploading.map((entry) => (
+                    <span
+                      key={entry.id}
+                      className="mr-1.5 inline-block rounded-full bg-line px-2.5 py-1 text-[11.5px] font-semibold text-muted"
+                    >
+                      {entry.fileName} 업로드 중…
+                    </span>
+                  ))}
+                  {errors.map((entry) => (
                     <div
                       key={entry.id}
                       className="rounded-lg bg-hitl/25 px-2.5 py-2 text-[11.5px] text-hitl-ink"
                     >
                       <span className="font-semibold">{entry.fileName}</span> — {entry.error}
                     </div>
-                  ) : (
-                    <span
-                      key={entry.id}
-                      className={`mr-1.5 inline-block rounded-full px-2.5 py-1 text-[11.5px] font-semibold ${
-                        entry.status === "done" ? "bg-brand-soft text-brand-ink" : "bg-line text-muted"
-                      }`}
-                    >
-                      {entry.status === "uploading"
-                        ? `${entry.fileName} 업로드 중…`
-                        : `${entry.month}월 접수 완료`}
-                    </span>
-                  ),
-                )}
-              </div>
-            )}
+                  ))}
+                  {done.length > 0 && (
+                    <details className="group">
+                      <summary className="inline-flex cursor-pointer list-none items-center gap-1 rounded-full bg-brand-soft px-2.5 py-1 text-[11.5px] font-semibold text-brand-ink">
+                        접수 완료 {done.length}건
+                        <span className="transition-transform group-open:rotate-180">▾</span>
+                      </summary>
+                      <div className="mt-1.5 space-y-1">
+                        {done
+                          .slice()
+                          .sort((a, b) => (a.month ?? 0) - (b.month ?? 0))
+                          .map((entry) => (
+                            <span
+                              key={entry.id}
+                              className="mr-1.5 inline-block rounded-full bg-brand-soft px-2.5 py-1 text-[11.5px] font-semibold text-brand-ink"
+                            >
+                              {entry.month}월 접수 완료
+                            </span>
+                          ))}
+                      </div>
+                    </details>
+                  )}
+                </div>
+              );
+            })()}
           </>
         )}
       </div>
