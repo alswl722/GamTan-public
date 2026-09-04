@@ -786,7 +786,14 @@ class CarbonNeutralPointApplication(Base):
     reduction_rate_pct = Column(Float)   # 퍼센트. 계산 불가면 null(0이 아니다 — 원칙7)
     eligible = Column(Boolean)
     status = Column(String(20), nullable=False, default="draft")
-    draft_document_url = Column(String(500))  # 초안 파일 경로. 생성 전까진 null
+    # 초안 PDF 다운로드 엔드포인트 경로(0035 시점 의미 변경 — 원래는 저장된 파일 경로였다.
+    # 초안은 제출 전까지 계속 바뀌어서 파일로 떠 두면 곧 낡는다). 자격 미달이면 null.
+    draft_document_url = Column(String(500))
+    # 사장님이 초안 PDF를 **처음** 내려받은 시각 (0035에서 추가). 탄소 캘린더의 신청서
+    # 이벤트가 이 날짜를 쓴다 — created_at(초안 레코드 생성)은 위저드에 들어서기만 해도
+    # 채워져서 사장님이 하지 않은 일을 캘린더에 적게 된다. 재다운로드로 갱신하지 않는다
+    # (과거 이벤트가 이동해 버린다). 안 받았으면 null이고 캘린더에도 안 뜬다.
+    draft_downloaded_at = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), default=now)
 
     # ── 사장님 직접 입력 항목 (0032에서 추가) ────────────────────────────────

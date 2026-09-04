@@ -203,21 +203,44 @@ def test_calendar_groups_same_day_report_scopes_into_one_event(db, client):
     assert report_events[0]["count"] == 2
 
 
-def test_calendar_includes_carbon_point_application_event(db, client):
+def test_calendar_uses_draft_download_date_not_creation_date(db, client):
+    """신청서 이벤트는 **내려받은 날**에 꽂힌다(2026-08-26 변경).
+
+    초안 레코드는 위저드 2단계에 들어서기만 하면 생기므로 created_at을 쓰면 사장님이
+    하지 않은 일이 캘린더에 남는다. 두 날짜를 일부러 다른 달로 두고 다운로드 날짜가
+    이기는지 확인한다.
+    """
     session, cid = db
-    app_row = CarbonNeutralPointApplication(
+    session.add(CarbonNeutralPointApplication(
+        company_id=cid, application_type="business",
+        baseline_year=YEAR - 2, target_year=YEAR,
+        created_at=datetime(YEAR, 6, 3, tzinfo=timezone.utc),        # 6월에 초안 생성
+        draft_downloaded_at=datetime(YEAR, 7, 22, tzinfo=timezone.utc),  # 7월에 내려받음
+    ))
+    session.commit()
+
+    july = client.get(f"/owner/{cid}/calendar?year={YEAR}&month=7").json()["events"]
+    july_apps = [e for e in july if e["entry_type"] == "carbon_point_application"]
+    assert len(july_apps) == 1
+    assert july_apps[0]["date"] == f"{YEAR}-07-22"
+
+    june = client.get(f"/owner/{cid}/calendar?year={YEAR}&month=6").json()["events"]
+    assert [e for e in june if e["entry_type"] == "carbon_point_application"] == []
+
+
+def test_calendar_omits_draft_that_was_never_downloaded(db, client):
+    """받아가지 않은 초안은 캘린더에 없다 — 위저드를 열었다가 그만둔 경우."""
+    session, cid = db
+    session.add(CarbonNeutralPointApplication(
         company_id=cid, application_type="business",
         baseline_year=YEAR - 2, target_year=YEAR,
         created_at=datetime(YEAR, 7, 22, tzinfo=timezone.utc),
-    )
-    session.add(app_row)
+        draft_downloaded_at=None,
+    ))
     session.commit()
 
-    res = client.get(f"/owner/{cid}/calendar?year={YEAR}&month=7")
-    events = res.json()["events"]
-    app_events = [e for e in events if e["entry_type"] == "carbon_point_application"]
-    assert len(app_events) == 1
-    assert app_events[0]["date"] == f"{YEAR}-07-22"
+    events = client.get(f"/owner/{cid}/calendar?year={YEAR}&month=7").json()["events"]
+    assert [e for e in events if e["entry_type"] == "carbon_point_application"] == []
 
 
 def test_calendar_events_sorted_by_date(db, client):

@@ -14,6 +14,10 @@ Tier 재평가(2026-08-21): 소상공인 탄소중립포인트 트랙(§6)은 v1
 2026-08-22 갱신: §14-1(hwp 서식 실물) 해결 — §6.3·§7.3·§7.4 필드를 실제 서식 기준으로
        교체. §14-2(수도고지서 서식) 부분 해결 — 용인시 실물을 대구시로 각색(대구시 자체
        검증은 아직). S001·S002 수도요금고지서 fixture 64건 제작 완료(§7.2 참고).
+2026-08-26 갱신: hwp 서식 파일 자체를 확보해(`data/forms/*.hwp`) 신청서 초안 PDF를 실제로
+       내려준다 — §7.3 `draft_document_url`의 의미가 "파일 경로"에서 "다운로드 엔드포인트
+       경로"로 바뀌었고 §9.1에 엔드포인트 2개가 추가됐다. 구현 상세는
+       `docs/small-business-green-supply-develop-plan.md` §2.8.
 
 > 이 문서는 `docs/borrower-pcaf-data-plan.md`와 같은 형식의 설계문서다. 다만 그 문서가
 > "authoritative"(확정 정본)인 것과 달리, 이 문서는 **아직 확정되지 않은 브레인스토밍을
@@ -425,9 +429,20 @@ target_usage_json        위와 동일 구조
 reduction_rate_pct
 eligible                 bool
 status                   draft | submitted | approved | rejected
-draft_document_url       자동 생성된 신청서 초안 파일 경로
+draft_document_url       초안 PDF **다운로드 엔드포인트 경로**
+                         -- 2026-08-26 정정: 원래 "자동 생성된 신청서 초안 파일 경로"였다.
+                         --   파일로 떠서 디스크에 두면 사장님이 입력을 고치는 순간 낡은
+                         --   파일이 되고, 화면이 "언제 만든 파일인지" 알 수 없다. 초안은
+                         --   제출 전까지 계속 바뀌는 문서라 요청 시점 생성이 맞다.
+                         --   값 예: /owner/11/carbon-point/applications/5/draft.pdf
+                         --   자격 미달이면 레코드 자체가 없어 null이다.
 created_at
 ```
+
+**서식 컬럼 19개 추가(2026-08-25, `alembic/versions/0032_*.py`)** — 사장님이 3단계 위저드에서
+직접 입력하는 항목(신청 구분·포털 아이디·법인번호·연락처·주소·인센티브 유형·계좌정보·고지서
+고객번호 4종·영업개시일자). 위 블록은 감탄이 계산하는 값만 담은 초기 설계다. 비밀번호 컬럼은
+의도적으로 없다(타 기관 자격증명) — 정본은 그 마이그레이션과 `APPLICANT_FIELDS`다.
 
 `status`는 감탄이 추적하지 않는 대구시 승인 결과까지 포함한다 — 실제로는 `draft`까지만
 감탄이 책임지고, `submitted` 이후는 사장님이 직접 갱신하는 수동 필드로 시작한다(§3.2 범위
@@ -540,6 +555,15 @@ POST /owner/{company_id}/carbon-point/applications
 GET  /owner/{company_id}/carbon-point/applications/{id}
 PATCH /owner/{company_id}/carbon-point/applications/{id}
      → status를 submitted/approved/rejected로 사장님이 직접 갱신(§7.3)
+
+PATCH /owner/{company_id}/carbon-point/applications/{id}/applicant-input   (2026-08-25 추가)
+     → 4단계 위저드 3단계 입력 부분 저장. 필수 미입력은 에러가 아니라 missing_required로 반환
+
+GET  /owner/{company_id}/carbon-point/applications/{id}/draft.pdf          (2026-08-26 추가)
+     → 초안 PDF. **실물 hwp 서식을 뜬 템플릿(4쪽) 위에 값만 얹는다** — 서식을 재현하지 않는다
+       (정부 고시 양식이라 실물과 다르게 생긴 서류를 관공서에 내게 된다).
+       필수 항목이 비어도 내려주고, 개인정보 동의서 2~4쪽에는 아무것도 적지 않는다.
+       구현·변환 파이프라인 상세는 develop-plan.md §2.8
 ```
 
 ### 9.2 그린 서플라이 네트워크
@@ -593,10 +617,16 @@ alembic/                            — 위 변경 마이그레이션
 db/document_extraction.py           — 전기고지서 계약종별 추출 로직 추가
 db/water_bill_extraction.py         — 상수도 고지서 파싱 신규(document_text/vision extractor 패턴 재사용)
 db/carbon_neutral_point.py          — 감축률 계산, 자격 판정, 신청서 초안 생성 신규
+db/reports/cnp_application_pdf.py   — 초안 PDF(실물 서식 오버레이) 신규(2026-08-26)
+scripts/build_cnp_form_template.py  — hwp 서식 → 템플릿 PDF, 1회성 오프라인 변환(2026-08-26)
+data/forms/                         — hwp 원본 2종 + 커밋된 템플릿 PDF(2026-08-26)
 db/supply_network.py                — 매칭 로직(§8) 신규
-api/routers/carbon_neutral_point.py — §9.1 API
 api/routers/supply_network.py       — §9.2 API
 ```
+
+§9.1 API는 `api/routers/carbon_neutral_point.py` 신규 파일이 아니라 **기존
+`api/routers/owner.py`에 추가**됐다(2026-08-24) — 사장님 화면이 쓰는 엔드포인트라 라우터를
+따로 만들 이유가 없었다.
 
 ### 프론트엔드
 

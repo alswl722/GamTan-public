@@ -141,8 +141,12 @@ def test_create_application_returns_draft_contract(client, db):
     assert set(body) == {"application_id", "status", "fields", "applicant_fields",
                          "remaining_fields", "draft_document_url"}
     assert body["status"] == "draft"
-    assert body["draft_document_url"] is None
     assert body["application_id"] is not None
+    # 초안 PDF 다운로드 경로. 파일 경로가 아니라 엔드포인트 경로다 — 초안은 제출 전까지
+    # 계속 바뀌니 요청 시점에 만들어야 화면 값과 PDF가 같다(draft_document_path 주석).
+    assert body["draft_document_url"] == (
+        f"/owner/{cafe.id}/carbon-point/applications/{body['application_id']}/draft.pdf"
+    )
 
     by_label = {f["label"]: f["value"] for f in body["fields"]}
     assert by_label["상호(법인명)"] == "동성로카페"
@@ -330,3 +334,82 @@ def test_get_application_returns_applicant_input(client, db):
     body = client.get(f"/owner/{cafe.id}/carbon-point/applications/{app_id}").json()
     assert body["applicant_input"]["portal_id"] == "cafe0001"
     assert "portal_id" not in body["missing_required"]
+
+
+# ── GET applications/{id}/draft.pdf (4단계 다운로드) ────────────────────────
+
+
+def test_download_draft_pdf(client, db):
+    """실물 서식(4쪽) 위에 사장님 입력을 얹은 PDF가 내려온다."""
+    session, inst, cafe, _ = db
+    _history(session, inst, cafe)
+    session.add(SourceDocument(
+        financial_institution_id=inst.id, company_id=cafe.id,
+        document_type="business_registration",
+        extracted_json={"business_registration_no": "211-81-10011", "company_name": "동성로카페",
+                        "representative": "김○○", "site_addr": "대구 중구 ○○로 11"},
+    ))
+    session.commit()
+    app_id = _draft_id(client, cafe.id)
+    client.patch(
+        f"/owner/{cafe.id}/carbon-point/applications/{app_id}/applicant-input",
+        json={"values": {"portal_id": "cafe0001", "incentive_type": "cash",
+                         "bank_name": "iM뱅크", "account_number": "1234567890"}},
+    )
+
+    r = client.get(f"/owner/{cafe.id}/carbon-point/applications/{app_id}/draft.pdf")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/pdf"
+    # 한글 파일명은 latin-1 헤더에 그대로 못 넣어 RFC 6266으로 인코딩한다.
+    assert "filename*=UTF-8''" in r.headers["content-disposition"]
+    assert r.content.startswith(b"%PDF")
+
+    import pymupdf
+
+    with pymupdf.open(stream=r.content, filetype="pdf") as doc:
+        assert doc.page_count == 4          # 신청서 1쪽 + 개인정보 동의서 3쪽
+        page_one = doc[0].get_text()
+    for value in ("동성로카페", "211-81-10011", "cafe0001", "iM뱅크", "1234567890"):
+        assert value in page_one
+
+
+def test_download_draft_pdf_allows_missing_required(client, db):
+    """필수 항목이 비어도 내려준다 — 빈 칸은 빈 칸으로 인쇄해 손으로 채운다."""
+    session, inst, cafe, _ = db
+    _history(session, inst, cafe)
+    app_id = _draft_id(client, cafe.id)
+
+    r = client.get(f"/owner/{cafe.id}/carbon-point/applications/{app_id}/draft.pdf")
+    assert r.status_code == 200
+    assert r.content.startswith(b"%PDF")
+
+
+def test_download_stamps_first_download_only(client, db):
+    """탄소 캘린더가 쓰는 다운로드 시각 — 처음 받은 때만 기록한다.
+
+    재다운로드로 갱신하면 캘린더의 과거 이벤트가 이동해 이미 일어난 일이 사라진다.
+    """
+    session, inst, cafe, _ = db
+    _history(session, inst, cafe)
+    app_id = _draft_id(client, cafe.id)
+    row = session.get(CarbonNeutralPointApplication, app_id)
+    assert row.draft_downloaded_at is None       # 초안만 만든 상태 — 캘린더에 안 뜬다
+
+    client.get(f"/owner/{cafe.id}/carbon-point/applications/{app_id}/draft.pdf")
+    session.refresh(row)
+    first = row.draft_downloaded_at
+    assert first is not None
+
+    client.get(f"/owner/{cafe.id}/carbon-point/applications/{app_id}/draft.pdf")
+    session.refresh(row)
+    assert row.draft_downloaded_at == first
+
+
+def test_download_draft_pdf_of_other_company_is_404(client, db):
+    """테넌트 경계 — id만 알면 남의 신청서를 받을 수 있으면 안 된다."""
+    session, inst, cafe, factory = db
+    _history(session, inst, cafe)
+    app_id = _draft_id(client, cafe.id)
+
+    r = client.get(f"/owner/{factory.id}/carbon-point/applications/{app_id}/draft.pdf")
+    assert r.status_code == 404

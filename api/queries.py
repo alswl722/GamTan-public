@@ -541,10 +541,18 @@ def get_calendar_events(session: Session, company_id: int, year: int, month: int
         save_quality_assessment_version) 같은 날 여러 Scope가 갱신될 수 있는데,
         캘린더에서는 날짜당 1개로 완전히 통합한다(건수는 count, 배출량은 그날
         마지막으로 저장된 버전 값을 대표로 노출).
-      - "carbon_point_application": 탄소중립포인트 신청서 초안이 생성된 시점
-        (CarbonNeutralPointApplication.created_at). 실제 포털 제출일이 아니라
-        초안 생성일 — 제출일을 담는 컬럼은 아직 없다(CLAUDE.md §5 원칙10, status는
-        draft 이후 사장님이 수동 갱신하는 필드일 뿐 감탄이 추적하지 않음).
+      - "carbon_point_application": 사장님이 신청서 초안 PDF를 **내려받은** 시점
+        (CarbonNeutralPointApplication.draft_downloaded_at). 안 받은 초안은 아예
+        나오지 않는다.
+
+        기준을 바꾼 이력(2026-08-26): 종전엔 `created_at`(초안 레코드 생성일)을 썼는데,
+        그 레코드는 사장님이 위저드 2단계에 들어서기만 하면 생긴다 — 신청서를 손에
+        넣지 않았고 중간에 그만뒀어도 캘린더에 "신청서" 이벤트가 남았다. 사장님이 한
+        일이 아닌 걸 사장님 캘린더에 적는 셈이다.
+        `status='submitted'`도 기준이 못 된다 — 감탄엔 접수 인터페이스가 없어서
+        (data-plan §3.2) 사장님이 포털에서 낸 뒤 화면에서 수동으로 눌러줘야 채워지는
+        필드이고, 실제로 눌러줄 이유가 거의 없다. 감탄이 직접 관측할 수 있는 행동은
+        다운로드뿐이고 그게 캘린더에 적을 수 있는 유일한 사실이다.
 
     에이전트 트레이스(결손 감지·이상치 검증 등 내부 판단 로그)는 여기 포함하지
     않는다 — 사장님이 캘린더에서 보고 싶은 건 "이날 뭘 샀고 탄소가 얼마나
@@ -609,17 +617,19 @@ def get_calendar_events(session: Session, company_id: int, year: int, month: int
             "count": len(invs),
         })
 
+    downloaded_at = CarbonNeutralPointApplication.draft_downloaded_at
     application_rows = session.execute(
         select(CarbonNeutralPointApplication)
         .where(CarbonNeutralPointApplication.company_id == company_id)
-        .where(func.extract("year", CarbonNeutralPointApplication.created_at) == year)
-        .where(func.extract("month", CarbonNeutralPointApplication.created_at) == month)
-        .order_by(CarbonNeutralPointApplication.created_at)
+        .where(downloaded_at.isnot(None))
+        .where(func.extract("year", downloaded_at) == year)
+        .where(func.extract("month", downloaded_at) == month)
+        .order_by(downloaded_at)
     ).scalars().all()
 
     applications_by_day: dict[str, list[CarbonNeutralPointApplication]] = {}
     for app in application_rows:
-        applications_by_day.setdefault(app.created_at.date().isoformat(), []).append(app)
+        applications_by_day.setdefault(app.draft_downloaded_at.date().isoformat(), []).append(app)
 
     for day, apps in applications_by_day.items():
         latest = apps[-1]
@@ -629,7 +639,7 @@ def get_calendar_events(session: Session, company_id: int, year: int, month: int
             "voucher_id": None,
             "scope": None,
             "fuel_type": None,
-            "item_description": f"탄소중립포인트 신청서 초안 ({latest.target_year}년)",
+            "item_description": f"탄소중립포인트 신청서 내려받기 ({latest.target_year}년)",
             "supply_amount_krw": None,
             "emission_tco2e": None,
             "source": "carbon_point",

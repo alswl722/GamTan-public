@@ -721,6 +721,19 @@ def _electric_customer_number(session: Session, company_id: int) -> str | None:
     return None
 
 
+def draft_document_path(company_id: int, application_id: int) -> str:
+    """초안 PDF 다운로드 경로 — `draft_document_url` 컬럼에 이 값이 들어간다.
+
+    data-plan §7.3은 이 컬럼을 "자동 생성된 신청서 초안 **파일 경로**"로 적어뒀는데
+    **엔드포인트 경로로 바꿨다(2026-08-26)**. 파일로 떠서 디스크에 두면 사장님이 3단계
+    입력을 고치는 순간 낡은 파일이 되고, "언제 만든 파일인지"를 화면이 알 수 없다.
+    요청 시점에 만들어 내려주면 화면에 보이는 값과 PDF가 항상 같다(초안은 제출 전까지
+    계속 바뀌는 문서다). 저장 대상이 아니므로 `SourceDocument.file_path` 규약(리포 루트
+    상대경로)과는 성격이 다르다.
+    """
+    return f"/owner/{company_id}/carbon-point/applications/{application_id}/draft.pdf"
+
+
 def build_application_draft(
     session: Session,
     company_id: int,
@@ -830,6 +843,8 @@ def build_application_draft(
         application.target_usage_json = {"electricity_kwh": result.target_usage_kwh}
         application.reduction_rate_pct = rate
         application.eligible = True
+        session.flush()   # id가 있어야 다운로드 경로를 만든다(신규 생성 시)
+        application.draft_document_url = draft_document_path(company_id, application.id)
         session.commit()
 
     # 3단계 입력 명세 + 지금까지 저장된 값. 전기 고객번호는 고지서 파싱값을 기본값으로
@@ -851,9 +866,12 @@ def build_application_draft(
         "fields": fields,
         "applicant_fields": applicant_fields,
         "remaining_fields": list(REMAINING_FIELDS),
-        # 초안 파일 생성은 이번 범위 밖(hwp 서식 렌더링 미착수) — 프론트가 이 값이 null이면
-        # 다운로드 버튼을 비활성으로 둔다.
-        "draft_document_url": None,
+        # 자격 미달 기업은 draft 레코드가 없어 null이다 — 프론트가 이 값이 null이면
+        # 다운로드 버튼을 비활성으로 둔다. 필수 항목이 비어 있어도 경로는 준다(비어 있는
+        # 칸은 비어 있는 채로 인쇄해 사장님이 손으로 채운다, 2026-08-26 결정).
+        "draft_document_url": (
+            None if application is None else draft_document_path(company_id, application.id)
+        ),
     }
 
 
@@ -882,6 +900,49 @@ def applicant_saved_values(application: CarbonNeutralPointApplication | None) ->
     for key in APPLICANT_FIELD_KEYS:
         raw = getattr(application, key, None)
         values[key] = raw.isoformat() if isinstance(raw, date) else raw
+    return values
+
+
+def application_print_values(
+    session: Session, company_id: int, application: CarbonNeutralPointApplication
+) -> dict[str, str | None]:
+    """서식에 인쇄할 값 — `db/reports/cnp_application_pdf.py`의 슬롯 key → 값.
+
+    화면의 `fields`(라벨 기준 사람이 읽는 목록)와 같은 자료를 쓰지만 **key 기준**으로 낸다.
+    PDF 칸은 라벨 문구가 아니라 서식 위치에 대응하므로, 라벨을 바꿨을 때 인쇄가 조용히
+    깨지지 않도록 key로 잇는다.
+
+    값을 손보지 않는다 — 마이데이터·고지서 파싱값과 사장님 입력을 그대로 옮긴다(원칙1).
+    포맷을 다시 맞추면(전화번호에 하이픈 넣기 등) 사장님이 입력한 것과 인쇄된 것이 달라진다.
+
+    여기 없는 항목과 그 이유는 `cnp_application_pdf` 모듈 주석 참고 —
+    `account_holder`(서식에 칸 없음), 비밀번호, `BLANK_BY_POLICY` 3종, 서명·날짜.
+    """
+    biz = _latest_extracted(session, company_id, "business_registration")
+    saved = applicant_saved_values(application)
+    # build_application_draft와 같은 기본값 — 사장님이 안 고쳤으면 고지서 파싱값을 쓴다.
+    if not saved.get("electric_customer_number"):
+        saved["electric_customer_number"] = _electric_customer_number(session, company_id)
+
+    # 서식 주소칸은 한 줄이라 도로명+상세를 합친다. 사장님 입력이 있으면 그게 우선이고,
+    # 없으면 사업자등록증명의 사업장 주소를 쓴다(화면 `fields`와 같은 우선순위).
+    parts = [saved.get("road_address"), saved.get("address_detail")]
+    address = " ".join(p for p in parts if p) or biz.get("site_addr")
+
+    values: dict[str, str | None] = {
+        "company_name": biz.get("company_name"),
+        "representative": biz.get("representative"),
+        "business_registration_no": biz.get("business_registration_no"),
+        "address": address,
+    }
+    for key in (
+        "application_kind", "portal_id", "corporate_registration_no", "business_open_date",
+        "applicant_phone", "applicant_email", "postal_code",
+        "incentive_type", "incentive_type_other", "bank_name", "account_number",
+        "electric_customer_number", "water_customer_number",
+        "city_gas_customer_number", "district_heating_customer_number",
+    ):
+        values[key] = saved.get(key)
     return values
 
 

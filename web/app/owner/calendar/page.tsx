@@ -44,7 +44,7 @@ function eventDotColor(e: CalendarEvent): string {
 
 function entryTypeBadgeLabel(e: CalendarEvent): string {
   if (e.entry_type === "report") return "탄소리포트";
-  if (e.entry_type === "carbon_point_application") return "탄소중립포인트 신청";
+  if (e.entry_type === "carbon_point_application") return "신청서 다운로드";
   return e.source === "kepco" ? "전기고지서" : "세금계산서";
 }
 

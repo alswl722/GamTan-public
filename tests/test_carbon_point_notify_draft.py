@@ -21,7 +21,9 @@ from db.carbon_neutral_point import (
     NOTIFICATION_TYPE_ELIGIBLE,
     REMAINING_FIELDS,
     THRESHOLD_PCT,
+    application_print_values,
     build_application_draft,
+    draft_document_path,
     evaluate_eligibility,
     missing_required_keys,
     notify_if_eligible,
@@ -247,7 +249,9 @@ def test_draft_matches_frontend_contract(setup):
     assert set(draft) == {"application_id", "status", "fields", "applicant_fields",
                           "remaining_fields", "draft_document_url"}
     assert draft["status"] == "draft"
-    assert draft["draft_document_url"] is None
+    assert draft["draft_document_url"] == draft_document_path(
+        company.id, draft["application_id"]
+    )
     for f in draft["fields"]:
         assert set(f) == {"label", "value", "source"}
         assert f["value"] is None or isinstance(f["value"], str)
@@ -549,3 +553,69 @@ def test_save_applicant_input_rejects_submitted(setup):
 
     with pytest.raises(PermissionError):
         save_applicant_input(db, company.id, app_id, {"applicant_phone": "01011112222"})
+
+
+# ── 서식 인쇄값 (신청서 초안 PDF) ───────────────────────────────────────────
+
+
+def test_print_values_cover_exactly_the_form_slots(setup):
+    """인쇄값 key 집합이 서식 슬롯과 정확히 같아야 한다.
+
+    한쪽만 바뀌면 조용히 빈칸이 되거나(슬롯 추가) ValueError가 난다(key 추가) — 둘 다
+    서식 개정 작업 중에 알아채기 어려워 여기서 잠근다.
+    """
+    from db.reports.cnp_application_pdf import SLOT_KEYS
+
+    db, company, inst = setup
+    _eligible_history(db, company, inst)
+    app_id = build_application_draft(db, company.id, 2026, 1)["application_id"]
+    row = db.get(CarbonNeutralPointApplication, app_id)
+
+    assert set(application_print_values(db, company.id, row)) == SLOT_KEYS
+
+
+def test_print_values_prefer_owner_address_over_mydata(setup):
+    """서식 주소칸은 한 줄이라 도로명+상세를 합친다. 사장님이 쓴 주소가 마이데이터보다 우선."""
+    db, company, inst = setup
+    _eligible_history(db, company, inst)
+    db.add(SourceDocument(
+        financial_institution_id=inst.id, company_id=company.id,
+        document_type="business_registration",
+        extracted_json={"company_name": "동성로카페", "site_addr": "대구 중구 ○○로 11"},
+    ))
+    db.commit()
+    app_id = build_application_draft(db, company.id, 2026, 1)["application_id"]
+    row = db.get(CarbonNeutralPointApplication, app_id)
+
+    # 사장님 입력 전에는 사업자등록증명의 사업장 주소를 쓴다.
+    assert application_print_values(db, company.id, row)["address"] == "대구 중구 ○○로 11"
+
+    save_applicant_input(db, company.id, app_id, {
+        "road_address": "대구광역시 중구 동성로 11", "address_detail": "2층",
+    })
+    assert application_print_values(db, company.id, row)["address"] == (
+        "대구광역시 중구 동성로 11 2층"
+    )
+
+
+def test_print_values_default_electric_customer_number_from_bill(setup):
+    """사장님이 안 고쳤으면 고지서 파싱값을 쓴다 — 화면 기본값과 인쇄값이 같아야 한다."""
+    db, company, inst = setup
+    _eligible_history(db, company, inst)
+    app_id = build_application_draft(db, company.id, 2026, 1)["application_id"]
+    row = db.get(CarbonNeutralPointApplication, app_id)
+
+    values = application_print_values(db, company.id, row)
+    assert values["electric_customer_number"] == "0355-7712-90"
+
+
+def test_draft_document_url_is_null_when_not_eligible(setup):
+    """자격 미달이면 draft 레코드가 없으니 다운로드 경로도 없다 — 화면이 버튼을 비활성으로 둔다."""
+    db, company, inst = setup
+    for year in (2024, 2025):
+        for m in range(1, 13):
+            _bill(db, company, inst, year, m, 100.0)
+    for m in range(1, 7):
+        _bill(db, company, inst, 2026, m, 99.0)
+
+    assert build_application_draft(db, company.id, 2026, 1)["draft_document_url"] is None

@@ -5,9 +5,11 @@ import { useEffect, useState } from "react";
 import { AlertCircle, ArrowRight, Download } from "lucide-react";
 import {
   createCarbonPointApplication,
+  downloadCarbonPointDraft,
   getCarbonPointEligibility,
   getCompanyId,
   getOwnerProgress,
+  saveBlob,
   type CarbonPointDraft,
   type CarbonPointEligibility,
 } from "@/lib/api";
@@ -48,6 +50,10 @@ export default function CarbonPointApplicationPage() {
   const [missingRequired, setMissingRequired] = useState<string[]>([]);
   const [active, setActive] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState(false);
+  // 다운로드 실패는 페이지 전체를 에러 화면으로 바꾸지 않고 버튼 아래에 남긴다 —
+  // 여기까지 온 사장님의 입력 내용이 보이는 화면을 날려버리면 안 된다.
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -81,6 +87,26 @@ export default function CarbonPointApplicationPage() {
       setActive(1);
     } catch (err) {
       setError(err instanceof Error ? err.message : "초안을 만들지 못했어요");
+    }
+  }
+
+  /** 4단계 — 서버가 실물 서식 위에 값을 얹어 만든 PDF를 받아 저장한다. */
+  async function downloadDraft() {
+    if (companyId === null || draft?.application_id == null) return;
+    setDownloadError(null);
+    setDownloading(true);
+    try {
+      const { blob, filename } = await downloadCarbonPointDraft(
+        companyId,
+        draft.application_id,
+      );
+      saveBlob(blob, filename ?? "탄소중립포인트_참여신청서_초안.pdf");
+    } catch (err) {
+      setDownloadError(
+        err instanceof Error ? err.message : "신청서를 만들지 못했어요",
+      );
+    } finally {
+      setDownloading(false);
     }
   }
 
@@ -309,12 +335,18 @@ export default function CarbonPointApplicationPage() {
           <div>
             <button
               type="button"
-              disabled={draft.draft_document_url === null}
+              onClick={downloadDraft}
+              disabled={draft.draft_document_url === null || downloading}
               className="btn-cta flex w-full items-center justify-center gap-1.5 rounded-2xl bg-brand py-3.5 text-[14.5px] font-extrabold text-white disabled:opacity-50"
             >
               <Download size={15} strokeWidth={2.4} />
-              신청서 내려받기
+              {downloading ? "만들고 있어요…" : "신청서 내려받기"}
             </button>
+            {downloadError !== null && (
+              <p className="mt-2.5 text-[11.5px] leading-relaxed text-hitl-ink">
+                {downloadError}
+              </p>
+            )}
           </div>
         ),
     },
