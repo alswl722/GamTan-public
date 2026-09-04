@@ -24,6 +24,7 @@
 """
 import csv
 import io
+import mimetypes
 import os
 from datetime import datetime, timezone
 from urllib.parse import quote
@@ -545,6 +546,11 @@ def download_document_file(
     view_document(메타데이터 JSON)와 분리한다 — 브라우저가 PDF를 렌더링하려면
     이 URL을 그대로 src에 꽂아야 하므로 JSON을 반환하는 엔드포인트와 섞지 않는다.
     열람 시점에 즉시 접근 로그를 남기는 관례는 view_document와 동일.
+
+    원본은 PDF만이 아니다 — CLAUDE.md §7 업로드 3종은 JPEG/PNG/WEBP/HEIC 사진과
+    스캔 PDF를 모두 받는다(db/document_ocr_extractor.py 경로). media_type을
+    application/pdf로 고정하면 이미지 원본을 PDF로 위장해 보내는 셈이라 브라우저
+    PDF 뷰어가 파싱 실패로 빈 화면을 띄운다 — 실제 파일 확장자로 추정해야 한다.
     """
     doc = session.get(SourceDocument, document_id)
     if doc is None:
@@ -558,6 +564,9 @@ def download_document_file(
 
     record_access(session, document_id, viewed_by)
 
+    media_type, _ = mimetypes.guess_type(abs_path)
+    media_type = media_type or "application/pdf"
+
     # filename= 인자를 쓰면 FileResponse가 Content-Disposition: attachment로 강제해
     # 브라우저가 다운로드를 시도한다 — <iframe>이 인라인 렌더링하도록 명시적으로
     # inline을 지정한다. HTTP 헤더는 latin-1만 허용해 한글 파일명을 그대로 못
@@ -565,7 +574,7 @@ def download_document_file(
     display_name = quote(doc.original_filename or "document.pdf")
     return FileResponse(
         abs_path,
-        media_type="application/pdf",
+        media_type=media_type,
         headers={"Content-Disposition": f"inline; filename*=UTF-8''{display_name}"},
     )
 

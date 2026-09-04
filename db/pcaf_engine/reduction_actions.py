@@ -29,7 +29,7 @@ from db.pcaf_engine.pcaf import monthly_by_fuel
 # 확정되지 않고 **항상 LLM으로 위임된다**(_rule_decision()이 rule_hint로만
 # 넘김). 그래서 "[R058] ..." 접두사 포맷(_rule_decision 89행, 룰 경로 전용)이
 # 아니라, LLM 경로의 _llm_result_to_decision()(tools.py:192)이 붙이는
-# `evidence = f"{llm_reason} — 회계 룰상 사람검토 필요(참고: R058)"` 접미사로
+# `evidence = f"{llm_reason} — 분류 규칙상 사람검토 필요(참고: R058)"` 접미사로
 # 식별해야 한다(실측 확인, 2026-08-25 — GEMINI_API_KEY 없이 직접 실행해
 # method="llm", evidence 끝에 "(참고: R058)"이 붙는 걸 확인했다. 최초 설계
 # 초안은 "[R058]" 접두사 룰 경로를 전제했으나 틀렸다). LLM이 만드는 앞부분

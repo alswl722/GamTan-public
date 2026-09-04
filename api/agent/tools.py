@@ -95,7 +95,7 @@ def _rule_decision(voucher: Voucher) -> tuple[dict | None, dict | None]:
         # 그 자체가 사람에게 보이는 별도 채널이라 그대로 둔다.
         if rule["needs_review"] and not k_taxonomy_fields_for_rule(rule["rule_id"])["finance_lead_type"]:
             confidence = min(confidence, CONFIDENCE_THRESHOLD - 0.01)
-            evidence += " — 회계 룰상 사람검토 필요"
+            evidence += " — 분류 규칙상 사람검토 필요"
         decided = {
             "scope": rule["scope"],
             "category": rule["category"],
@@ -178,7 +178,7 @@ def _build_classification(
 def _llm_result_to_decision(llm: dict, rule_hint: dict | None = None) -> dict:
     """Gemini(또는 캐시) 응답 dict → _build_classification 이 먹는 결정 dict로 변환.
 
-    rule_hint(룰 매칭은 실패했지만 참고용으로 넘긴 룰)가 회계 룰상 "사람검토
+    rule_hint(룰 매칭은 실패했지만 참고용으로 넘긴 룰)가 분류 규칙상 "사람검토
     필요"로 표시돼 있으면, LLM이 자체적으로 높은 confidence를 줬더라도 임계값
     미만으로 강제 하향한다 — 캐시에 저장된 llm 원본 dict는 건드리지 않고(캐시는
     순수 LLM 응답으로 재사용돼야 함) 변환 결과에만 반영한다. LLM 산수 금지
@@ -189,7 +189,7 @@ def _llm_result_to_decision(llm: dict, rule_hint: dict | None = None) -> dict:
     evidence = llm.get("evidence")
     if rule_hint is not None and rule_hint.get("needs_review"):
         confidence = min(confidence, CONFIDENCE_THRESHOLD - 0.01)
-        evidence = f"{evidence} — 회계 룰상 사람검토 필요(참고: {rule_hint['rule_id']})"
+        evidence = f"{evidence} — 분류 규칙상 사람검토 필요(참고: {rule_hint['rule_id']})"
     return {
         "scope": llm.get("scope"),
         "category": llm.get("category"),

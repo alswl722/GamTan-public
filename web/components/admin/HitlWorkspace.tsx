@@ -24,25 +24,38 @@ import { cn } from "@/lib/utils";
 // 별도 로그인 체계 도입 전 임시 열람자 식별자.
 const VIEWED_BY = "은행 담당자";
 
-/** 전표 원본 PDF 미리보기 — 파일이 없거나(구 레코드) 서버 오류가 나면 <iframe> 대신
- * 폴백 텍스트를 보여준다. <iframe onError>는 크로스 오리진 응답 상태코드를 못 잡으므로
- * 렌더링 전에 먼저 존재를 확인한다(GET — 서버가 이 라우트에 HEAD를 노출하지 않는다). */
+/** 전표 원본 미리보기 — 파일이 없거나(구 레코드) 서버 오류가 나면 폴백 텍스트를
+ * 보여준다. <iframe onError>는 크로스 오리진 응답 상태코드를 못 잡으므로 렌더링
+ * 전에 먼저 존재 여부와 실제 파일 종류를 확인한다(GET — 서버가 이 라우트에 HEAD를
+ * 노출하지 않는다). 원본은 PDF만이 아니라 사장님이 찍은 사진(JPEG/PNG/HEIC 등)일
+ * 수도 있다(CLAUDE.md §7 업로드 3종) — Content-Type으로 실제 종류를 판별해
+ * 이미지는 <img>로, 그 외는 <iframe>(PDF 뷰어)으로 렌더링한다. */
 function DocumentPreview({ documentId }: { documentId: number }) {
-  const [status, setStatus] = useState<"loading" | "ok" | "missing">("loading");
+  const [state, setState] = useState<
+    { kind: "loading" } | { kind: "missing" } | { kind: "ok"; isImage: boolean }
+  >({ kind: "loading" });
   const url = documentFileUrl(documentId, VIEWED_BY);
 
   useEffect(() => {
     let alive = true;
-    setStatus("loading");
+    setState({ kind: "loading" });
     fetch(url)
-      .then((res) => alive && setStatus(res.ok ? "ok" : "missing"))
-      .catch(() => alive && setStatus("missing"));
+      .then((res) => {
+        if (!alive) return;
+        if (!res.ok) {
+          setState({ kind: "missing" });
+          return;
+        }
+        const contentType = res.headers.get("content-type") ?? "";
+        setState({ kind: "ok", isImage: contentType.startsWith("image/") });
+      })
+      .catch(() => alive && setState({ kind: "missing" }));
     return () => {
       alive = false;
     };
   }, [url]);
 
-  if (status === "loading") {
+  if (state.kind === "loading") {
     return (
       <div className="flex h-[32rem] items-center justify-center text-xs text-faint">
         불러오는 중…
@@ -50,7 +63,7 @@ function DocumentPreview({ documentId }: { documentId: number }) {
     );
   }
 
-  if (status === "missing") {
+  if (state.kind === "missing") {
     return (
       <div className="flex h-[32rem] flex-col items-center justify-center gap-1 text-xs text-faint">
         <span>원본 파일을 찾을 수 없어요</span>
@@ -65,7 +78,7 @@ function DocumentPreview({ documentId }: { documentId: number }) {
     <>
       <div className="mb-2 flex items-center justify-between">
         <span className="rounded bg-line px-1.5 py-0.5 text-[10px] font-semibold text-muted">
-          PDF
+          {state.isImage ? "이미지" : "PDF"}
         </span>
         <a
           href={url}
@@ -76,11 +89,20 @@ function DocumentPreview({ documentId }: { documentId: number }) {
           원본 크게 보기 →
         </a>
       </div>
-      <iframe
-        src={url}
-        className="h-[32rem] w-full rounded border border-line bg-white"
-        title="전표 원본 PDF"
-      />
+      {state.isImage ? (
+        // eslint-disable-next-line @next/next/no-img-element -- 원격 API가 서빙하는 원본 파일이라 next/image 최적화 대상이 아님
+        <img
+          src={url}
+          className="h-[32rem] w-full rounded border border-line bg-white object-contain"
+          alt="전표 원본"
+        />
+      ) : (
+        <iframe
+          src={url}
+          className="h-[32rem] w-full rounded border border-line bg-white"
+          title="전표 원본 PDF"
+        />
+      )}
     </>
   );
 }
