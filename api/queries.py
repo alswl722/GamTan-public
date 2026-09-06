@@ -253,31 +253,37 @@ def get_pending_send_count(session: Session, company_id: int) -> int:
 
 
 def get_pending_anomaly_checks(session: Session, company_id: int) -> list[dict]:
-    """이상치 되묻기(docs/tasks.md) — 사장님이 아직 답하지 않은 이상치 확인 요청.
+    """이상치 확인 요청을 연도×월×연료별 한 질문으로 묶어 반환한다.
 
-    anomaly_check_status가 'pending'인 건만 — 이미 답한 건(confirmed_normal|
-    disputed|unknown)은 이 목록에서 빠진다. 분류 상세(scope·evidence)는
-    노출하지 않는다 — 예/아니오/모르겠어요로만 답하면 되는 질문이라 그 이상의
-    정보는 불필요(사장님 화면 원칙과 동일, get_classifications() 참고).
+    이상치 감지는 월별 합계 기준이지만 저장은 그 달의 개별 전표 Classification마다
+    이뤄진다. 전표 수만큼 같은 질문을 반복하지 않도록 그룹별 가장 작은 voucher id를
+    답변용 대표 id로 사용한다. 이미 답한 그룹은 pending 행이 없어 목록에서 빠진다.
     """
     stmt = (
-        select(Classification, Voucher)
+        select(
+            func.min(Voucher.id).label("voucher_id"),
+            Voucher.year,
+            Voucher.month,
+            Classification.fuel_type,
+            func.max(Classification.anomaly_ratio).label("ratio"),
+        )
+        .select_from(Classification)
         .join(Voucher, Classification.voucher_id == Voucher.id)
         .where(Voucher.company_id == company_id)
         .where(Classification.anomaly_check_status == "pending")
-        # get_vouchers와 같은 이유로 year를 1차 키에(2026-08-22) — 되묻기 큐에 여러
-        # 해 건이 섞이면 "몇 월 건인지"만 보여주는 화면에서 순서가 뒤엉킨다.
-        .order_by(Voucher.year, Voucher.month, Voucher.issue_date)
+        .group_by(Voucher.year, Voucher.month, Classification.fuel_type)
+        .order_by(Voucher.year, Voucher.month, Classification.fuel_type)
     )
     rows = session.execute(stmt).all()
     return [
         {
-            "voucher_id": v.id,
-            "month": v.month,
-            "fuel": c.fuel_type,
-            "ratio": c.anomaly_ratio,
+            "voucher_id": voucher_id,
+            "year": year,
+            "month": month,
+            "fuel": fuel,
+            "ratio": ratio,
         }
-        for c, v in rows
+        for voucher_id, year, month, fuel, ratio in rows
     ]
 
 

@@ -2,13 +2,11 @@
 
 은행권 여신 조기경보 실무의 두 축을 코드로 옮긴다:
   1. 추세 이탈 — 최근 3개월 이동평균 대비 최신월 배출량 급등/급감
-     (단일월 대비 전월 비교는 계절성에 취약해 오탐이 많다 — orchestrator.py의
-      _check_anomalies 와 같은 결로 "평월 대비 배수"를 쓴다)
   2. 데이터 공백 — 연속 미연동 자체가 조업 중단·이탈 조짐일 수 있는 신호
 
-급등은 리스크(예: 이상 사용·불성실 신고 가능성), 급감은 가동률 하락 의심으로
-해석이 갈리므로 severity/message 를 다르게 낸다. 판단은 여기서 끝내지 않고
-문구로만 안내 — 여신 결정은 하지 않는다(CLAUDE.md §9).
+사장님 탄소리포트에는 위 EWS와 함께 에이전트가 이미 감지해 Classification에
+영속화한 월×연료 이상치도 보여준다. 판단은 여기서 끝내지 않고 문구로만 안내하며,
+여신 결정에는 사용하지 않는다(CLAUDE.md §9).
 """
 from datetime import datetime, timezone
 from statistics import mean
@@ -18,29 +16,48 @@ from sqlalchemy.orm import Session
 
 from db.models import Classification, Company, Voucher
 
-SPIKE_RATIO = 1.5      # 최신월 ≥ 이동평균 × 1.5 → 급등(high)
-DROP_RATIO = 0.5       # 최신월 ≤ 이동평균 × 0.5 → 급감(medium)
-TREND_WINDOW = 3        # 이동평균 산정에 쓸 직전 개월 수
-GAP_MONTHS_THRESHOLD = 3  # 이 개월 수 이상 연속 공백이면 알림
+SPIKE_RATIO = 1.5
+DROP_RATIO = 0.5
+TREND_WINDOW = 3
+GAP_MONTHS_THRESHOLD = 3
+
+_ANOMALY_STATE_PRIORITY = {
+    "disputed": 0,
+    "unknown": 1,
+    "pending": 2,
+    "confirmed_normal": 3,
+}
+_ANOMALY_STATE_SEVERITY = {
+    "disputed": "high",
+    "unknown": "medium",
+    "pending": "high",
+    "confirmed_normal": "low",
+}
+_ANOMALY_STATE_SUFFIX = {
+    "disputed": "확인이 필요한 건으로 표시됐어요.",
+    "unknown": "확인이 어려워 담당자 검토로 넘겼어요.",
+    "pending": "아직 확인 전이에요.",
+    "confirmed_normal": "정상 사용으로 확인됐어요.",
+}
 
 
-def _monthly_totals(session: Session, company_id: int) -> dict[int, float]:
-    """기업의 월별 Scope 1+2 배출량 합계(kg) — 확정된(auto/confirmed) 건만, 존재하는 월만.
-
-    review_required(HITL 미확정)는 사람이 아직 판정을 마감하지 않은 값이라
-    제외한다 — 저신뢰 분류 하나가 은행 담당자에게 확정된 "급등"으로 잘못
-    보이면 안 된다(보조수단성 원칙, CLAUDE.md §5-5).
-    """
-    return _monthly_totals_by_company(session, company_id=company_id).get(company_id, {})
+def _monthly_totals(
+    session: Session, company_id: int, *, year: int | None = None,
+) -> dict[int, float]:
+    """기업의 월별 Scope 1+2 배출량 합계(kg) — 확정된 건만, 존재하는 월만."""
+    return _monthly_totals_by_company(session, company_id=company_id, year=year).get(company_id, {})
 
 
 def _monthly_totals_by_company(
-    session: Session, company_id: int | None = None
+    session: Session,
+    company_id: int | None = None,
+    *,
+    year: int | None = None,
 ) -> dict[int, dict[int, float]]:
-    """월별 배출량 합계를 기업 단위로 한 번에 묶어 반환 — N+1 방지용 벌크 조회.
+    """월별 배출량 합계를 기업 단위로 한 번에 묶어 반환한다.
 
-    company_id 없이 부르면 전 기업을 한 쿼리로 가져와 detect_alerts의 포트폴리오
-    스캔(GET /admin/alerts)이 기업 수만큼 쿼리를 반복하지 않게 한다.
+    ``year``를 주면 해당 보고연도만 집계한다. 관리자 포트폴리오 호출은 기존처럼
+    year=None으로 전 기업을 한 번에 가져와 N+1을 피한다.
     """
     stmt = (
         select(Voucher.company_id, Voucher.month, Classification.emission_co2e)
@@ -52,6 +69,8 @@ def _monthly_totals_by_company(
     )
     if company_id is not None:
         stmt = stmt.where(Voucher.company_id == company_id)
+    if year is not None:
+        stmt = stmt.where(Voucher.year == year)
     rows = session.execute(stmt).all()
 
     by_company: dict[int, dict[int, float]] = {}
@@ -62,14 +81,7 @@ def _monthly_totals_by_company(
 
 
 def _trend_signal(totals: dict[int, float]) -> dict | None:
-    """최신월 vs 직전 TREND_WINDOW개월 이동평균 — 급등/급감 하나만 반환(둘 다 걸리지 않음).
-
-    "직전 3개월"은 존재하는 데이터가 아니라 **달력상 연속된** latest-1~latest-3
-    이어야 한다 — 그렇지 않으면 결손월(예: 3~5월 가스 공백)을 건너뛰고 훨씬
-    이전 달과 비교해놓고 "최근 3개월 평균"이라 잘못 표시하게 된다. 그런
-    경우는 이동평균 기준을 세울 수 없으므로 판단을 보류한다(공백 자체는
-    _gap_signal이 별도로 잡는다).
-    """
+    """최신월과 달력상 직전 3개월 이동평균을 비교해 급등·급감 하나만 반환한다."""
     months = sorted(totals)
     if not months:
         return None
@@ -77,7 +89,7 @@ def _trend_signal(totals: dict[int, float]) -> dict | None:
     latest = months[-1]
     baseline_months = [latest - i for i in range(1, TREND_WINDOW + 1)]
     if not all(m in totals for m in baseline_months):
-        return None  # 직전 3개월이 달력상 연속으로 채워져 있지 않으면 판단 보류
+        return None
 
     baseline = mean(totals[m] for m in baseline_months)
     if baseline <= 0:
@@ -100,22 +112,16 @@ def _trend_signal(totals: dict[int, float]) -> dict | None:
             "severity": "medium",
             "month": latest,
             "ratio": round(ratio, 2),
-            "message": f"{latest}월 배출량이 최근 {TREND_WINDOW}개월 평균보다 {ratio:.1f}배 줄었어요. 가동률이 낮아진 건 아닌지 확인해보세요",
+            "message": (
+                f"{latest}월 배출량이 최근 {TREND_WINDOW}개월 평균보다 "
+                f"{ratio:.1f}배 줄었어요. 가동률이 낮아진 건 아닌지 확인해보세요"
+            ),
         }
     return None
 
 
 def _gap_signal(totals: dict[int, float], *, as_of: datetime | None = None) -> dict | None:
-    """최신 데이터 이후 연속 공백 개월 수가 임계치 이상이면 알림.
-
-    "데이터가 있던 마지막 달 이후" 몇 달이 비었는지 보되, 달력상 올해 안에서는
-    아직 오지 않은 달(예: 지금이 8월이면 9~12월)까지 공백으로 세지 않는다 —
-    실측(2026-08-17): 7월 이후 전표가 없다고 해서 아직 끝나지도 않은 올해
-    9~12월까지 싸잡아 "5개월째 연동 안 됨"이라 알리면 실제보다 훨씬 심각한
-    공백처럼 보인다. get_coverage/assess_inventory_completeness와 같은 원칙.
-    아예 연동을 시작 안 한 기업(공백 0건)은 이 신호가 아니라 별도 커버리지
-    로직(get_coverage)의 몫이라 여기서는 제외한다.
-    """
+    """최신 데이터 이후 올해 안에서 3개월 이상 연속 공백이면 알림을 반환한다."""
     if not totals:
         return None
     last_reported = max(totals)
@@ -132,36 +138,284 @@ def _gap_signal(totals: dict[int, float], *, as_of: datetime | None = None) -> d
     return None
 
 
-def detect_alerts(session: Session, company_id: int | None = None) -> list[dict]:
-    """이상 신호 알림 목록 생성 — severity 내림차순, 그다음 기업명.
-
-    company_id 를 주면 해당 기업만 스캔한다 — 은행 담당자용 전체 포트폴리오
-    조회(GET /admin/alerts)와 사장님용 자기 기업 알림(GET /owner/alerts/{id})이
-    같은 판정 로직을 공유하도록 한다("은행이 먼저 알고 사장은 모른다" 구도 방지,
-    CLAUDE.md §9 — 알림은 항상 사장에게 먼저).
-    """
+def detect_alerts(
+    session: Session,
+    company_id: int | None = None,
+    *,
+    year: int | None = None,
+) -> list[dict]:
+    """EWS 이상 신호 목록 — severity 내림차순, 그다음 기업명 순."""
     stmt = select(Company).order_by(Company.id)
     if company_id is not None:
         stmt = stmt.where(Company.id == company_id)
     companies = session.execute(stmt).scalars().all()
 
-    totals_by_company = _monthly_totals_by_company(session, company_id=company_id)
+    totals_by_company = _monthly_totals_by_company(
+        session, company_id=company_id, year=year,
+    )
 
     alerts = []
-    for co in companies:
-        totals = totals_by_company.get(co.id, {})
+    for company in companies:
+        totals = totals_by_company.get(company.id, {})
         for signal in (_trend_signal(totals), _gap_signal(totals)):
             if signal is None:
                 continue
-            alerts.append({
-                "company_id": co.id,
-                "company_name": co.name,
+            alert = {
+                "company_id": company.id,
+                "company_name": company.name,
                 "severity": signal["severity"],
                 "message": signal["message"],
                 "type": signal["type"],
                 "month": signal["month"],
-            })
+            }
+            if year is not None:
+                alert["year"] = year
+            alerts.append(alert)
 
     order = {"high": 0, "medium": 1, "low": 2}
-    alerts.sort(key=lambda a: (order[a["severity"]], a["company_name"]))
+    alerts.sort(key=lambda alert: (order[alert["severity"]], alert["company_name"]))
     return alerts
+
+
+def _persisted_anomaly_alerts(
+    session: Session,
+    company_id: int,
+    *,
+    year: int | None = None,
+) -> list[dict]:
+    """Classification에 저장된 이상치를 연도×월×연료별 한 알림으로 투영한다.
+
+    과거 단건 답변으로 한 그룹의 상태가 섞였을 수 있어 가장 보수적인 상태
+    (disputed > unknown > pending > confirmed_normal)를 대표 상태로 사용한다.
+    일반 Classification.status와 무관하게 읽는다. disputed/unknown 답변은 그 status를
+    review_required로 바꾸므로 owner-visible 필터를 다시 적용하면 중요한 알림이
+    답변 직후 사라지기 때문이다.
+    """
+    company = session.get(Company, company_id)
+    if company is None:
+        return []
+
+    stmt = (
+        select(
+            Voucher.year,
+            Voucher.month,
+            Classification.fuel_type,
+            Classification.anomaly_check_status,
+            Classification.anomaly_ratio,
+        )
+        .join(Classification, Classification.voucher_id == Voucher.id)
+        .where(
+            Voucher.company_id == company_id,
+            Classification.anomaly_check_status.is_not(None),
+        )
+    )
+    if year is not None:
+        stmt = stmt.where(Voucher.year == year)
+
+    grouped: dict[tuple[int, int, str], dict] = {}
+    for item_year, month, fuel, status, ratio in session.execute(stmt).all():
+        if status not in _ANOMALY_STATE_PRIORITY:
+            continue
+        key = (int(item_year), int(month), str(fuel or "해당 연료"))
+        current = grouped.get(key)
+        ratio_value = float(ratio) if ratio is not None else None
+        if current is None:
+            grouped[key] = {"status": status, "ratio": ratio_value}
+            continue
+        if _ANOMALY_STATE_PRIORITY[status] < _ANOMALY_STATE_PRIORITY[current["status"]]:
+            current["status"] = status
+        if ratio_value is not None:
+            current["ratio"] = max(current["ratio"] or ratio_value, ratio_value)
+
+    alerts = []
+    for (item_year, month, fuel), item in grouped.items():
+        status = item["status"]
+        ratio = item["ratio"]
+        if ratio is None:
+            lead = f"{item_year}년 {month}월 {fuel} 사용량에서 이상 신호가 감지됐어요."
+        else:
+            lead = f"{item_year}년 {month}월 {fuel} 사용량이 평소보다 {ratio:.1f}배 많아요."
+        message = lead if status == "pending" else f"{lead} {_ANOMALY_STATE_SUFFIX[status]}"
+        alerts.append({
+            "company_id": company.id,
+            "company_name": company.name,
+            "severity": _ANOMALY_STATE_SEVERITY[status],
+            "type": "anomaly",
+            "year": item_year,
+            "month": month,
+            "fuel": fuel,
+            "ratio": ratio,
+            "anomaly_status": status,
+            "message": message,
+        })
+
+    order = {"high": 0, "medium": 1, "low": 2}
+    alerts.sort(key=lambda alert: (
+        order[alert["severity"]], alert["year"], alert["month"], alert["fuel"],
+    ))
+    return alerts
+
+
+def _inventory_gap_alerts(
+    session: Session,
+    company_id: int,
+    *,
+    year: int | None,
+) -> list[dict]:
+    """완전성 카드와 같은 기준의 결손월을 연료별 한 알림으로 투영한다.
+
+    보고연도가 없는 호출은 anomaly/EWS의 기존 다년 동작을 유지하기 위해 건드리지
+    않는다. 탄소리포트는 quality-report가 확정한 reporting_year를 항상 전달한다.
+    """
+    if year is None:
+        return []
+
+    company = session.get(Company, company_id)
+    if company is None:
+        return []
+
+    # 순환 import 가능성을 피하고 owner 리포트에서만 품질 엔진을 로드한다.
+    from db.pcaf_engine.pcaf_quality import assess_inventory_completeness
+
+    missing_by_fuel: dict[str, set[int]] = {}
+    for scope_group in ("scope_1", "scope_2"):
+        assessment = assess_inventory_completeness(
+            session, company_id, year, scope_group,
+        )
+        for fuel, months in assessment.missing_months.items():
+            missing_by_fuel.setdefault(str(fuel), set()).update(int(month) for month in months)
+
+    fuel_labels = {"가스": "도시가스"}
+    alerts = []
+    for fuel in sorted(missing_by_fuel):
+        months = sorted(missing_by_fuel[fuel])
+        if not months:
+            continue
+        month_text = "·".join(str(month) for month in months)
+        alerts.append({
+            "company_id": company.id,
+            "company_name": company.name,
+            "severity": "medium",
+            "type": "gap",
+            "year": year,
+            "month": months[0],
+            "fuel": fuel,
+            "missing_months": months,
+            "message": f"{year}년 {month_text}월 {fuel_labels.get(fuel, fuel)} 자료가 비어 있어요.",
+        })
+    return alerts
+
+
+def _pending_usage_review_alerts(
+    session: Session,
+    company_id: int,
+    *,
+    year: int | None = None,
+) -> list[dict]:
+    """전기·도시가스 사용량 누락으로 계산하지 못한 일반 HITL을 한 건씩 안내한다.
+
+    문서 자체가 없는 completeness gap이나 사장 확인이 필요한 anomaly와 구분한다.
+    calc_failure_reason의 결정론적 계산 엔진 문구를 기준으로 잡아, 수량이 없더라도
+    금액 역산 가능한 경유나 연료 분류가 애매한 일반 HITL은 섞지 않는다.
+    """
+    company = session.get(Company, company_id)
+    if company is None:
+        return []
+
+    reason_metadata = {
+        "전기 사용량 미기재 — 금액 역산 불가": ("전기", "kWh"),
+        "도시가스 사용량 미기재 — 금액 역산 불가": ("도시가스", "m³"),
+    }
+    stmt = (
+        select(
+            Voucher.year,
+            Voucher.month,
+            Classification.fuel_type,
+            Classification.calc_failure_reason,
+        )
+        .join(Classification, Classification.voucher_id == Voucher.id)
+        .where(
+            Voucher.company_id == company_id,
+            Classification.status == "review_required",
+            Classification.calc_failure_reason.in_(tuple(reason_metadata)),
+        )
+    )
+    if year is not None:
+        stmt = stmt.where(Voucher.year == year)
+
+    grouped = {
+        (int(item_year), int(month), str(fuel or fuel_label), reason)
+        for item_year, month, fuel, reason in session.execute(stmt).all()
+        if reason in reason_metadata
+        for fuel_label, _unit in (reason_metadata[reason],)
+    }
+
+    alerts = []
+    for item_year, month, fuel, reason in sorted(grouped):
+        fuel_label, unit = reason_metadata[reason]
+        alerts.append({
+            "company_id": company.id,
+            "company_name": company.name,
+            "severity": "medium",
+            "type": "review",
+            "year": item_year,
+            "month": month,
+            "fuel": fuel,
+            "review_reason": "missing_activity_quantity",
+            "message": (
+                f"{item_year}년 {month}월 {fuel_label} 고지서에 사용량({unit})이 없어 "
+                "배출량을 계산하지 못했어요."
+            ),
+        })
+    return alerts
+
+
+def detect_owner_alerts(
+    session: Session,
+    company_id: int,
+    *,
+    year: int | None = None,
+) -> list[dict]:
+    """사장님 리포트용: 이상치·결손·사용량 검토·기존 EWS를 함께 반환한다."""
+    anomalies = _persisted_anomaly_alerts(session, company_id, year=year)
+    inventory_gaps = _inventory_gap_alerts(session, company_id, year=year)
+    usage_reviews = _pending_usage_review_alerts(session, company_id, year=year)
+    ews_alerts = detect_alerts(session, company_id=company_id, year=year)
+
+    anomaly_periods = {(alert["year"], alert["month"]) for alert in anomalies}
+    anomaly_months = {alert["month"] for alert in anomalies}
+    inventory_gap_periods = {
+        (alert["year"], tuple(alert["missing_months"])) for alert in inventory_gaps
+    }
+
+    # 기존 EWS gap은 회사 전체의 마지막 연동 이후 공백이다. 완전성 엔진이 같은
+    # 보고연도·동일 월 집합을 더 구체적인 연료별 gap으로 설명하면 generic 알림만 뺀다.
+    legacy_gap = _gap_signal(_monthly_totals(session, company_id, year=year))
+    legacy_gap_period = (
+        (year, tuple(legacy_gap["missing_months"]))
+        if year is not None and legacy_gap is not None
+        else None
+    )
+
+    deduplicated_ews = []
+    for alert in ews_alerts:
+        if alert["type"] in ("spike", "drop"):
+            alert_year = alert.get("year")
+            if (
+                (alert_year is not None and (alert_year, alert["month"]) in anomaly_periods)
+                or (alert_year is None and alert["month"] in anomaly_months)
+            ):
+                continue
+        if alert["type"] == "gap" and legacy_gap_period in inventory_gap_periods:
+            continue
+        deduplicated_ews.append(alert)
+
+    combined = anomalies + inventory_gaps + usage_reviews + deduplicated_ews
+    order = {"high": 0, "medium": 1, "low": 2}
+    combined.sort(key=lambda alert: (
+        order[alert["severity"]],
+        alert.get("year") or 0,
+        alert["month"],
+        alert.get("fuel") or "",
+    ))
+    return combined

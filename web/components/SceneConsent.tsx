@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { BadgeCheck, ChevronDown, FileBarChart, IdCard, Receipt, Zap } from "lucide-react";
 import { apiPost, getCompanyId } from "@/lib/api";
-import { OnboardingRewardBanner } from "@/components/OnboardingRewardBanner";
 
 /** 장면 ① — 마이데이터 연동 동의. 버튼 클릭 → Mock API로 5종 순차 수집.
  *
@@ -256,10 +255,6 @@ export function SceneConsent({ onNext }: { onNext: () => void }) {
           {error}
         </div>
       )}
-
-      {/* 연동이 실제로 끝난 뒤에만 리워드 안내를 보여준다 — 수집 실패(phase === "error")
-          상태에서 혜택 안내가 뜨면 안 된다(develop-plan §3.1). */}
-      {phase === "done" && <OnboardingRewardBanner />}
 
       {/* 버튼은 항상 같은 자리에 있고, 진행 중엔 사라지는 대신 살짝 블러 처리된 채로 상태 문구만 바뀐다. */}
       <button
