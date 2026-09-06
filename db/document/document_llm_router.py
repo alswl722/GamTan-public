@@ -14,11 +14,21 @@ LLM이 돕고, 그 라벨 밑 실제 문자열을 숫자로 바꾸는 건 여전
 서버 쪽에서 그 id가 실제 이 문서에 존재하는지 다시 검증한다(이중 안전장치).
 
 `api/agent/llm_classify.py`와 같은 재시도·캐시 패턴을 재사용한다(같은 SDK·모델).
+
+개인정보/영업정보 최소화(docs/borrower-pcaf-data-plan.md §20.4): 셀 목록(텍스트)은
+Gemini로 보내기 전에 사업자등록번호·고객번호를 마스킹한다(_mask_cells_for_llm) —
+LLM이 필요한 건 "이 셀이 무슨 항목이냐"는 라벨 판단뿐이라 값 자체를 가려도
+라우팅 정확도에 영향이 없다. 서버 쪽 재파싱(_resolve_fields)은 항상 마스킹 이전의
+원본 cells를 쓴다. **한계**: 문서 이미지 자체(상호명·주소 등이 찍힌 원본 사진)는
+라벨 오독 보정을 위해 여전히 그대로 전송된다 — 텍스트 마스킹으로는 이미지 속
+정보까지 가릴 수 없다. 이 최후 수단 경로는 텍스트 레이어·OCR·좌표매칭이 전부
+실패했을 때만 타므로 빈도는 낮다(CLAUDE.md §7).
 """
 import hashlib
 import io
 import json
 import os
+import re
 from datetime import datetime, timezone
 
 from google import genai
@@ -91,6 +101,36 @@ def _flatten_cells(rows: list[OcrRow]) -> list[dict]:
         for _x0, _x1, text in row:
             cells.append({"id": len(cells), "text": text, "row_index": row_index})
     return cells
+
+
+# ── Gemini 전송용 마스킹 (docs/borrower-pcaf-data-plan.md §20.4 "AI 데이터
+# 최소화" — 사업자번호·고객번호 등 식별정보는 마스킹하고 원본 전체를 기본
+# 전송하지 않는다) ──────────────────────────────────────────────────────
+#
+# LLM이 실제로 필요한 건 "이 셀이 날짜/금액/품목/공급자/고객번호 중 무엇이냐"는
+# 라벨 판단뿐이다 — 셀 안의 실제 문자열 값은 그 판단에 필요 없다(_resolve_fields가
+# 서버 쪽에서 원본 cells로 재파싱한다, LLM 응답엔 값 필드 자체가 없음 — 원칙1).
+# 그래서 마스킹은 "Gemini에 보낼 사본"에만 적용하고, route_fields()는 서버 재파싱에
+# 항상 원본 cells를 쓴다 — 마스킹이 라우팅 정확도(셀 위치 판단)를 방해하지 않는다.
+_BIZ_REG_NUMBER_RE = re.compile(r"\b\d{3}-\d{2}-\d{5}\b")
+# 고객번호는 라벨(문서 앞부분에 반드시 등장)이 있는 셀만 마스킹한다 — 순수 숫자·
+# 하이픈 패턴만으로는 금액·수량·전화번호까지 오탐되므로, "고객번호"라는 표지가
+# 실제로 있는 셀에서만 숫자열을 가린다(과잉 마스킹으로 라우팅 정확도를 깎지
+# 않기 위한 좁은 범위).
+_CUSTOMER_NUMBER_LABEL_RE = re.compile(r"(고객번호|고객\s*번호)\s*[:：]?\s*[\d-]+")
+
+
+def _mask_identifiers(text: str) -> str:
+    """사업자등록번호(000-00-00000)·고객번호(라벨 인접)를 마스킹 문자열로 치환."""
+    text = _BIZ_REG_NUMBER_RE.sub("[사업자등록번호 마스킹됨]", text)
+    text = _CUSTOMER_NUMBER_LABEL_RE.sub(lambda m: f"{m.group(1)}: [마스킹됨]", text)
+    return text
+
+
+def _mask_cells_for_llm(cells: list[dict]) -> list[dict]:
+    """Gemini에 보낼 셀 사본만 마스킹한다 — id/row_index는 그대로 두고 text만 치환,
+    원본 cells 리스트는 건드리지 않는다(서버 재파싱은 항상 원본을 쓴다)."""
+    return [{**c, "text": _mask_identifiers(c["text"])} for c in cells]
 
 
 def _row_texts(rows: list[OcrRow]) -> list[str]:
@@ -308,6 +348,9 @@ def route_fields(
     """
     file_hash = _hash_file(file_bytes)
     cells = _flatten_cells(rows or [])
+    # Gemini에는 마스킹된 사본만 보낸다 — 서버 재파싱(_resolve_fields 등)은 이
+    # 함수 끝까지 원본 cells를 그대로 쓴다(§20.4 AI 데이터 최소화).
+    masked_cells = _mask_cells_for_llm(cells)
 
     cached = _cache_get(session, file_hash)
     if cached is not None:
@@ -318,7 +361,7 @@ def route_fields(
         result = None
         for _attempt in range(2):  # 최초 시도 + 1회 재시도 (llm_classify.py와 동일 패턴)
             try:
-                result = _call_gemini(images, cells, expected_document_type)
+                result = _call_gemini(images, masked_cells, expected_document_type)
                 break
             except (json.JSONDecodeError, ValueError) as e:
                 last_error = f"응답 형식 오류: {e}"
