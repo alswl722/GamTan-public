@@ -270,3 +270,70 @@ def test_route_fields_electric_bill_falls_back_to_month_end_issue_date(monkeypat
     )
     parsed, _ = router.route_fields(_session(), b"fake-bytes-15", ELECTRIC_ROWS_NO_ITEM_LABEL, "electric_bill")
     assert parsed["issue_date"] == "2025-07-31"
+
+
+# ── 마스킹 (docs/borrower-pcaf-data-plan.md §20.4 "AI 데이터 최소화") ────────
+
+def test_mask_identifiers_hides_business_registration_number():
+    assert router._mask_identifiers("사업자등록번호: 123-45-67890") == (
+        "사업자등록번호: [사업자등록번호 마스킹됨]"
+    )
+
+
+def test_mask_identifiers_hides_customer_number_only_with_label():
+    assert router._mask_identifiers("고객번호: 0355-7712-90") == "고객번호: [마스킹됨]"
+
+
+def test_mask_identifiers_does_not_touch_unrelated_digit_hyphen_text():
+    """라벨 없이 숫자-하이픈만 있는 셀(날짜·전화번호 등)은 고객번호 마스킹
+    대상이 아니다 — 과잉 마스킹으로 라우팅 정확도를 깎지 않기 위한 좁은 범위."""
+    assert router._mask_identifiers("2025-02-11") == "2025-02-11"
+    assert router._mask_identifiers("420,833") == "420,833"
+
+
+def test_mask_cells_for_llm_preserves_id_and_row_index():
+    cells = [{"id": 0, "text": "사업자등록번호 123-45-67890", "row_index": 0}]
+    masked = router._mask_cells_for_llm(cells)
+    assert masked[0]["id"] == 0
+    assert masked[0]["row_index"] == 0
+    assert "[사업자등록번호 마스킹됨]" in masked[0]["text"]
+    # 원본 리스트는 건드리지 않는다(서버 재파싱은 항상 원본을 씀).
+    assert cells[0]["text"] == "사업자등록번호 123-45-67890"
+
+
+def test_route_fields_sends_masked_cells_to_gemini_but_reparses_from_original(monkeypatch):
+    """핵심 검증 — Gemini에는 마스킹된 사업자번호가 전달되지만, route_fields()의
+    최종 반환값(supplier_name 등)은 원본 OCR 텍스트로 재파싱돼 마스킹되지 않는다.
+    (LLM에게 안 보여준 값도 서버가 자체적으로는 정확히 복원해야 한다는 뜻 —
+    마스킹이 서버 측 결과 품질을 떨어뜨리면 안 된다.)"""
+    biz_rows = [
+        [(0.0, 200.0, "공급자: 구미정밀 사업자등록번호 123-45-67890")],
+        [(0.0, 80.0, "작성일자"), (280.0, 340.0, "공급가액")],
+        [(0.0, 90.0, "2025-02-11"), (280.0, 340.0, "420,833")],
+        [(0.0, 55.0, "경유")],
+    ]
+    seen_cells = {}
+
+    def _capture_and_respond(images, cells, doc_type):
+        seen_cells["cells"] = cells
+        return {
+            "document_type": "tax_invoice",
+            "date_cell_id": "3",
+            "amount_cell_id": "4",
+            "item_cell_id": "5",
+            "quantity_cell_id": None,
+            "supplier_cell_id": "0",
+            "confidence": 0.9,
+            "evidence": "공급자 라벨 셀 선택",
+        }
+
+    monkeypatch.setattr(router, "_call_gemini", _capture_and_respond)
+    parsed, _ = router.route_fields(_session(), b"fake-bytes-16", biz_rows, "tax_invoice")
+
+    # Gemini가 실제로 받은 셀에는 사업자번호가 마스킹돼 있어야 한다.
+    sent_text = seen_cells["cells"][0]["text"]
+    assert "123-45-67890" not in sent_text
+    assert "[사업자등록번호 마스킹됨]" in sent_text
+
+    # 서버 최종 결과(supplier_name)는 마스킹 없이 원본 텍스트 그대로.
+    assert "123-45-67890" in parsed["supplier_name"]
