@@ -134,8 +134,14 @@ export interface AlertItem {
   company_id: number;
   company_name: string;
   severity: "high" | "medium" | "low";
-  type: "spike" | "drop" | "gap";
+  type: "spike" | "drop" | "gap" | "anomaly" | "review";
+  year?: number;
   month: number;
+  fuel?: string;
+  missing_months?: number[];
+  review_reason?: "missing_activity_quantity";
+  ratio?: number | null;
+  anomaly_status?: "pending" | "confirmed_normal" | "disputed" | "unknown";
   message: string;
 }
 

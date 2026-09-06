@@ -407,10 +407,9 @@ export function ScenePcaf({ showHeading = true }: { showHeading?: boolean } = {}
       setData(res);
       setExpandedScope(null);
       setDetailByScope({});
-      // 이상 신호는 은행 담당자와 동일한 판정 로직(GET /admin/alerts와 같은
-      // db/alerts.py::detect_alerts)을 자기 기업분만 조회 — 은행이 먼저 알고
-      // 사장은 모르는 구도를 만들지 않는다(CLAUDE.md §9).
-      apiGet<{ alerts: AlertItem[] }>(`/owner/alerts/${cid}`)
+      // 저장된 월×연료 이상치와 EWS를 리포트의 실제 보고연도로 조회한다.
+      // 연도 선택기를 바꾸면 다른 해의 이상 신호가 섞이지 않도록 year를 명시한다.
+      apiGet<{ alerts: AlertItem[] }>(`/owner/alerts/${cid}?year=${res.reporting_year}`)
         .then((r) => setAlerts(r.alerts))
         .catch((err) => console.error("이상 신호 조회 실패(부가 정보라 화면은 계속 진행):", err));
       // 우대금리 카드는 이제 메인 화면(web/components/RateProductCard.tsx)이 조회한다.
@@ -440,7 +439,10 @@ export function ScenePcaf({ showHeading = true }: { showHeading?: boolean } = {}
   }
 
   useEffect(() => {
-    void load();
+    const timeoutId = window.setTimeout(() => {
+      void load();
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
   }, []);
 
   if (!data) {
@@ -570,7 +572,7 @@ export function ScenePcaf({ showHeading = true }: { showHeading?: boolean } = {}
             <div className="min-w-0 flex-1 space-y-2">
               {alerts.map((a, i) => (
                 <div
-                  key={`${a.type}-${a.month}`}
+                  key={`${a.type}-${a.year ?? "all"}-${a.month}-${a.fuel ?? "all"}`}
                   className={`relative rounded-2xl bg-bg px-3.5 py-2.5 text-[12.5px] leading-relaxed text-muted ${
                     i === 0 ? "rounded-tl-sm" : ""
                   }`}

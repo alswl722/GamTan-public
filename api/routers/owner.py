@@ -65,7 +65,7 @@ from api.queries import (
     get_pending_anomaly_checks,
 )
 from db.owner_briefing import FuelMonthStat, compute_fuel_deltas, get_briefing_paragraphs
-from db.alerts import detect_alerts
+from db.alerts import detect_owner_alerts
 from db.carbon_neutral_point import (
     APPLICANT_FIELD_KEYS,
     APPLICATION_KINDS,
@@ -136,9 +136,13 @@ _VALID_DOCUMENT_TYPES = ("tax_invoice", "electric_bill", "gas_bill")
 
 
 @router.get("/alerts/{company_id}")
-def owner_alerts(company_id: int, session: Session = Depends(get_session)):
-    """자기 기업의 이상 신호 알림만 — 여신 결정과 무관, 안내 문구일 뿐(CLAUDE.md §9)."""
-    return {"alerts": detect_alerts(session, company_id=company_id)}
+def owner_alerts(
+    company_id: int,
+    year: int | None = None,
+    session: Session = Depends(get_session),
+):
+    """자기 기업의 EWS와 저장된 월×연료 이상치를 보고연도별로 안내한다."""
+    return {"alerts": detect_owner_alerts(session, company_id, year=year)}
 
 
 class FuelTypesIn(BaseModel):
@@ -185,13 +189,12 @@ def supplement_anomaly_check(
     body: AnomalyCheckIn,
     session: Session = Depends(get_session),
 ):
-    """사장님이 이상치 확인 요청에 답한다 — 숫자는 받지 않는다(핵심 원칙,
-    docs/tasks.md). "네, 정상이에요"는 참고정보로만 남지만, "아니요"·
-    "모르겠어요"는 담당자 우선순위 알림으로 이어진다 — 이미 auto(자동확정)
-    였던 건은 review_required로 되돌려 HITL 큐에서 눈에 띄게 한다.
+    """연도×월×연료별 이상치 질문에 한 번 답하고 관련 전표 전체에 반영한다.
 
-    다른 기업 소유 전표는 404로 막는다(테넌트 경계, CLAUDE.md 원칙9 — 기존
-    documents DELETE 엔드포인트와 같은 패턴).
+    ``voucher_id``는 조회 API가 고른 그룹 대표 전표다. 서버가 대표 전표에서 그룹 키를
+    다시 구하므로 클라이언트가 다른 연도·월·연료를 임의로 지정할 수 없다. "네"는
+    참고정보로만 저장하고, "아니요"·"모르겠어요"는 그룹의 자동분류 전표를 모두
+    review_required로 돌려 담당자 검토 대상으로 만든다.
     """
     voucher = session.get(Voucher, voucher_id)
     if voucher is None or voucher.company_id != company_id:
@@ -203,12 +206,26 @@ def supplement_anomaly_check(
     if classification is None or classification.anomaly_check_status != "pending":
         raise HTTPException(status_code=404, detail="확인 대기 중인 이상치 요청이 아닙니다")
 
-    status_map = {"normal": "confirmed_normal", "disputed": "disputed", "unknown": "unknown"}
-    classification.anomaly_check_status = status_map[body.answer]
-    classification.anomaly_check_reason = body.reason
+    group = session.execute(
+        select(Classification)
+        .join(Voucher, Classification.voucher_id == Voucher.id)
+        .where(
+            Voucher.company_id == company_id,
+            Voucher.year == voucher.year,
+            Voucher.month == voucher.month,
+            Classification.fuel_type == classification.fuel_type,
+            Classification.anomaly_check_status.is_not(None),
+        )
+        .with_for_update()
+    ).scalars().all()
 
-    if body.answer != "normal" and classification.status == "auto":
-        classification.status = "review_required"
+    status_map = {"normal": "confirmed_normal", "disputed": "disputed", "unknown": "unknown"}
+    anomaly_status = status_map[body.answer]
+    for item in group:
+        item.anomaly_check_status = anomaly_status
+        item.anomaly_check_reason = body.reason
+        if body.answer != "normal" and item.status == "auto":
+            item.status = "review_required"
 
     session.commit()
 

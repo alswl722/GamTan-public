@@ -65,7 +65,7 @@ function Row({
   return (
     <div className="rounded-2xl border border-line bg-surface p-3.5">
       <p className="text-[13px] font-semibold leading-relaxed text-ink">
-        {item.month}월 {item.fuel} 사용량이 평소보다 {item.ratio}배 많아요, 맞나요?
+        {item.year}년 {item.month}월 {item.fuel} 사용량이 평소보다 {item.ratio}배 많아요, 맞나요?
       </p>
 
       {!needsReason ? (

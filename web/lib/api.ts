@@ -398,6 +398,7 @@ export function getReductionTodo(companyId: number): Promise<ReductionTodoRespon
 // "맞나요?" 확인받는다. 숫자는 절대 안 받는다 — 예/아니오/모르겠어요만.
 export interface AnomalyCheckItem {
   voucher_id: number;
+  year: number;
   month: number;
   fuel: string;
   ratio: number;
