@@ -1,12 +1,15 @@
 "use client";
 
-// 실API: GET /admin/traces (실행 이력 목록) + GET /trace/{session_id} (드릴다운 스텝)
+// 실API: GET /admin/traces (page/page_size/company_id/from_time/to_time 서버사이드
+// 페이지네이션) + GET /trace/{session_id} (드릴다운 스텝)
 
 import { useEffect, useMemo, useState } from "react";
-import { getTraceSteps } from "@/lib/admin-data";
+import { getTraceRuns, getTraceSteps } from "@/lib/admin-data";
 import type { TraceRunItem, TraceStep } from "@/lib/admin-types";
+import { usePaginatedLog } from "@/lib/use-paginated-log";
 import { cn } from "@/lib/utils";
 import { DateText } from "@/lib/use-formatted-date";
+import { PaginationBar } from "@/components/admin/PaginationBar";
 
 const STATUS_MAP: Record<string, string> = {
   완료: "bg-brand-soft text-brand-ink border-brand/30",
@@ -165,42 +168,48 @@ function DrillDownModal({ run, onClose }: { run: TraceRunItem; onClose: () => vo
 type Preset = "전체" | "오늘" | "최근 7일" | "최근 30일" | "직접 설정";
 const PRESETS: Preset[] = ["전체", "오늘", "최근 7일", "최근 30일", "직접 설정"];
 
-function presetRange(preset: Preset): { from: number | null; to: number | null } {
-  if (preset === "전체" || preset === "직접 설정") return { from: null, to: null };
+function presetRange(preset: Preset): { from: string | undefined; to: string | undefined } {
+  if (preset === "전체" || preset === "직접 설정") return { from: undefined, to: undefined };
   const now = new Date();
-  const to = now.getTime();
+  const to = now.toISOString();
   const from = new Date(now);
   if (preset === "오늘") from.setHours(0, 0, 0, 0);
   if (preset === "최근 7일") from.setDate(from.getDate() - 7);
   if (preset === "최근 30일") from.setDate(from.getDate() - 30);
-  return { from: from.getTime(), to };
+  return { from: from.toISOString(), to };
 }
 
-export function TraceHistory({ runs }: { runs: TraceRunItem[] }) {
+const PAGE_SIZE = 50;
+
+/** companyId를 넘기면 기간 프리셋 없이 그 기업(정확일치)으로 고정 필터한다 —
+ * 기업 상세 탭이 사용. trace_logs가 계속 쌓이는 로그 테이블이라 서버사이드
+ * 페이지네이션으로 조회한다(review-log/access-log와 같은 패턴). */
+export function TraceHistory({ companyId: fixedCompanyId }: { companyId?: number } = {}) {
   const [selected, setSelected] = useState<TraceRunItem | null>(null);
   const [preset, setPreset] = useState<Preset>("전체");
   // 프리셋이 아닌 "직접 설정"일 때만 쓰는 수동 기간 입력
   const [fromTime, setFromTime] = useState("");
   const [toTime, setToTime] = useState("");
 
-  const filtered = useMemo(() => {
-    let from: number | null;
-    let to: number | null;
+  const dateRange = useMemo(() => {
     if (preset === "직접 설정") {
-      from = fromTime ? new Date(fromTime).getTime() : null;
-      to = toTime ? new Date(toTime).getTime() : null;
-    } else {
-      ({ from, to } = presetRange(preset));
+      return {
+        fromTime: fromTime ? new Date(fromTime).toISOString() : undefined,
+        toTime: toTime ? new Date(toTime).toISOString() : undefined,
+      };
     }
-    if (from === null && to === null) return runs;
-    return runs.filter((r) => {
-      if (!r.ran_at) return true; // 시각 미상 실행은 필터로 숨기지 않는다
-      const t = new Date(r.ran_at).getTime();
-      if (from !== null && t < from) return false;
-      if (to !== null && t > to) return false;
-      return true;
-    });
-  }, [runs, preset, fromTime, toTime]);
+    const { from, to } = presetRange(preset);
+    return { fromTime: from, toTime: to };
+  }, [preset, fromTime, toTime]);
+
+  const { data, loading, error, page, setPage, retry } = usePaginatedLog<{ runs: TraceRunItem[] }>(
+    getTraceRuns,
+    PAGE_SIZE,
+    fixedCompanyId,
+    dateRange,
+  );
+
+  const runs = data?.runs ?? [];
 
   const inputCls =
     "rounded-md border border-line bg-surface px-2.5 py-1.5 text-xs text-muted transition-colors focus:outline-none focus:ring-1 focus:ring-brand";
@@ -211,22 +220,24 @@ export function TraceHistory({ runs }: { runs: TraceRunItem[] }) {
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-6 py-4">
           <h2 className="text-base font-semibold text-ink">트레이스 실행 이력</h2>
           <div className="flex flex-wrap items-center gap-2">
-            <div className="flex items-center gap-0.5 rounded-md border border-line bg-bg p-0.5">
-              {PRESETS.map((p) => (
-                <button
-                  key={p}
-                  type="button"
-                  onClick={() => setPreset(p)}
-                  className={cn(
-                    "whitespace-nowrap rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors",
-                    preset === p ? "bg-surface text-ink shadow-sm" : "text-muted hover:text-ink",
-                  )}
-                >
-                  {p}
-                </button>
-              ))}
-            </div>
-            {preset === "직접 설정" && (
+            {fixedCompanyId === undefined && (
+              <div className="flex items-center gap-0.5 rounded-md border border-line bg-bg p-0.5">
+                {PRESETS.map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => setPreset(p)}
+                    className={cn(
+                      "whitespace-nowrap rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors",
+                      preset === p ? "bg-surface text-ink shadow-sm" : "text-muted hover:text-ink",
+                    )}
+                  >
+                    {p}
+                  </button>
+                ))}
+              </div>
+            )}
+            {fixedCompanyId === undefined && preset === "직접 설정" && (
               <>
                 <label className="flex items-center gap-1.5 text-xs text-faint">
                   시작
@@ -248,18 +259,28 @@ export function TraceHistory({ runs }: { runs: TraceRunItem[] }) {
                 </label>
               </>
             )}
-            <span className="text-xs text-faint">
-              {filtered.length === runs.length
-                ? `총 ${runs.length}건`
-                : `${filtered.length}건 / 총 ${runs.length}건`}
-            </span>
           </div>
         </div>
 
         <div className="min-h-0 flex-1 overflow-auto">
-          {filtered.length === 0 ? (
+          {error ? (
+            <div className="flex h-40 flex-col items-center justify-center gap-2 text-sm text-faint">
+              <span className="text-hitl-ink">{error}</span>
+              <button
+                type="button"
+                onClick={retry}
+                className="rounded-md border border-line bg-surface px-3 py-1.5 text-xs font-semibold text-muted hover:text-ink"
+              >
+                다시 시도
+              </button>
+            </div>
+          ) : loading && !data ? (
             <div className="flex h-40 items-center justify-center text-sm text-faint">
-              {runs.length === 0 ? "실행 이력이 없습니다" : "선택한 기간에 실행 이력이 없습니다"}
+              불러오는 중…
+            </div>
+          ) : runs.length === 0 ? (
+            <div className="flex h-40 items-center justify-center text-sm text-faint">
+              {preset === "전체" ? "실행 이력이 없습니다" : "선택한 기간에 실행 이력이 없습니다"}
             </div>
           ) : (
             <table className="w-full text-sm">
@@ -276,7 +297,7 @@ export function TraceHistory({ runs }: { runs: TraceRunItem[] }) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-line">
-                {filtered.map((run) => (
+                {runs.map((run) => (
                   <tr
                     key={run.session_id}
                     onClick={() => setSelected(run)}
@@ -323,6 +344,10 @@ export function TraceHistory({ runs }: { runs: TraceRunItem[] }) {
             </table>
           )}
         </div>
+
+        {data && data.total > 0 && (
+          <PaginationBar total={data.total} page={page} pageSize={PAGE_SIZE} onChange={setPage} />
+        )}
       </div>
 
       {selected && <DrillDownModal run={selected} onClose={() => setSelected(null)} />}

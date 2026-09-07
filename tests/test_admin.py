@@ -659,12 +659,73 @@ def test_traces_groups_runs_with_badges(db, client):
                              message=msg, tool_name="테스트"))
     session.commit()
 
-    runs = {r["session_id"]: r for r in client.get("/admin/traces").json()["runs"]}
+    body = client.get("/admin/traces").json()
+    runs = {r["session_id"]: r for r in body["runs"]}
     assert runs["s-1"]["step_count"] == 2
     assert set(runs["s-1"]["result_badges"]) == {"결손 발견", "이상치"}
     assert runs["s-2"]["result_badges"] == ["정상"]
     assert runs["s-1"]["company_name"] == "○○정밀"
     assert runs["s-1"]["status"] == "완료"
+    assert body["total"] == 2
+    assert body["page"] == 1
+    assert body["page_size"] == 50
+
+
+def test_traces_paginates_sessions_newest_first(db, client):
+    """세션 단위 서버사이드 페이지네이션 — 세션 시작 시각 최신순, total은 세션 수 기준."""
+    session, cid = db
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    for i, sid in enumerate(["s-old", "s-mid", "s-new"]):
+        session.add(TraceLog(
+            company_id=cid, session_id=sid, step_type="관찰",
+            message="자료를 확인했어요.", tool_name="테스트",
+            created_at=base.replace(day=1 + i),
+        ))
+    session.commit()
+
+    res = client.get("/admin/traces?page=1&page_size=2").json()
+    assert res["total"] == 3
+    assert res["page_size"] == 2
+    assert [r["session_id"] for r in res["runs"]] == ["s-new", "s-mid"]
+
+    res2 = client.get("/admin/traces?page=2&page_size=2").json()
+    assert [r["session_id"] for r in res2["runs"]] == ["s-old"]
+
+
+def test_traces_filters_by_company_id_and_date_range(db, client):
+    """company_id/from_time/to_time 필터 — 1단계 세션 목록 필터가 결과에 반영된다."""
+    session, cid = db
+    other = Company(
+        name="다른정밀", industry_code="C251", industry_name="구조용 금속제품 제조",
+        employee_count=5, revenue_krw=500_000_000, region="경북 구미시",
+    )
+    session.add(other)
+    session.commit()
+
+    session.add(TraceLog(
+        company_id=cid, session_id="s-mine", step_type="관찰", message="확인.",
+        created_at=datetime(2026, 6, 15, tzinfo=timezone.utc),
+    ))
+    session.add(TraceLog(
+        company_id=other.id, session_id="s-other", step_type="관찰", message="확인.",
+        created_at=datetime(2026, 6, 15, tzinfo=timezone.utc),
+    ))
+    session.commit()
+
+    res = client.get(f"/admin/traces?company_id={cid}").json()
+    assert [r["session_id"] for r in res["runs"]] == ["s-mine"]
+    assert res["total"] == 1
+
+    res_in_range = client.get(
+        "/admin/traces?from_time=2026-06-01T00:00:00Z&to_time=2026-06-30T00:00:00Z"
+    ).json()
+    assert {r["session_id"] for r in res_in_range["runs"]} == {"s-mine", "s-other"}
+
+    res_out_of_range = client.get(
+        "/admin/traces?from_time=2026-07-01T00:00:00Z&to_time=2026-07-31T00:00:00Z"
+    ).json()
+    assert res_out_of_range["runs"] == []
+    assert res_out_of_range["total"] == 0
 
 
 # ── 기업 상세 탭 (GET /admin/companies/{id}/overview) ─────────────────────────

@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
-from api.queries import get_coverage, get_distribution
+from api.queries import _voucher_dict, coverage_from_vouchers, get_distribution, get_vouchers
 from db.models import Classification, Company, IndustryDistribution, Voucher
 
 
@@ -48,16 +48,34 @@ def _bulk_distributions(session: Session) -> dict[tuple[str, int], dict]:
 def portfolio_summary(session: Session) -> dict:
     """관리자 대시보드 — 거래 기업 전체의 금융배출량 집계 + PCAF 등급 분포.
 
-    각 기업의 company_pcaf_summary 를 재사용해 실측(after) 우선, 없으면 기준선(before)
-    으로 합산한다. 데모는 시연 기업 1곳이지만 로직은 N개 기업으로 그대로 확장된다
-    — 프론트가 company_count 를 정직하게 표기(현재 1개 → 결선 포트폴리오).
+    각 기업의 company_pcaf_summary 와 동일한 계산(_after_measured)을 재사용해
+    실측(after) 우선, 없으면 기준선(before)으로 합산한다. 데모는 시연 기업
+    1곳이지만 로직은 N개 기업으로 그대로 확장된다 — 프론트가 company_count 를
+    정직하게 표기(현재 1개 → 결선 포트폴리오).
 
-    기업 수만큼 반복되던 개별 조회(get_distribution 등)를 앞서 한 번에 읽어
-    캐시로 넘긴다 — 결과는 company_pcaf_summary를 직접 부르는 것과 동일하고,
-    쿼리 횟수만 줄인다(N+1 방지).
+    company_pcaf_summary를 기업마다 직접 호출하지 않는다(2026-09-07) — 개발 DB가
+    원격 리전(Supabase ap-southeast-1)이라 쿼리 1번의 왕복(RTT)이 ~70ms인데,
+    기업별 호출은 기업마다 Voucher/Classification을 따로 조회해 기업 수에 비례해
+    쿼리가 늘어난다(기업 10곳=쿼리 약 20번=RTT만 1.4초). 대신 전 기업의
+    Voucher/Classification을 각각 한 번의 쿼리로 읽어 company_id로 메모리에서
+    그룹핑한 뒤, 기업별 계산(_after_measured)은 그 그룹만 넘겨 순수 계산으로
+    돌린다 — 쿼리 횟수가 기업 수와 무관하게 고정된다.
     """
     companies = session.execute(select(Company).order_by(Company.id)).scalars().all()
     dist_cache = _bulk_distributions(session)
+
+    all_rows = session.execute(
+        select(Classification, Voucher).join(Voucher, Classification.voucher_id == Voucher.id)
+    ).all()
+    rows_by_company: dict[int, list] = {}
+    for c, v in all_rows:
+        rows_by_company.setdefault(v.company_id, []).append((c, v))
+
+    all_vouchers = session.execute(select(Voucher)).scalars().all()
+    vouchers_by_company: dict[int, list[dict]] = {}
+    for v in all_vouchers:
+        vouchers_by_company.setdefault(v.company_id, []).append(_voucher_dict(v))
+
     grade_dist = {g: 0 for g in range(1, 6)}
     per_company = []
     s1_total = s2_total = 0.0
@@ -65,9 +83,17 @@ def portfolio_summary(session: Session) -> dict:
     measured_total = 0.0      # 전표 실측분 (결손월 업종평균 보정분 제외)
 
     for co in companies:
-        summ = company_pcaf_summary(session, co.id, dist_cache=dist_cache)
-        after = summ["after"]
-        used = after or summ["before"]         # 분류 미실행 기업은 기준선(5등급)으로
+        dist1 = dist_cache.get((co.industry_code, 1))
+        dist2 = dist_cache.get((co.industry_code, 2))
+        after = _after_measured_from_rows(
+            co,
+            rows_by_company.get(co.id, []),
+            vouchers_by_company.get(co.id, []),
+            dist1,
+            dist2,
+        )
+        before = _before_baseline(co, dist1, dist2)
+        used = after or before                 # 분류 미실행 기업은 기준선(5등급)으로
         s1 = used.get("scope1", 0.0) or 0.0
         s2 = used.get("scope2", 0.0) or 0.0
         grade = used["grade"]
@@ -167,7 +193,7 @@ def company_pcaf_summary(
         dist2 = get_distribution(session, company.industry_code, 2, company.employee_count)
 
     before = _before_baseline(company, dist1, dist2)
-    after = _after_measured(session, company_id, dist1, dist2, year=year)
+    after = _after_measured(session, company, dist1, dist2, year=year)
     benchmark = benchmark_against_industry(company, dist1, dist2, after["total"] if after else None)
 
     return {"before": before, "after": after, "benchmark": benchmark}
@@ -256,8 +282,34 @@ def monthly_by_fuel(
     ]
 
 
-def _after_measured(session, company_id, dist1, dist2, year: int | None = None) -> dict | None:
+def _after_measured(session, company, dist1, dist2, year: int | None = None) -> dict | None:
     """전표 기반 실측 — 저장된 Classification 집계 + 결손월 업종 평균 보정.
+
+    기업 1곳 단위로 그때그때 쿼리해서 계산한다(에이전트 도구·사장님 리포트가
+    기업 하나만 볼 때 이 경로를 쓴다). portfolio_summary처럼 전 기업을 한 번에
+    보는 경우엔 이 함수의 쿼리를 그대로 기업 수만큼 반복하면 원격 DB RTT가
+    누적되므로, 대신 _after_measured_from_rows를 벌크 조회 결과로 직접 호출한다
+    (아래 portfolio_summary 참고) — 계산 로직은 이 함수와 완전히 동일하다.
+    """
+    company_id = company.id
+    rows = (
+        session.execute(
+            select(Classification, Voucher)
+            .join(Voucher, Classification.voucher_id == Voucher.id)
+            .where(Voucher.company_id == company_id)
+        )
+        .all()
+    )
+    vouchers = get_vouchers(session, company_id)
+    return _after_measured_from_rows(company, rows, vouchers, dist1, dist2, year=year, session=session)
+
+
+def _after_measured_from_rows(
+    company, rows: list, vouchers: list[dict], dist1, dist2, year: int | None = None, session=None,
+) -> dict | None:
+    """_after_measured의 계산 본체 — Voucher/Classification을 이미 읽어둔
+    상태(rows: (Classification, Voucher) 쌍, vouchers: _voucher_dict 리스트)로
+    받아 쿼리 없이 순수 계산만 한다.
 
     분류가 한 건도 없으면 None (프론트가 '③ 먼저 실행하세요' 안내).
     emission_co2e 는 kgCO2e 로 저장돼 있으므로 ÷1000 해 tCO2e 로 집계한다.
@@ -267,15 +319,10 @@ def _after_measured(session, company_id, dist1, dist2, year: int | None = None) 
     연도 경계에 걸려 흔들릴 수 있고, 어차피 이 구 엔진의 등급·Scope 값은
     이제 프론트가 안 쓴다(정식 엔진 db/pcaf_quality.py로 교체됨 — CLAUDE.md
     §8 각주). monthly만 실제로 재사용 중이라 그것만 연도를 존중하게 한다.
+    year가 주어지면 monthly_by_fuel을 다시 쿼리한다(session 필요) — portfolio_summary
+    (year=None 고정)는 이 경로를 타지 않는다.
     """
-    rows = (
-        session.execute(
-            select(Classification, Voucher)
-            .join(Voucher, Classification.voucher_id == Voucher.id)
-            .where(Voucher.company_id == company_id)
-        )
-        .all()
-    )
+    company_id = company.id
     # 담당자가 반려한 건(status='rejected')은 분류를 신뢰할 수 없다는 판정이므로 집계 제외
     scored = [
         (c, v) for c, v in rows
@@ -301,8 +348,10 @@ def _after_measured(session, company_id, dist1, dist2, year: int | None = None) 
         grade_weight += item_grade * kg
         total_weight += kg
 
-    # 결손월 보정 — 없는 월은 업종 중앙값을 12분배해 5등급으로 가산
-    coverage = get_coverage(session, company_id)
+    # 결손월 보정 — 없는 월은 업종 중앙값을 12분배해 5등급으로 가산.
+    # get_coverage()를 그대로 부르면 매번 재조회하므로, 이미 받아둔 vouchers로
+    # 계산 본체(coverage_from_vouchers)만 재사용한다.
+    coverage = coverage_from_vouchers(vouchers, company.fuel_types_json)
     gap_kg = {1: 0.0, 2: 0.0}
     gap_by_bucket_kg: dict[str, float] = {}
     gap_detail = []
@@ -340,13 +389,33 @@ def _after_measured(session, company_id, dist1, dist2, year: int | None = None) 
     grade = _clip_grade(grade_weight / total_weight) if total_weight else 3
 
     # 결손분이 5등급 대신 실측(spend-based=3등급)으로 채워졌다면 등급이 어디까지
-    # 오르는지 역산 — 등급 상승 후보 안내(§6 "등급 상승 역산 요청")의 재료.
+    # 오르는지 역산 — 등급 상승 역산 요청(§6 "등급 상승 역산 요청")의 재료.
     gap_total_kg = sum(gap_kg.values())
     if gap_total_kg > 0 and total_weight:
         resolved_weight = grade_weight - 5 * gap_total_kg + 3 * gap_total_kg
         projected_grade = _clip_grade(resolved_weight / total_weight)
     else:
         projected_grade = grade
+
+    if year is None:
+        # monthly_by_fuel(year=None)과 동일한 조건(scope 1/2, status != rejected)을
+        # 이미 읽어둔 scored에서 그대로 재사용 — Voucher JOIN Classification 재조회 생략.
+        by_month_bucket_kg: dict[int, dict[str, float]] = {m: {} for m in range(1, 13)}
+        for c, v in scored:
+            bucket_totals = by_month_bucket_kg[int(v.month)]
+            bucket = _fuel_bucket(c.fuel_type)
+            bucket_totals[bucket] = bucket_totals.get(bucket, 0.0) + float(c.emission_co2e)
+        monthly = [
+            {
+                "month": m,
+                "total_tco2e": round(sum(by_month_bucket_kg[m].values()) / 1000.0, 2),
+                "by_fuel": {k: round(v / 1000.0, 2) for k, v in by_month_bucket_kg[m].items()},
+            }
+            for m in range(1, 13)
+        ]
+    else:
+        assert session is not None, "year 지정 시 monthly 재쿼리를 위해 session이 필요합니다"
+        monthly = monthly_by_fuel(session, company_id, year=year)
 
     return {
         "grade": grade,
@@ -359,7 +428,7 @@ def _after_measured(session, company_id, dist1, dist2, year: int | None = None) 
         "gap_months": gap_detail,
         "projected_grade": projected_grade,
         "by_fuel": by_fuel,
-        "monthly": monthly_by_fuel(session, company_id, year=year),
+        "monthly": monthly,
     }
 
 

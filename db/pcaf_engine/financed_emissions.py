@@ -101,30 +101,50 @@ def portfolio_financed_emissions_by_year(session: Session, portfolio_id: int) ->
     반환: [{"year": int, "financed_emission_tco2e": float, "company_count": int}]
     company_count는 그 연도에 실제로 계산된(computed=True) 기업 수 — 데이터
     커버리지를 함께 보여줘 "몇 개 기업 기준 합산인지"를 투명하게 한다.
+
+    익스포저마다 BorrowerFinancial·BorrowerEmissionInventory를 따로 쿼리하지
+    않는다(2026-09-07) — 개발 DB가 원격 리전이라 익스포저 수만큼 쿼리가 늘면
+    RTT가 누적된다(기후리스크 리포트 로딩 지연의 주 원인이었다). 대신 관련
+    기업들의 재무정보·인벤토리를 한 번씩만 벌크로 읽어 메모리에서 매칭한다.
     """
     exposures = session.execute(
         select(BusinessLoanExposure).where(BusinessLoanExposure.portfolio_id == portfolio_id)
     ).scalars().all()
+    if not exposures:
+        return []
+
+    company_ids = {e.company_id for e in exposures}
+
+    # 기업당 최신 연도 재무정보만 쓴다(기존 동작과 동일) — 벌크로 전부 읽어
+    # company_id별로 financial_year가 가장 큰 것만 메모리에서 골라낸다.
+    latest_financial: dict[int, object] = {}
+    for f in session.execute(
+        select(BorrowerFinancial).where(BorrowerFinancial.company_id.in_(company_ids))
+    ).scalars().all():
+        current = latest_financial.get(f.company_id)
+        if current is None or (f.financial_year or 0) > (current.financial_year or 0):
+            latest_financial[f.company_id] = f
+
+    # (company_id, reporting_year) 별 배출량 합산 — 기존 개별 쿼리와 동일 조건.
+    emission_by_company_year: dict[tuple[int, int], float] = {}
+    for row in session.execute(
+        select(BorrowerEmissionInventory).where(
+            BorrowerEmissionInventory.company_id.in_(company_ids)
+        )
+    ).scalars().all():
+        if row.emission_tco2e is None:
+            continue
+        key = (row.company_id, row.reporting_year)
+        emission_by_company_year[key] = emission_by_company_year.get(key, 0.0) + float(row.emission_tco2e)
 
     by_year: dict[int, dict] = {}
     for exposure in exposures:
         year = exposure.reporting_date.year
-        financial = session.execute(
-            select(BorrowerFinancial)
-            .where(BorrowerFinancial.company_id == exposure.company_id)
-            .order_by(BorrowerFinancial.financial_year.desc())
-        ).scalars().first()
+        financial = latest_financial.get(exposure.company_id)
         if financial is None:
             continue
 
-        emission_rows = session.execute(
-            select(BorrowerEmissionInventory).where(
-                BorrowerEmissionInventory.company_id == exposure.company_id,
-                BorrowerEmissionInventory.reporting_year == year,
-            )
-        ).scalars().all()
-        emissions = [float(r.emission_tco2e) for r in emission_rows if r.emission_tco2e is not None]
-        borrower_emission = sum(emissions) if emissions else None
+        borrower_emission = emission_by_company_year.get((exposure.company_id, year))
 
         attribution = compute_attribution_factor(AttributionInput(
             outstanding_amount=float(exposure.outstanding_amount),

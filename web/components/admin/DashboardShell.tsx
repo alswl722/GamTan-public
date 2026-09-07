@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { HitlItem, PortfolioResponse, TraceRunItem } from "@/lib/admin-types";
+import type { HitlItem, PortfolioResponse } from "@/lib/admin-types";
 import { cn } from "@/lib/utils";
 import { AuditLog } from "@/components/admin/AuditLog";
 import { AuditPackage } from "@/components/admin/AuditPackage";
@@ -25,10 +25,9 @@ type TabId = (typeof TABS)[number]["id"];
 export interface DashboardShellProps {
   portfolio: PortfolioResponse;
   hitlQueue: HitlItem[];
-  traceRuns: TraceRunItem[];
 }
 
-export function DashboardShell({ portfolio, hitlQueue, traceRuns }: DashboardShellProps) {
+export function DashboardShell({ portfolio, hitlQueue }: DashboardShellProps) {
   const [activeTab, setActiveTab] = useState<TabId>("hitl");
   // AuditLog는 자체 서버사이드 페이지네이션으로 데이터를 관리해 부모가 직접 갱신할 수
   // 없다 — HITL 확정/반려 직후 최신 변경 이력을 보여주려면 key를 바꿔 리마운트한다.
@@ -70,12 +69,12 @@ export function DashboardShell({ portfolio, hitlQueue, traceRuns }: DashboardShe
         )}
 
         {activeTab === "company" && (
-          <CompanyDetail companies={portfolio.companies} traceRuns={traceRuns} />
+          <CompanyDetail companies={portfolio.companies} />
         )}
 
         {activeTab === "trace" && (
           <div className="h-full p-4">
-            <TraceHistory runs={traceRuns} />
+            <TraceHistory />
           </div>
         )}
 

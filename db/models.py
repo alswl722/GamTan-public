@@ -150,6 +150,9 @@ class Classification(Base):
             "('reported_quantity', 'invoice_quantity', 'spend_converted', 'economic_estimate', 'industry_estimate')",
             name="ck_classifications_activity_data_method"
         ),
+        # /admin/review-log가 reviewed_at IS NOT NULL 필터 + reviewed_at DESC 정렬로
+        # 매번 조회한다 — 감사 로그가 누적될수록 커지는 테이블이라 인덱스 필요.
+        Index("ix_classification_reviewed_at", "reviewed_at"),
     )
 
 
@@ -205,6 +208,8 @@ class TraceLog(Base):
 
     __table_args__ = (
         Index("ix_trace_session", "session_id"),
+        # /admin/traces가 세션 단위로 최신순 페이지네이션할 때 쓰는 정렬·필터 인덱스.
+        Index("ix_trace_company_created", "company_id", "created_at"),
     )
 
 
@@ -477,6 +482,8 @@ class SourceDocumentAccessLog(Base):
 
     __table_args__ = (
         Index("ix_source_document_access_logs_document", "source_document_id"),
+        # /admin/documents/access-log가 accessed_at DESC 정렬로 매번 조회한다.
+        Index("ix_source_document_access_logs_accessed_at", "accessed_at"),
     )
 
 

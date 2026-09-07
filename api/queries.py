@@ -90,6 +90,44 @@ def _selected_coverage_fuels(fuel_types: dict | None) -> set[str] | None:
     return selected
 
 
+def coverage_from_vouchers(
+    vouchers: list[dict],
+    fuel_types_json: dict | None,
+    year: int | None = None,
+    *,
+    as_of: datetime | None = None,
+) -> dict:
+    """월(1~12) × 연료 대분류 존재 여부 매트릭스 + 결손 목록 — voucher 목록을
+    이미 갖고 있는 호출부(portfolio_summary 등)가 재조회 없이 쓰는 버전.
+
+    get_coverage()의 계산 본체를 그대로 분리한 것 — 로직 이력·주석은
+    get_coverage()에 있다.
+    """
+    today = as_of or datetime.now(timezone.utc)
+    target_year = year if year is not None else today.year
+    applicable_months = today.month if target_year == today.year else 12
+
+    fuels = ["전기", "가스", "경유/유류"]
+    matrix = {f: {m: 0 for m in range(1, 13)} for f in fuels}
+    for v in vouchers:
+        if v["year"] != target_year:
+            continue
+        fc = _fuel_class(v["item_description"])
+        if fc in matrix:
+            matrix[fc][v["month"]] += 1
+
+    selected_fuels = _selected_coverage_fuels(fuel_types_json)
+
+    gaps = []
+    for f in fuels:
+        if selected_fuels is not None and f not in selected_fuels:
+            continue
+        missing = [m for m in range(1, applicable_months + 1) if matrix[f][m] == 0]
+        if missing:
+            gaps.append({"fuel": f, "missing_months": missing})
+    return {"matrix": matrix, "gaps": gaps}
+
+
 def get_coverage(session: Session, company_id: int, year: int | None = None, *, as_of: datetime | None = None) -> dict:
     """월(1~12) × 연료 대분류 존재 여부 매트릭스 + 결손 목록.
 
@@ -101,31 +139,11 @@ def get_coverage(session: Session, company_id: int, year: int | None = None, *, 
     않은 전표를 "빠졌다"고 알리게 되는 걸 막기 위함(실측 2026-08-17). 과거 연도를
     명시하면 그 해 12개월 전부를 본다.
     """
-    today = as_of or datetime.now(timezone.utc)
-    target_year = year if year is not None else today.year
-    applicable_months = today.month if target_year == today.year else 12
-
     vouchers = get_vouchers(session, company_id)
-    fuels = ["전기", "가스", "경유/유류"]
-    matrix = {f: {m: 0 for m in range(1, 13)} for f in fuels}
-    for v in vouchers:
-        if v["year"] != target_year:
-            continue
-        fc = _fuel_class(v["item_description"])
-        if fc in matrix:
-            matrix[fc][v["month"]] += 1
-
     company = session.get(Company, company_id)
-    selected_fuels = _selected_coverage_fuels(company.fuel_types_json if company else None)
-
-    gaps = []
-    for f in fuels:
-        if selected_fuels is not None and f not in selected_fuels:
-            continue
-        missing = [m for m in range(1, applicable_months + 1) if matrix[f][m] == 0]
-        if missing:
-            gaps.append({"fuel": f, "missing_months": missing})
-    return {"matrix": matrix, "gaps": gaps}
+    return coverage_from_vouchers(
+        vouchers, company.fuel_types_json if company else None, year, as_of=as_of
+    )
 
 
 def get_emission_factors(session: Session) -> list[EmissionFactor]:
