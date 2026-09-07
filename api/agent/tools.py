@@ -140,8 +140,12 @@ def _build_classification(
         method=decided["method"],
         mixed_item=1 if decided["mixed_item"] else 0,
         status=status,
-        # v1 §7.1 — 업로드/마이데이터 경로로 들어온 전표는 raw_json에 원본 문서 FK가 있다.
-        source_document_id=(voucher.raw_json or {}).get("source_document_id"),
+        # 정규 컬럼을 문서 참조의 정본으로 사용한다. raw_json은 레거시 전표
+        # 호환용 fallback일 뿐이며 둘이 어긋나도 오래된 ID를 새 분류에 복사하지 않는다.
+        source_document_id=(
+            voucher.source_document_id
+            or (voucher.raw_json or {}).get("source_document_id")
+        ),
         **k_taxonomy_fields,
     )
 

@@ -48,6 +48,7 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from api.agent.tools import CONFIDENCE_THRESHOLD
 from api.db import get_session
 from api.document_ingestion import (
     REPO_ROOT,
@@ -81,7 +82,7 @@ from db.carbon_neutral_point import (
 from db.reports.cnp_application_pdf import build_application_draft_pdf
 from db.document.document_coverage import (
     delete_source_document,
-    document_pending_review_count,
+    document_pending_review_items,
     document_upload_grid,
     documents_for_cell,
     upload_streak,
@@ -472,16 +473,21 @@ def documents_in_cell(
 
 @router.get("/{company_id}/documents/{document_id}/review-status")
 def document_review_status(company_id: int, document_id: int, session: Session = Depends(get_session)):
-    """업로드 완료 모달용 — 방금 올린 문서에서 만들어진 전표 중 몇 건이 담당자
-    검토 대기(review_required)인지. 어떤 항목이 왜 검토 대상인지(판단 근거·Scope
-    등)는 노출하지 않는다(api/queries.py::get_classifications와 같은 원칙 — 건수만).
-    프론트가 /classify/{company_id} 실행 직후 호출한다(분류가 끝나야 review_required
-    가 채워짐).
+    """추가 업로드 Agent 모달용 담당자 검토 목록.
+
+    문서가 요청한 회사 소유인지 먼저 확인하고, 해당 문서에서 생긴 review_required
+    항목만 반환한다. 관리자 화면의 evidence·Scope 같은 내부 판단 정보는 제외하고
+    품목명·월·신뢰도·사용자용 사유만 노출한다.
     """
     doc = session.get(SourceDocument, document_id)
     if doc is None or doc.company_id != company_id:
         raise HTTPException(status_code=404, detail=f"document_id={document_id} 없음")
-    return {"pending_review_count": document_pending_review_count(session, document_id)}
+    items = document_pending_review_items(
+        session,
+        document_id,
+        confidence_threshold=CONFIDENCE_THRESHOLD,
+    )
+    return {"pending_review_count": len(items), "items": items}
 
 
 @router.delete("/{company_id}/documents/{document_id}")

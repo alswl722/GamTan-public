@@ -2,6 +2,7 @@
 
 여기 모아두면 "전표/분포를 DB에서 꺼내는" 로직이 한 곳에만 존재한다.
 """
+import re
 from datetime import datetime, timezone
 
 from sqlalchemy import func, select
@@ -308,6 +309,22 @@ def _selected_hitl_fuel_labels(fuel_types: dict | None) -> list[str] | None:
     return selected
 
 
+_INTERNAL_HITL_EVIDENCE_RE = re.compile(
+    r"\s*—\s*분류 규칙상 사람검토 필요(?:\(참고:\s*R\d+\))?"
+)
+
+
+def _public_hitl_evidence(evidence: str | None) -> str | None:
+    """담당자 화면에는 내부 HITL 라우팅 marker를 노출하지 않는다.
+
+    원본 evidence는 R058 설비 신호 판별과 감사 추적에 사용되므로 DB에서 지우지
+    않고, 관리자 검토 응답을 만들 때만 해당 문구를 제거한다.
+    """
+    if evidence is None:
+        return None
+    return _INTERNAL_HITL_EVIDENCE_RE.sub("", evidence).strip()
+
+
 def get_hitl_queue(session: Session) -> list[dict]:
     """전 기업의 HITL 검토 작업대 — 검토 대기(review_required) + 확정됐지만 아직
     사장님께 전송 안 한(confirmed, sent_to_owner_at is null) 건을 모두 반환한다.
@@ -322,9 +339,13 @@ def get_hitl_queue(session: Session) -> list[dict]:
     "이상하다"고 답한 건을 그냥 묻히게 두지 않는다).
     """
     stmt = (
-        select(Classification, Voucher, Company)
+        select(Classification, Voucher, Company, SourceDocument.id, SourceDocument.file_path)
         .join(Voucher, Classification.voucher_id == Voucher.id)
         .join(Company, Voucher.company_id == Company.id)
+        # 문서 참조의 정본은 Voucher.source_document_id다. Classification의 중복
+        # 컬럼이나 raw_json이 오래된 ID를 갖고 있어도 실제 SourceDocument가 없거나
+        # 파일 경로가 없는 경우 프론트가 존재하지 않는 파일 URL을 요청하지 않게 한다.
+        .outerjoin(SourceDocument, Voucher.source_document_id == SourceDocument.id)
         .where(
             (Classification.status == "review_required")
             | ((Classification.status == "confirmed") & Classification.sent_to_owner_at.is_(None))
@@ -346,18 +367,18 @@ def get_hitl_queue(session: Session) -> list[dict]:
             "fuel": c.fuel_type,
             "amount_krw": int(c.amount_krw) if c.amount_krw is not None else None,
             "confidence": c.confidence,
-            "evidence": c.evidence,
+            "evidence": _public_hitl_evidence(c.evidence),
             "calc_failure_reason": c.calc_failure_reason,
             "method": c.method,
             "month": v.month,
-            "source_document_id": c.source_document_id,
+            "source_document_id": source_document_id if source_document_file_path else None,
             "company_fuel_types": _selected_hitl_fuel_labels(co.fuel_types_json),
             "status": c.status,
             "anomaly_check_status": c.anomaly_check_status,
             "anomaly_check_reason": c.anomaly_check_reason,
             "anomaly_ratio": c.anomaly_ratio,
         }
-        for c, v, co in rows
+        for c, v, co, source_document_id, source_document_file_path in rows
     ]
 
 

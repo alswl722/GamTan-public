@@ -22,12 +22,31 @@ OCR 재구성 텍스트는 합성 PDF 텍스트보다 훨씬 지저분하다(라
 """
 import calendar
 import io
+import logging
 import re
 from datetime import date
 
 import pdfplumber
 
 from db.document.contract_type import normalize_contract_type_class
+
+
+# Chrome headless가 만든 일부 한글 PDF는 각 내장 폰트의 FontDescriptor에
+# FontBBox를 넣지 않는다. pdfminer는 이 경우 안전하게 (0, 0, 0, 0)을 쓰면서도
+# 폰트마다 같은 WARNING을 남긴다. 알려진 비치명 메시지만 정확히 거르고, 다른
+# pdfminer 폰트 경고는 그대로 노출해 실제 파싱 문제를 숨기지 않는다.
+_MISSING_FONT_BBOX_WARNING = (
+    "Could not get FontBBox from font descriptor because "
+    "None cannot be parsed as 4 floats"
+)
+
+
+class _MissingFontBBoxWarningFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.getMessage() != _MISSING_FONT_BBOX_WARNING
+
+
+logging.getLogger("pdfminer.pdffont").addFilter(_MissingFontBBoxWarningFilter())
 
 DocumentType = str  # "tax_invoice" | "electric_bill" | "gas_bill"
 

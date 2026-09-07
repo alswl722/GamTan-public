@@ -469,15 +469,33 @@ export function getDocumentsForCell(
   );
 }
 
-// GET /owner/{company_id}/documents/{document_id}/review-status — db/document_coverage.py::
-// document_pending_review_count. 업로드 완료 모달용 — 방금 올린 문서에서 만들어진 전표 중
-// 몇 건이 담당자 검토 대기(review_required)인지. 판단 근거 등 세부 내용은 안 실려 온다
-// (get_classifications()와 같은 원칙 — 건수만).
+// GET /owner/{company_id}/documents/{document_id}/review-status — 방금 올린
+// 문서에서 담당자 검토로 넘어간 항목. 서버가 문서의 회사 소유권을 검증하고,
+// 관리자 전용 evidence·Scope는 제외한 사용자용 최소 정보만 반환한다.
+export type DocumentReviewReason = "low_confidence" | "calculation_gap" | "rule_review";
+
+export interface DocumentReviewItem {
+  voucher_id: number;
+  source_document_id: number;
+  item_description: string;
+  supplier_name: string | null;
+  year: number;
+  month: number;
+  confidence: number | null;
+  review_reason: DocumentReviewReason;
+  reason_text: string;
+}
+
+export interface DocumentReviewStatus {
+  pending_review_count: number;
+  items: DocumentReviewItem[];
+}
+
 export function getDocumentReviewStatus(
   companyId: number,
   documentId: number
-): Promise<{ pending_review_count: number }> {
-  return apiGet<{ pending_review_count: number }>(
+): Promise<DocumentReviewStatus> {
+  return apiGet<DocumentReviewStatus>(
     `/owner/${companyId}/documents/${documentId}/review-status`
   );
 }

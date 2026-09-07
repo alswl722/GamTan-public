@@ -7,7 +7,7 @@
 // 담당자가 확정해도 이 작업대에서 즉시 사라지지 않는다 — "검토 완료" 표시만
 // 남기고, 기업별로 모아 "전송" 버튼을 눌러야 사장님 화면에 실제로 노출된다.
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check } from "lucide-react";
 import {
   bulkConfirm,
@@ -15,6 +15,7 @@ import {
   confirmVoucher,
   documentFileUrl,
   editVoucher,
+  getHitl,
   rejectVoucher,
   sendClassificationsToOwner,
 } from "@/lib/admin-data";
@@ -30,30 +31,63 @@ const VIEWED_BY = "은행 담당자";
  * 노출하지 않는다). 원본은 PDF만이 아니라 사장님이 찍은 사진(JPEG/PNG/HEIC 등)일
  * 수도 있다(CLAUDE.md §7 업로드 3종) — Content-Type으로 실제 종류를 판별해
  * 이미지는 <img>로, 그 외는 <iframe>(PDF 뷰어)으로 렌더링한다. */
-function DocumentPreview({ documentId }: { documentId: number }) {
-  const [state, setState] = useState<
-    { kind: "loading" } | { kind: "missing" } | { kind: "ok"; isImage: boolean }
-  >({ kind: "loading" });
+type DocumentPreviewState =
+  | { kind: "loading" }
+  | { kind: "missing" }
+  | { kind: "ok"; isImage: boolean };
+
+// 404만 캐시해 개발 모드 remount·항목 왕복 때 삭제된 document id를 반복
+// probe하지 않는다. 성공 응답은 다시 검증할 수 있도록 캐시하지 않는다.
+const documentPreviewCache = new Map<number, DocumentPreviewState>();
+
+function DocumentPreview({
+  documentId,
+  onMissing,
+}: {
+  documentId: number;
+  onMissing: () => void;
+}) {
+  const [state, setState] = useState<DocumentPreviewState>(
+    () => documentPreviewCache.get(documentId) ?? { kind: "loading" },
+  );
   const url = documentFileUrl(documentId, VIEWED_BY);
 
   useEffect(() => {
+    const cached = documentPreviewCache.get(documentId);
+    if (cached) {
+      if (cached.kind === "missing") onMissing();
+      return;
+    }
+
+    const controller = new AbortController();
     let alive = true;
-    setState({ kind: "loading" });
-    fetch(url)
+    fetch(url, { signal: controller.signal })
       .then((res) => {
         if (!alive) return;
         if (!res.ok) {
-          setState({ kind: "missing" });
+          const missing = { kind: "missing" } as const;
+          if (res.status === 404) {
+            documentPreviewCache.set(documentId, missing);
+            onMissing();
+          }
+          setState(missing);
           return;
         }
         const contentType = res.headers.get("content-type") ?? "";
-        setState({ kind: "ok", isImage: contentType.startsWith("image/") });
+        const loaded = {
+          kind: "ok",
+          isImage: contentType.startsWith("image/"),
+        } as const;
+        setState(loaded);
       })
-      .catch(() => alive && setState({ kind: "missing" }));
+      .catch(() => {
+        if (alive && !controller.signal.aborted) setState({ kind: "missing" });
+      });
     return () => {
       alive = false;
+      controller.abort();
     };
-  }, [url]);
+  }, [documentId, onMissing, url]);
 
   if (state.kind === "loading") {
     return (
@@ -195,9 +229,11 @@ interface DetailPaneProps {
   item: HitlItem;
   /** 확정은 큐에 "검토 완료"로 남기고(mode: "confirm"), 반려는 큐에서 뺀다(mode: "reject"). */
   onDone: (voucherId: number, mode: "confirm" | "reject") => void;
+  /** 원본 404 시 서버의 최신 큐를 다시 받아 삭제·재업로드 뒤 stale 항목을 제거한다. */
+  onDocumentMissing: () => void;
 }
 
-function DetailPane({ item, onDone }: DetailPaneProps) {
+function DetailPane({ item, onDone, onDocumentMissing }: DetailPaneProps) {
   const isConfirmed = item.status === "confirmed";
   const [scope, setScope] = useState<string>(
     item.scope !== null ? String(item.scope) : "",
@@ -476,7 +512,10 @@ function DetailPane({ item, onDone }: DetailPaneProps) {
             </h4>
             <div className="rounded-md border border-line bg-bg p-4">
               {item.source_document_id ? (
-                <DocumentPreview documentId={item.source_document_id} />
+                <DocumentPreview
+                  documentId={item.source_document_id}
+                  onMissing={onDocumentMissing}
+                />
               ) : (
                 <div className="flex h-[32rem] items-center justify-center text-xs text-faint">
                   원본 파일 없음
@@ -617,7 +656,7 @@ export function HitlWorkspace({
   const [filterFuel, setFilterFuel] = useState("전체");
   const [filterConfidence, setFilterConfidence] = useState("전체");
   const [filterMonth, setFilterMonth] = useState("전체");
-  const [filterSearch, setFilterSearch] = useState("");
+  const filterSearch = "";
   const [sortBy, setSortBy] = useState<"confidence" | "month">("confidence");
   const [companyListCollapsed, setCompanyListCollapsed] = useState(false);
   const [voucherListCollapsed, setVoucherListCollapsed] = useState(false);
@@ -626,6 +665,35 @@ export function HitlWorkspace({
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [sendBusy, setSendBusy] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const queueRefreshInFlight = useRef(false);
+
+  const refreshQueue = useCallback(async () => {
+    if (queueRefreshInFlight.current) return;
+    queueRefreshInFlight.current = true;
+    try {
+      const latest = await getHitl();
+      const nextCompany =
+        selectedCompany && latest.some((item) => item.company_name === selectedCompany)
+          ? selectedCompany
+          : latest[0]?.company_name ?? null;
+      const nextSelectedId =
+        selectedId !== null && latest.some((item) => item.voucher_id === selectedId)
+          ? selectedId
+          : latest.find((item) => item.company_name === nextCompany)?.voucher_id ?? null;
+
+      setQueue(latest);
+      setSelectedCompany(nextCompany);
+      setSelectedId(nextSelectedId);
+      setSelectedIds((current) =>
+        new Set([...current].filter((id) => latest.some((item) => item.voucher_id === id))),
+      );
+    } catch (err) {
+      // 원본 404와 별개로 큐 재조회 실패도 콘솔에 남겨 원인을 숨기지 않는다.
+      console.error("담당자 검토 목록 새로고침 실패:", err);
+    } finally {
+      queueRefreshInFlight.current = false;
+    }
+  }, [selectedCompany, selectedId]);
 
   const companies = useMemo<CompanySummary[]>(() => {
     const byCompany = new Map<string, HitlItem[]>();
@@ -651,17 +719,17 @@ export function HitlWorkspace({
   const fuels = useMemo(
     () => [
       "전체",
-      ...Array.from(new Set(initialQueue.map((i) => i.fuel ?? "미분류"))),
+      ...Array.from(new Set(queue.map((i) => i.fuel ?? "미분류"))),
     ],
-    [initialQueue],
+    [queue],
   );
 
   const months = useMemo(
     () =>
-      Array.from(new Set(initialQueue.map((i) => i.month))).sort(
+      Array.from(new Set(queue.map((i) => i.month))).sort(
         (a, b) => a - b,
       ),
-    [initialQueue],
+    [queue],
   );
 
   const companyQueue = useMemo(
@@ -1067,6 +1135,7 @@ export function HitlWorkspace({
                 onDone={(voucherId, mode) =>
                   mode === "confirm" ? markConfirmed(voucherId) : removeItem(voucherId)
                 }
+                onDocumentMissing={refreshQueue}
               />
             </div>
           ) : (

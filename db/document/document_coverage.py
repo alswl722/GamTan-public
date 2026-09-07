@@ -137,9 +137,8 @@ def documents_for_cell(
 def document_pending_review_count(session: Session, source_document_id: int) -> int:
     """방금 올린 문서 1건에서 만들어진 전표 중 담당자 검토 대기(review_required)로
     빠진 건수 — 업로드 완료 모달이 "N건은 담당자가 검토할 예정이에요"를 보여줄 때
-    쓴다. api/queries.py::get_classifications()가 지키는 것과 같은 원칙(HITL 대기
-    건은 판단 근거·Scope 등 세부 내용을 사장님에게 노출하지 않는다)에 따라 건수만
-    반환한다 — 어떤 항목이 왜 검토 대상인지는 노출하지 않음.
+    쓴다. 상세 목록은 document_pending_review_items()가 사장님에게 필요한 최소
+    필드만 별도로 직렬화한다.
     """
     return session.execute(
         select(func.count())
@@ -150,6 +149,66 @@ def document_pending_review_count(session: Session, source_document_id: int) -> 
             Classification.status == "review_required",
         )
     ).scalar_one()
+
+
+def document_pending_review_items(
+    session: Session,
+    source_document_id: int,
+    *,
+    confidence_threshold: float,
+) -> list[dict]:
+    """추가 업로드 완료 모달에 보여줄 담당자 검토 목록.
+
+    관리자 HITL 큐의 evidence·Scope·내부 판단값을 그대로 노출하지 않고, 사장님이
+    자신이 올린 어느 항목이 검토로 넘어갔는지만 알 수 있도록 품목명·월·신뢰도와
+    사용자용 사유만 반환한다. 호출부가 SourceDocument의 회사 소유권을 먼저
+    검증하며, source_document_id로 범위를 고정해 다른 업로드 결과가 섞이지 않는다.
+    """
+    rows = session.execute(
+        select(Classification, Voucher)
+        .join(Voucher, Classification.voucher_id == Voucher.id)
+        .where(
+            Voucher.source_document_id == source_document_id,
+            Classification.status == "review_required",
+        )
+        .order_by(Voucher.year, Voucher.month, Voucher.issue_date, Voucher.id)
+    ).all()
+
+    items: list[dict] = []
+    for classification, voucher in rows:
+        confidence = (
+            float(classification.confidence)
+            if classification.confidence is not None
+            else None
+        )
+        if confidence is not None and confidence < confidence_threshold:
+            reason = "low_confidence"
+            reason_text = "AI 분류 신뢰도가 기준보다 낮아 담당자 확인이 필요해요."
+        elif classification.calc_failure_reason:
+            reason = "calculation_gap"
+            reason_text = classification.calc_failure_reason
+        else:
+            reason = "rule_review"
+            reason_text = "분류 규칙상 담당자 확인이 필요해요."
+
+        items.append(
+            {
+                "voucher_id": voucher.id,
+                "source_document_id": source_document_id,
+                "item_description": (
+                    voucher.item_description
+                    or voucher.supplier_name
+                    or f"{voucher.month}월 업로드 항목"
+                ),
+                "supplier_name": voucher.supplier_name,
+                "year": voucher.year,
+                "month": voucher.month,
+                "confidence": confidence,
+                "review_reason": reason,
+                "reason_text": reason_text,
+            }
+        )
+    return items
 
 
 def delete_source_document(session: Session, document: SourceDocument) -> str | None:
