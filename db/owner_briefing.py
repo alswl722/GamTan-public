@@ -5,18 +5,26 @@
 CLAUDE.md 원칙1(LLM 산수 금지)과 같은 결 — 증감률(compute_fuel_deltas)은
 항상 결정론적 계산이고, LLM은 그 계산된 숫자를 문장으로 "표현"하는 역할만
 한다(db/gov_support/evidence.py와 같은 패턴 — 결정론적으로 이미 확정된
-사실을 자연스러운 문장으로 설명). LLM이 새로운 숫자를 만들어내는 경로는
-없다 — 프롬프트가 이미 계산된 값만 문장에 쓰라고 명시하고, 응답에 값
-필드 자체가 없다(evidence 생성과 동일한 방어 논리, CLAUDE.md 원칙1).
+사실을 자연스러운 문장으로 설명). 응답 스키마에 값 필드 자체가 없어(문단
+텍스트만 반환) LLM이 새 숫자 "필드"를 만들어낼 경로는 없지만,
+document_llm_router와 달리 여기서는 문장 안에 숫자가 자연어로 등장해야
+브리핑이 성립한다 — 즉 프롬프트 지시("주어진 숫자만 그대로 인용")만으로는
+LLM이 반올림·어림값을 문장에 섞는 걸 코드가 막지 못한다. 그래서
+validate_briefing_numbers()가 생성된 문단에서 숫자를 전부 추출해
+fuel_deltas가 허용한 숫자 집합과 대조하고, 집합 밖의 숫자가 하나라도
+있으면 그 응답 자체를 버린다(generate_briefing_paragraphs_llm이 None
+반환 → 템플릿 폴백과 동일 경로) — "프롬프트 준수"가 아니라 "사후 검증
+통과"가 화면에 뜨는 조건이 되도록, 방어를 프롬프트에서 코드로 옮긴다.
 
-LLM 호출이 실패하면(키 없음·API 오류·타임아웃) build_briefing_paragraphs()
-템플릿으로 폴백한다 — 편지가 아예 안 뜨는 것보다는 낫지만, 실패를
-감추지는 않는다(응답의 generated_by로 "llm"|"template" 구분, CLAUDE.md
-§6 실패 가시성).
+LLM 호출이 실패하거나(키 없음·API 오류·타임아웃) 검증에 실패하면
+build_briefing_paragraphs() 템플릿으로 폴백한다 — 편지가 아예 안 뜨는
+것보다는 낫지만, 실패를 감추지는 않는다(응답의 generated_by로
+"llm"|"template" 구분, CLAUDE.md §6 실패 가시성).
 """
 import hashlib
 import json
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -213,6 +221,55 @@ _RESPONSE_SCHEMA = {
 }
 
 
+_NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
+
+# 소수 몇 자리까지를 "같은 숫자"로 볼지 — 문장에서 자연스럽게 반올림해
+# 말할 수 있는 정밀도까지만 허용한다(정밀도를 낮추는 반올림만 허용, 새
+# 숫자를 만드는 것은 허용하지 않음).
+_ROUNDING_PLACES = (0, 1, 2)
+
+
+def _rounded_variants(value: float) -> set[str]:
+    variants: set[str] = set()
+    for places in _ROUNDING_PLACES:
+        rounded = round(value, places)
+        # "24.0" 뿐 아니라 "24"도 같은 숫자로 인정 — 정수부만 말하는 문장 대응.
+        variants.add(f"{rounded:.{places}f}".rstrip("0").rstrip(".") or "0")
+        variants.add(str(int(rounded)) if rounded == int(rounded) else f"{rounded:.{places}f}")
+    return variants
+
+
+def _allowed_numbers(fuel_deltas: list[dict]) -> set[str]:
+    """fuel_deltas에 실제로 등장하는 숫자들의 반올림 변형 전체 — 편지 문단에
+    이 집합 밖의 숫자가 나오면 LLM이 새 숫자를 지어낸 것으로 간주한다.
+
+    delta_pct는 문장에서 항상 절대값으로 언급되므로(_clause_for_fuel의
+    abs() 사용과 동일하게) 절대값 기준으로도 넣는다."""
+    allowed: set[str] = set()
+    for d in fuel_deltas:
+        for key in ("this_month_co2e", "last_month_co2e", "delta_pct"):
+            value = d.get(key)
+            if value is None:
+                continue
+            allowed |= _rounded_variants(value)
+            allowed |= _rounded_variants(abs(value))
+    return allowed
+
+
+def validate_briefing_numbers(paragraphs: list[str], fuel_deltas: list[dict]) -> bool:
+    """생성된 문단에 등장하는 모든 숫자가 fuel_deltas가 허용한 숫자(반올림
+    변형 포함)에 속하는지 검사. 하나라도 벗어나면 False — 호출부는 이
+    응답을 폐기하고 템플릿으로 폴백해야 한다(프롬프트 지시가 아니라 이
+    검사가 화면에 뜨는 숫자를 결정하는 최종 관문)."""
+    allowed = _allowed_numbers(fuel_deltas)
+    for p in paragraphs:
+        for match in _NUMBER_RE.findall(p):
+            normalized = match.rstrip("0").rstrip(".") if "." in match else match
+            if normalized not in allowed and match not in allowed:
+                return False
+    return True
+
+
 def _build_llm_input(fuel_deltas: list[dict], *, has_previous_month: bool) -> str:
     payload = {
         "has_previous_month": has_previous_month,
@@ -260,7 +317,13 @@ def generate_briefing_paragraphs_llm(fuel_deltas: list[dict], *, has_previous_mo
         paragraphs = data.get("paragraphs")
         if not paragraphs or not isinstance(paragraphs, list):
             return None
-        return [str(p) for p in paragraphs]
+        paragraphs = [str(p) for p in paragraphs]
+        if not validate_briefing_numbers(paragraphs, fuel_deltas):
+            # 프롬프트가 "숫자를 그대로만 인용하라"고 지시했어도 LLM이 반올림·
+            # 어림값을 섞었을 수 있다 — 지시 준수 여부를 믿지 않고 사후 검증에서
+            # 걸러 템플릿 폴백으로 보낸다(위 모듈 docstring, CLAUDE.md 원칙1).
+            return None
+        return paragraphs
     except Exception:
         return None
 

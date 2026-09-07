@@ -2,8 +2,18 @@
 
 "이 기업의 탄소 리포트를 만들어라"는 목표를 받아 실행한다. 순서가 뻔한 단계
 (수집→결손검사→알림→분류→계산→벤치마킹)는 결정론적 코드로 즉시 처리하고,
-**진짜 판단이 필요한 지점 — 이상치가 정상인지 여부 — 에서만 Gemini를 부른다.**
-LLM 산수 금지 원칙과 동일한 결로: "애매한 것만 모델에게, 나머지는 코드로."
+**오케스트레이터 레벨에서 진짜 판단이 필요한 지점 — 이상치가 정상인지
+여부 — 에서만 Gemini를 부른다.** LLM 산수 금지 원칙과 동일한 결로: "애매한
+것만 모델에게, 나머지는 코드로."
+
+정확히는 이 오케스트레이터의 실행 순서를 가르는 판단 분기가 여기 하나라는
+뜻이다 — 도구 자체(예: classify_vouchers가 내부에서 쓰는 LLM 분류, CLAUDE.md
+§5-2·§5-3)에도 confidence 임계값 게이트가 별도로 있지만, 그건 도구 내부에서
+"자동확정 vs HITL"을 가르는 것이고 오케스트레이터는 그 결과를 그대로 받아
+다음 단계로 진행할 뿐 분기하지 않는다. 즉 이 시스템에는 판단 게이트가
+"오케스트레이터의 이상치 판단"과 "도구 내부의 분류 confidence 게이트" 두
+층위가 있고, 둘 다 최종 확정은 사람(HITL/사장님 확인)에게 넘긴다는 점은
+동일하다.
 
 전 단계를 [계획]/[관찰]/[행동]으로 trace_logs에 기록한다(장면② 데이터 소스).
 
@@ -48,6 +58,12 @@ _TOOL_META = {
     "inspect_vouchers": ("행동", "전표 재파싱기"),
 }
 
+# 임계값 산정 근거 — db/scenarios.py의 diesel_spike 시나리오가 7월 경유를
+# 평월 중앙값의 3.2배로 생성한다(기획서 §7 "7월 경유가 평월 중앙값의 3.2배"와
+# 동일 수치). 2.5는 그 3.2배 이상치를 여유 있게 잡아내면서도, 정상 변동(설비
+# 가동률 차이 등)까지 과탐지하지 않도록 3.2보다 낮춰 잡은 값 — 실제 고객
+# 데이터가 쌓이기 전까지는 시연 시나리오 역산 + 도메인 판단(회계 담당)의
+# 잠정치이며, 트랙 A/B 백테스트(§4)로 오탐/미탐률을 확인해 재조정 대상이다.
 _ANOMALY_THRESHOLD = 2.5    # 월별 배출량이 같은 연료의 평월 중앙값의 N배↑면 이상치로 의심
 _ANOMALY_PEER_FACTOR = 2.0  # + 다른 어떤 월보다도 N배↑ — 계절성(동절기 가스)은 비슷한 형제 월이 있어 걸러짐
 _ANOMALY_MIN_MONTHS = 3     # 연료별 데이터가 이보다 적으면 평월 기준을 세울 수 없어 판단 보류
@@ -316,23 +332,38 @@ def _run_agent_core(session: Session, company: Company, sid: str) -> int:
         judged = _judge_anomaly_with_llm(items)
         _mark_anomaly_pending(session, cid, o["month"], o["fuel"], o["ratio"])
         if judged is None:
-            # 실패를 숨기지 않는다 — 대체 판정 없이 실패 자체를 기록하고 사람에게
+            # 실패를 숨기지 않는다 — 대체 판정 없이 실패 자체를 기록하고 사람에게.
+            # judge_outcome="call_failed"로 detail에 남겨, 아래 "불명"(LLM은
+            # 정상 응답했지만 사유를 못 찾음) 케이스와 원인이 섞이지 않게 한다 —
+            # 화면 문구는 사장님에게는 비슷하게 보여도(둘 다 "확인 부탁"), 운영
+            # 관점에선 API 장애/타임아웃(call_failed)과 모델이 실제로 판단해본
+            # 결과 불명(uncertain)을 구분해야 장애 여부를 감사·모니터링할 수 있다.
             judge_failures += 1
             log_step(session, cid, sid, "관찰",
-                     "다시 확인하다가 막혔어요. 제가 판단하지 않고 사장님이 직접 봐주셨으면 해요.")
+                     "다시 확인하다가 막혔어요. 제가 판단하지 않고 사장님이 직접 봐주셨으면 해요.",
+                     detail={"judge_outcome": "call_failed", "month": o["month"], "fuel": o["fuel"], "ratio": o["ratio"]})
             _run_tool_and_log(session, company, sid, "notify_owner",
-                              {"message": f"{o['month']}월 {o['fuel']} 사용량이 평소보다 {o['ratio']}배 많은데, 제가 이유를 못 찾았어요. 한 번 확인해주시겠어요?"})
+                              {"message": f"{o['month']}월 {o['fuel']} 사용량이 평소보다 {o['ratio']}배 많은데, 지금은 제가 이유를 확인하지 못하고 있어요. 한 번 봐주시겠어요?"})
         elif judged[0]:
             reason = judged[1]
             log_step(session, cid, sid, "관찰",
-                     f"'{items}' 자료를 보니 {reason}. 정상적인 사용 같아 보이는데, 사장님께도 확인 부탁드릴게요.")
+                     f"'{items}' 자료를 보니 {reason}. 정상적인 사용 같아 보이는데, 사장님께도 확인 부탁드릴게요.",
+                     detail={"judge_outcome": "normal", "month": o["month"], "fuel": o["fuel"], "ratio": o["ratio"], "reason": reason})
             _annotate_classifications(session, cid, o["month"], o["fuel"],
                                       f"평월 대비 {o['ratio']}배지만 {reason}. AI 1차 판정: 정상(사장님 확인 대기).")
             _run_tool_and_log(session, company, sid, "notify_owner",
                               {"message": f"{o['month']}월 {o['fuel']} 사용량이 평소보다 {o['ratio']}배 많은데, {reason} 때문인 것 같아요. 맞는지 확인해주시겠어요?"})
         else:
+            # judged == (False, "") — LLM이 실제로 판단해봤지만("call_failed"와
+            # 달리 응답 자체는 정상 수신) 전표 문구에서 정당한 사유를 못 찾은
+            # 경우. call_failed(API 장애)와 원인이 다르므로 judge_outcome을
+            # 구분해 남긴다 — 운영 관점에서 "장애가 잦은가"와 "설명 안 되는
+            # 이상치가 잦은가"는 서로 다른 신호라 같은 로그로 섞이면 안 된다.
+            log_step(session, cid, sid, "관찰",
+                     f"'{items}' 자료를 다시 봤는데, 이 배수를 설명할 만한 사유를 못 찾았어요. 사장님이 확인해주셔야 할 것 같아요.",
+                     detail={"judge_outcome": "uncertain", "month": o["month"], "fuel": o["fuel"], "ratio": o["ratio"]})
             _run_tool_and_log(session, company, sid, "notify_owner",
-                              {"message": f"{o['month']}월 {o['fuel']} 사용량이 평소보다 {o['ratio']}배 많은데, 이유를 특별히 찾지 못했어요. 확인 한번 부탁드려요."})
+                              {"message": f"{o['month']}월 {o['fuel']} 사용량이 평소보다 {o['ratio']}배 많은데, 자료를 다시 봐도 이유를 특별히 찾지 못했어요. 확인 한번 부탁드려요."})
 
     _run_tool_and_log(session, company, sid, "calculate_pcaf", {})
     log_step(session, cid, sid, "계획", "확인이 끝났어요. 결과는 리포트로 정리했고, 빠진 자료는 요청 목록에 담아뒀어요.")
