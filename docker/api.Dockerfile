@@ -25,11 +25,21 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 RUN python -c "from paddleocr import PaddleOCR; PaddleOCR(lang='korean')"
 
 # 앱 코드만 (db 패키지는 api 가 import)
-# data/ 는 docker-compose.yml 이 이미 볼륨(./data:/app/data)으로 마운트하므로 여기서
-# COPY 하지 않는다 — 이미지 안에 굽으면 볼륨과 내용이 중복되고, 회계가 Excel을
-# 갱신할 때마다 이미지 재빌드가 필요해진다(볼륨이면 재시작만으로 반영됨).
 COPY db ./db
 COPY api ./api
+
+# 회계 Excel(배출계수·룰)·마이데이터 mock CSV·PDF 서식 — db/excel_loader.py,
+# db/mydata_csv_source.py, db/reports/cnp_application_pdf.py가 런타임에 직접
+# 읽는다. 로컬 docker-compose는 볼륨(./data:/app/data)으로 덮어써서 회계가
+# Excel을 갱신하면 재시작만으로 반영되지만, Render 등 볼륨 마운트가 없는
+# 배포 환경에선 이미지 안에 구워둔 파일만 존재한다 — 안 구우면 첫 분류
+# 요청 시점에 파일을 못 찾아 실패한다. data/uploads(사용자 업로드
+# 런타임 상태)·data/fixtures(52MB, 로컬 시연·검증 전용)는 이미지에 불필요하고
+# uploads는 오히려 재배포마다 초기화되면 안 되는 상태라 COPY 대상에서 뺀다.
+COPY data/감탄_데이터준비_샘플.xlsx ./data/감탄_데이터준비_샘플.xlsx
+COPY data/industry_distributions.xlsx ./data/industry_distributions.xlsx
+COPY data/마이데이터_연동자료_전체기업.csv ./data/마이데이터_연동자료_전체기업.csv
+COPY data/forms ./data/forms
 
 EXPOSE 8000
 
