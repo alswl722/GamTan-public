@@ -34,7 +34,12 @@ from db.pcaf_engine.k_taxonomy import k_taxonomy_fields_for_rule
 from db.models import Classification, Voucher
 from db.pcaf_engine.pcaf import company_pcaf_summary
 
-# LLM confidence 임계값 — 미달 시 HITL(review_required)로 이관 (CLAUDE.md §5-3)
+# LLM confidence 임계값 — 미달 시 HITL(review_required)로 이관 (CLAUDE.md §5-3).
+# 0.7은 데이터 기반 산출값이 아니라 통상적 관행값(중간 지점)으로 잠정 설정한
+# 것 — 트랙 A/B 백테스트(§4)로 저신뢰 건의 실제 오분류율을 확인해 조정 여지가
+# 있다(docs/verification-3metrics-plan.md 참고). AX 심사 대응 시 "왜 0.7인가"는
+# "실측 검증 전 관행값, 백테스트로 재검토 예정"이 정확한 답 — 근거 없는
+# 확정치처럼 발표하지 않는다.
 CONFIDENCE_THRESHOLD = 0.7
 
 # 룰 매칭(자동분류/자동제외/참고분류) 확정 건의 confidence — 회계 룰북의

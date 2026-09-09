@@ -185,3 +185,26 @@ def test_judge_failure_is_visible_not_hidden(db, monkeypatch):
     assert "다시 확인하다가 막혔어요" in msgs, f"판단 실패가 트레이스에 없음: {msgs}"
     assert "사장님께도 확인 부탁드릴게요" not in msgs  # 판단한 척하지 않는다
     assert result["mode"] == "judge_failed"
+
+    # judge_outcome="call_failed"가 detail에 남아, API 장애로 인한 실패와
+    # LLM이 정상 응답했지만 사유를 못 찾은 "불명" 케이스가 로그상 구분된다.
+    steps = session.query(TraceLog).filter(TraceLog.company_id == cid).all()
+    failed_steps = [s for s in steps if (s.detail_json or {}).get("judge_outcome") == "call_failed"]
+    assert len(failed_steps) == 1
+    assert failed_steps[0].message == "다시 확인하다가 막혔어요. 제가 판단하지 않고 사장님이 직접 봐주셨으면 해요."
+
+
+def test_judge_uncertain_is_distinguished_from_call_failure(db, monkeypatch):
+    """LLM이 정상 응답했지만("불명") API 장애가 아닌 경우, judge_outcome이
+    call_failed가 아니라 uncertain으로 구분되어 트레이스에 남아야 한다 —
+    운영에서 장애율과 '설명 안 되는 이상치' 빈도를 다른 신호로 볼 수 있어야
+    하기 때문."""
+    session, cid = db
+    monkeypatch.setattr(orch, "_judge_anomaly_with_llm", lambda items: (False, ""))
+
+    load_scenario(session, cid, "demo")
+    orch.run_agent(session, cid)
+
+    steps = session.query(TraceLog).filter(TraceLog.company_id == cid).all()
+    uncertain_steps = [s for s in steps if (s.detail_json or {}).get("judge_outcome") == "uncertain"]
+    assert uncertain_steps, "불명 판정이 트레이스에 남지 않음"

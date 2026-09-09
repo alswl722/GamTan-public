@@ -12,6 +12,8 @@
     (실패를 감추지 않음). 저수준 generate_briefing_paragraphs_llm을
     monkeypatch로 갈아끼워 실제 네트워크 호출 없이 검증한다.
 """
+import json
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -23,6 +25,7 @@ from db.owner_briefing import (
     build_briefing_paragraphs,
     compute_fuel_deltas,
     get_briefing_paragraphs,
+    validate_briefing_numbers,
 )
 
 
@@ -146,6 +149,78 @@ def test_get_briefing_paragraphs_caches_llm_result(session, monkeypatch):
     assert first_paragraphs == second_paragraphs == ["첫 호출 결과"]
     assert len(calls) == 1  # 두 번째 호출은 캐시 적중, LLM 재호출 없음
     assert session.query(LlmCache).count() == 1
+
+
+def test_validate_briefing_numbers_accepts_numbers_from_fuel_deltas():
+    fuel_deltas = compute_fuel_deltas([
+        FuelMonthStat(fuel_type="경유", this_month_co2e=2.36, last_month_co2e=2.0),
+    ])
+    # delta_pct == 18.0, this_month_co2e == 2.36, last_month_co2e == 2.0
+    paragraphs = ["경유 사용량이 지난달보다 18% 늘었어요. 이번 달 2.36톤, 지난달 2톤이었어요."]
+    assert validate_briefing_numbers(paragraphs, fuel_deltas) is True
+
+
+def test_validate_briefing_numbers_rejects_hallucinated_number():
+    fuel_deltas = compute_fuel_deltas([
+        FuelMonthStat(fuel_type="경유", this_month_co2e=2.36, last_month_co2e=2.0),
+    ])
+    # 25%는 실제 delta_pct(18.0)와 무관하게 LLM이 지어낸 숫자
+    paragraphs = ["경유 사용량이 지난달보다 25% 늘었어요."]
+    assert validate_briefing_numbers(paragraphs, fuel_deltas) is False
+
+
+def test_validate_briefing_numbers_ignores_non_numeric_text():
+    fuel_deltas = compute_fuel_deltas([
+        FuelMonthStat(fuel_type="경유", this_month_co2e=2.36, last_month_co2e=2.0),
+    ])
+    paragraphs = ["아래에서 이번 달 숫자들을 자세히 볼 수 있어요."]
+    assert validate_briefing_numbers(paragraphs, fuel_deltas) is True
+
+
+def test_generate_briefing_paragraphs_llm_rejects_hallucinated_number(monkeypatch):
+    """LLM이 JSON 스키마는 지켰지만 존재하지 않는 숫자(환각)를 문장에 섞어
+    반환하면, generate_briefing_paragraphs_llm이 사후 검증에서 걸러 None을
+    반환해야 한다 — 프롬프트 지시("숫자를 그대로만 인용")를 믿지 않고
+    코드가 최종 관문 역할을 한다는 걸 실제 호출 경로로 확인."""
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key-for-test")
+
+    class _FakeResponse:
+        text = json.dumps({"paragraphs": ["경유 사용량이 지난달보다 25% 늘었어요."]})  # 실제 delta_pct(18.0)와 다른 값
+
+    class _FakeModels:
+        def generate_content(self, **kwargs):
+            return _FakeResponse()
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs):
+            self.models = _FakeModels()
+
+    monkeypatch.setattr(owner_briefing.genai, "Client", _FakeClient)
+
+    fuel_deltas = compute_fuel_deltas([FuelMonthStat(fuel_type="경유", this_month_co2e=2.36, last_month_co2e=2.0)])
+    result = owner_briefing.generate_briefing_paragraphs_llm(fuel_deltas, has_previous_month=True)
+    assert result is None
+
+
+def test_generate_briefing_paragraphs_llm_accepts_valid_number(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key-for-test")
+
+    class _FakeResponse:
+        text = json.dumps({"paragraphs": ["경유 사용량이 지난달보다 18% 늘었어요."]})  # 실제 delta_pct와 일치
+
+    class _FakeModels:
+        def generate_content(self, **kwargs):
+            return _FakeResponse()
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs):
+            self.models = _FakeModels()
+
+    monkeypatch.setattr(owner_briefing.genai, "Client", _FakeClient)
+
+    fuel_deltas = compute_fuel_deltas([FuelMonthStat(fuel_type="경유", this_month_co2e=2.36, last_month_co2e=2.0)])
+    result = owner_briefing.generate_briefing_paragraphs_llm(fuel_deltas, has_previous_month=True)
+    assert result == ["경유 사용량이 지난달보다 18% 늘었어요."]
 
 
 def test_get_briefing_paragraphs_does_not_call_llm_for_first_month(session, monkeypatch):
