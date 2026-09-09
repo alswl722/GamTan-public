@@ -2,23 +2,31 @@
 
 import { useEffect, useState } from "react";
 import { apiGet, apiPost, getCompanyId } from "@/lib/api";
+import { AnomalyCheckCard } from "@/components/AnomalyCheckCard";
 
 /** 장면 ③ — AI 분류 + 근거 (킬러씬 B). /classify/{id} 실데이터. */
 
 type Row = {
   voucher_id: number;
-  raw: string;
+  // 세금계산서 원문만 실제 판단 근거라 채워져 온다 — 전기/가스고지서는 문서
+  // 종류만으로 Scope가 정해지고 원문 자체는 근거가 아니라 항상 null이다.
+  raw: string | null;
   scope: 1 | 2 | null;
   category: string | null;
   fuel: string | null;
   amount_krw: number | null;
+  // 탄소량은 이 값(사용량) × 배출계수로 계산된다 — amount_krw(청구금액)는 계산에
+  // 안 쓰이는 참고 정보다. skip 처리된 건(연료 불명 등)은 0/null일 수 있다.
+  activity_amount: number | null;
+  activity_unit: string | null;
   confidence: number;
   evidence: string | null;
   method: "rule" | "llm";
-  hitl: boolean;
 };
 
-type ClassifyResponse = { results: Row[] };
+/** results 는 담당자가 확정한 건만 담긴다 — 검토 대기(HITL) 건은 담당자 확정
+ * 전까지 상세를 사장님에게 보여주지 않고 hitl_pending_count(건수)로만 안내한다. */
+type ClassifyResponse = { results: Row[]; hitl_pending_count: number };
 type ProgressResponse = { done: number; total: number; finished: boolean };
 
 function ScopeTag({ scope }: { scope: 1 | 2 | null }) {
@@ -80,30 +88,11 @@ function ClassifyProgressRing({
   );
 }
 
-function ConfidenceBadge({ value }: { value: number }) {
-  const low = value < 0.7;
-  const pct = Math.round(value * 100);
-  return (
-    <span
-      className={`ml-auto rounded-md px-2 py-0.5 text-[11px] font-bold ${
-        low ? "bg-hitl/25 text-hitl-ink" : "bg-brand-soft text-brand-ink"
-      }`}
-    >
-      AI 확신도 {pct}%
-    </span>
-  );
-}
-
-/** category·fuel 뱃지 — 둘이 같으면(특히 "불명"/"불명" 중복) 하나로 합치고,
- * 둘 다 "불명"이면 처음 보는 사람도 알 수 있게 문구를 바꾼다. */
-function fuelBadgeText(
-  category: string | null,
-  fuel: string | null,
-): string | null {
-  const unique = [...new Set([category, fuel].filter((v): v is string => !!v))];
-  if (unique.length === 0) return null;
-  if (unique.length === 1 && unique[0] === "불명") return "연료 확인 필요";
-  return unique.join(" · ");
+/** 탄소량 계산의 실제 근거(사용량)를 표시용 문자열로 — 0/단위 없음(skip된 건)이면
+ * null을 반환해 호출부가 청구금액만 보여주는 기존 표시로 자연스럽게 폴백한다. */
+function formatActivity(amount: number | null, unit: string | null): string | null {
+  if (!amount || amount <= 0 || !unit) return null;
+  return `${amount.toLocaleString(undefined, { maximumFractionDigits: 1 })} ${unit}`;
 }
 
 function ClassificationCard({
@@ -115,12 +104,9 @@ function ClassificationCard({
   open: boolean;
   onToggle: () => void;
 }) {
+  const activityLabel = formatActivity(row.activity_amount, row.activity_unit);
   return (
-    <div
-      className={`rounded-xl bg-surface shadow-card transition-all duration-200 hover:-translate-y-0.5 hover:shadow-float ${
-        row.hitl ? "ring-1 ring-hitl/40" : ""
-      }`}
-    >
+    <div className="rounded-xl bg-surface shadow-card transition-all duration-200 hover:-translate-y-0.5 hover:shadow-float">
       <button
         type="button"
         onClick={onToggle}
@@ -129,27 +115,23 @@ function ClassificationCard({
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <span className="font-mono text-[13px] font-semibold text-ink">
-              {row.raw}
+              {row.raw ?? row.category ?? "분류 결과"}
             </span>
-            {row.hitl && (
-              <span className="rounded-md bg-hitl-ink px-1.5 py-0.5 text-[10px] font-bold text-white">
-                검토 예정
+          </div>
+          <div className="flex flex-col items-end">
+            <span className="text-[13px] font-semibold tabular-nums text-ink">
+              {activityLabel ?? `${(row.amount_krw ?? 0).toLocaleString()}원`}
+            </span>
+            {activityLabel && (
+              <span className="text-[10.5px] tabular-nums text-faint">
+                청구금액 {(row.amount_krw ?? 0).toLocaleString()}원
               </span>
             )}
           </div>
-          <span className="text-[13px] font-semibold tabular-nums text-ink">
-            {(row.amount_krw ?? 0).toLocaleString()}원
-          </span>
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5 text-[11.5px]">
           <ScopeTag scope={row.scope} />
-          {fuelBadgeText(row.category, row.fuel) && (
-            <span className="rounded-md border border-line px-1.5 py-0.5 text-muted">
-              {fuelBadgeText(row.category, row.fuel)}
-            </span>
-          )}
-          <ConfidenceBadge value={row.confidence} />
         </div>
       </button>
 
@@ -168,6 +150,7 @@ function ClassificationCard({
 
 export function SceneClassify({ onNext }: { onNext: () => void }) {
   const [rows, setRows] = useState<Row[]>([]);
+  const [hitlCount, setHitlCount] = useState(0);
   const [status, setStatus] = useState<"idle" | "loading" | "done" | "error">(
     "idle",
   );
@@ -182,9 +165,11 @@ export function SceneClassify({ onNext }: { onNext: () => void }) {
       .then((cid) => apiGet<ClassifyResponse>(`/classify/${cid}`))
       .then((res) => {
         if (!alive) return;
-        if (res.results.length > 0) {
-          // 이미 분류된 건이 있으면(재진입) 결과만 보여줌 — 재실행 없음
+        // 확정 건 + 검토 대기 건수를 합쳐 "이미 분류가 실행된 적 있는지" 판단한다 —
+        // 전량이 검토 대기라 results가 비어 있어도 재실행하면 안 된다.
+        if (res.results.length > 0 || res.hitl_pending_count > 0) {
           setRows(res.results);
+          setHitlCount(res.hitl_pending_count);
           setStatus("done");
         } else {
           // 처음 진입 시 — 버튼 없이 화면 진입과 동시에 바로 분류 시작
@@ -221,6 +206,7 @@ export function SceneClassify({ onNext }: { onNext: () => void }) {
 
       const res = await apiPost<ClassifyResponse>(`/classify/${cid}`);
       setRows(res.results);
+      setHitlCount(res.hitl_pending_count);
       setStatus("done");
     } catch (err) {
       console.error("분류 실행 실패:", err);
@@ -234,23 +220,19 @@ export function SceneClassify({ onNext }: { onNext: () => void }) {
     }
   }
 
-  const hitlRows = rows.filter((r) => r.hitl);
-  const autoRows = rows.filter((r) => !r.hitl);
-  const hitlCount = hitlRows.length;
+  const autoRows = rows;
 
   return (
     <section>
-      {status === "done" && (
-        <span className="inline-block rounded-full bg-brand-soft px-2.5 py-1 text-[11px] font-semibold text-brand-ink">
-          실제 분류 결과
-        </span>
-      )}
-      <h2 className="mt-3 text-[17px] font-bold leading-snug text-ink">
-        전표를 AI가 읽고 분류했어요
+      <h2 className="text-[17px] font-bold leading-snug text-ink">
+        해당 항목들은
+        <br />
+        담당자가 검토할 예정이에요
       </h2>
       <p className="mt-1 text-[13px] leading-relaxed text-muted">
-        신뢰도가 낮으면 스스로 은행 담당자에게 넘겨요. 카드를 눌러 근거를
-        확인하세요.
+        신뢰도가 낮은 항목들은 은행 담당자가 검토해요.
+        <br />
+        카드를 눌러 상세 내용을 확인할 수 있어요.
       </p>
 
       {rows.length === 0 && status === "loading" && (
@@ -288,30 +270,17 @@ export function SceneClassify({ onNext }: { onNext: () => void }) {
         </div>
       )}
 
-      {rows.length > 0 && (
+      {(rows.length > 0 || hitlCount > 0) && (
         <>
           {hitlCount > 0 && (
-            <>
-              <div className="mt-4 flex items-center gap-2 rounded-xl bg-hitl/20 px-3.5 py-2.5 text-[12px] font-semibold text-hitl-ink">
-                <span className="h-1.5 w-1.5 rounded-full bg-hitl-ink" />
-                {hitlCount}건은 신뢰도가 낮아 은행 담당자가 검토할 예정이에요
-              </div>
-              <div className="mt-2.5 space-y-2">
-                {hitlRows.map((r) => (
-                  <ClassificationCard
-                    key={r.voucher_id}
-                    row={r}
-                    open={expanded === r.voucher_id}
-                    onToggle={() =>
-                      setExpanded(
-                        expanded === r.voucher_id ? null : r.voucher_id,
-                      )
-                    }
-                  />
-                ))}
-              </div>
-            </>
+            <div className="mt-4 flex items-center gap-2 rounded-xl bg-hitl/20 px-3.5 py-2.5 text-[12px] font-semibold text-hitl-ink">
+              <span className="h-1.5 w-1.5 rounded-full bg-hitl-ink" />
+              {hitlCount}건은 신뢰도가 낮아 은행 담당자가 검토 중이에요. 검토가
+              끝나면 이 화면에 자동으로 반영돼요.
+            </div>
           )}
+
+          <AnomalyCheckCard />
 
           {autoRows.length > 0 && (
             <div className={hitlCount > 0 ? "mt-3" : "mt-4"}>
@@ -324,7 +293,7 @@ export function SceneClassify({ onNext }: { onNext: () => void }) {
                   <span className="grid h-7 w-7 place-items-center rounded-lg bg-brand-soft text-[12px] font-extrabold text-brand-ink">
                     {autoRows.length}
                   </span>
-                  자동확정 {autoRows.length}건 {showAuto ? "접기" : "보기"}
+                  확정 {autoRows.length}건 {showAuto ? "접기" : "보기"}
                 </span>
                 <span
                   className={`text-[14px] text-muted transition-transform duration-200 ${showAuto ? "rotate-180" : ""}`}

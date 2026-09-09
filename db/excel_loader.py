@@ -10,7 +10,15 @@ import openpyxl
 DEFAULT_XLSX = os.path.join(
     os.path.dirname(os.path.dirname(__file__)),
     "data",
-    "iM-Bridge_데이터준비_샘플.xlsx",
+    "감탄_데이터준비_샘플.xlsx",
+)
+
+# 업종분포는 회계가 손으로 관리하는 원천이 아니라 공공데이터 기계 재가공 결과라
+# 별도 파일로 분리(scripts/fetch_industry_distributions.py가 생성·갱신).
+INDUSTRY_DIST_XLSX = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)),
+    "data",
+    "industry_distributions.xlsx",
 )
 
 # 시트마다 연료 표기가 흔들려 정규화 (계수·단가·분류가 같은 이름을 쓰도록)
@@ -91,6 +99,40 @@ def load_emission_factors(path: str = DEFAULT_XLSX) -> list[dict]:
     return out
 
 
+def load_industry_distributions(path: str = INDUSTRY_DIST_XLSX) -> list[dict]:
+    """`업종분포` 시트(scripts/fetch_industry_distributions.py 산출물) → IndustryDistribution 입력.
+
+    이 파일은 회계가 손으로 채우는 원천이 아니라 공공데이터(한국에너지공단
+    마이크로데이터)를 기계적으로 재가공한 결과라, 값 검증(계수 없는 행 스킵 등)
+    없이 그대로 신뢰한다 — 스크립트 쪽에서 이미 정제됨.
+    """
+    rows = _rows_as_dicts(_sheet(_load(path), "업종분포"))
+    out = []
+    for r in rows:
+        code = r.get("업종코드")
+        scope = _scope_int(r.get("Scope"))
+        if not code or scope is None:
+            continue
+        out.append(
+            dict(
+                industry_code=str(code).strip(),
+                industry_name=r.get("업종명"),
+                scope=scope,
+                worker_band=r.get("종사자규모"),
+                emission_min_co2e=float(r["최소_tCO2e"]) if r.get("최소_tCO2e") is not None else None,
+                emission_median_co2e=float(r["중앙값_tCO2e"]) if r.get("중앙값_tCO2e") is not None else None,
+                emission_max_co2e=float(r["최대_tCO2e"]) if r.get("최대_tCO2e") is not None else None,
+                emission_median_per_employee=(
+                    float(r["인당_중앙값_tCO2e"]) if r.get("인당_중앙값_tCO2e") is not None else None
+                ),
+                sample_size=int(r["표본수"]) if r.get("표본수") is not None else None,
+                year=int(r["연도"]) if r.get("연도") is not None else None,
+                source=r.get("출처"),
+            )
+        )
+    return out
+
+
 def _price_unit(price_unit_label) -> str:
     """'원/L' -> 'L' (UnitPrice.unit은 물량 단위만 저장)."""
     s = str(price_unit_label) if price_unit_label is not None else ""
@@ -155,6 +197,25 @@ def _split_keywords(s) -> list[str]:
     return [kw.strip() for kw in str(s).split(",") if kw.strip()]
 
 
+def _split_keyword_groups(s) -> list[list[str]]:
+    """'포함 키워드' 셀 → AND-그룹 리스트(그룹 간 AND, 그룹 내부 OR).
+
+    `;`로 그룹을 나누고 그룹 내부는 기존처럼 `,`로 OR 나열한다.
+    예: "납품차,화물차;경유,주유" -> [["납품차","화물차"], ["경유","주유"]]
+        (납품차 또는 화물차) AND (경유 또는 주유) — 둘 다 있어야 매치.
+    `;`가 없으면 그룹 1개짜리 리스트를 반환 — 기존 flat OR 리스트와 매치 결과가
+    동일하다(하위호환. `api/agent/rules.py::_rule_matches()`가 소비).
+    """
+    if s is None:
+        return []
+    groups = str(s).split(";")
+    out = [
+        [kw.strip() for kw in group.split(",") if kw.strip()]
+        for group in groups
+    ]
+    return [g for g in out if g]
+
+
 def load_classification_rules(path: str = DEFAULT_XLSX) -> list[dict]:
     """`분류_기준표_확장` 시트 → 룰 엔진 입력 (50개 키워드 매칭 규칙).
 
@@ -171,7 +232,7 @@ def load_classification_rules(path: str = DEFAULT_XLSX) -> list[dict]:
             dict(
                 rule_id=str(rule_id).strip(),
                 priority=int(r.get("우선순위")) if r.get("우선순위") is not None else 9,
-                include_keywords=_split_keywords(r.get("포함 키워드")),
+                include_keywords=_split_keyword_groups(r.get("포함 키워드")),
                 exclude_keywords=_split_keywords(r.get("제외/주의 키워드")),
                 scope=_scope_int(r.get("정답Scope")),
                 category=r.get("세부분류"),
@@ -185,6 +246,34 @@ def load_classification_rules(path: str = DEFAULT_XLSX) -> list[dict]:
             )
         )
     out.sort(key=lambda r: (r["priority"], r["rule_id"]))
+    return out
+
+
+def load_k_taxonomy_mapping(path: str = DEFAULT_XLSX) -> list[dict]:
+    """`k_taxonomy_mapping` 시트 → K택소노미·설비투자 리드 매핑 (v1 §6 2주차).
+
+    linked_rule_id로 load_classification_rules()의 rule_id(R051~R058, R031, R032)와
+    연결된다 — 새 매칭 로직이 아니라, 기존 룰 매칭 결과에 K택소노미 세부 필드를
+    얹기 위한 참조 테이블. db/k_taxonomy.py::attach_k_taxonomy_fields()가 사용.
+    """
+    rows = _rows_as_dicts(_sheet(_load(path), "k_taxonomy_mapping"))
+    out = []
+    for r in rows:
+        linked_rule_id = r.get("linked_rule_id")
+        if not linked_rule_id:
+            continue
+        out.append(
+            dict(
+                kt_rule_id=str(r.get("kt_rule_id") or "").strip(),
+                keyword=r.get("keyword"),
+                candidate_type=r.get("candidate_type"),
+                facility_type=r.get("facility_type"),
+                finance_lead_type=r.get("finance_lead_type"),
+                hitl_required=_truthy(r.get("hitl_required")),
+                linked_rule_id=str(linked_rule_id).strip(),
+                evidence_rule=r.get("evidence_rule"),
+            )
+        )
     return out
 
 

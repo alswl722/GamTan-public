@@ -1,8 +1,10 @@
-"""iM-Bridge FastAPI 앱.
+"""감탄 FastAPI 앱.
 
 라우터: /mock(마이데이터), /trace(장면②), /classify(장면③), /pcaf(장면④),
 /agent(오케스트레이터), /scenario(데모 전환), /company(시연 기업 조회),
-/admin(관리자 대시보드 — 포트폴리오 집계·HITL 큐).
+/admin(관리자 대시보드 — 포트폴리오 집계·HITL 큐), /owner(사장님 전용 — 자기 기업 알림),
+/owner(quality-report — 정식 PCAF 엔진 래퍼, 조직경계 자동 생성 포함),
+/borrowers(PCAF 품질평가 — Business Loans and Unlisted Equity 데이터 품질 후보).
 8월 확장 시 라우터를 추가로 꽂기만 한다.
 """
 import os
@@ -13,9 +15,21 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from api.db import get_engine
-from api.routers import admin, agent, classify, company, mock, pcaf, scenario, trace
+from api.routers import (
+    admin,
+    agent,
+    classify,
+    company,
+    mock,
+    owner,
+    owner_quality,
+    pcaf,
+    quality,
+    scenario,
+    trace,
+)
 
-app = FastAPI(title="iM-Bridge API", version="0.1.0")
+app = FastAPI(title="감탄 API", version="0.1.0")
 
 # 로컬 dev(3000)/web 컨테이너(3010) + 배포 프론트(Vercel) 호출 허용.
 # 배포 주소는 코드에 박지 않고 ALLOWED_ORIGINS 환경변수(콤마 구분)로 주입한다.
@@ -31,6 +45,10 @@ app.add_middleware(
     ],
     allow_methods=["*"],
     allow_headers=["*"],
+    # 첨부파일 다운로드가 서버가 정한 파일명을 쓸 수 있게 노출한다 — CORS 기본값은
+    # 응답 헤더 중 몇 개만 JS에 보여주고 Content-Disposition은 가린다. 안 열어두면
+    # 프론트가 파일명을 못 읽어 자기가 지어낸 이름으로 저장한다(신청서 초안 다운로드).
+    expose_headers=["Content-Disposition"],
 )
 
 # 라우터 등록 (기존 health 는 아래 그대로 유지)
@@ -41,7 +59,11 @@ app.include_router(pcaf.router)
 app.include_router(agent.router)
 app.include_router(scenario.router)
 app.include_router(company.router)
+app.include_router(company.companies_router)
 app.include_router(admin.router)
+app.include_router(owner.router)
+app.include_router(owner_quality.router)
+app.include_router(quality.router)
 
 
 @app.get("/health")

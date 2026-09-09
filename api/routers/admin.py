@@ -1,31 +1,94 @@
 """관리자 API — 은행 ESG·여신 담당자용 대시보드 데이터 소스.
 
 - GET   /admin/portfolio                      포트폴리오 금융배출량 집계 + PCAF 등급 분포
-- GET   /admin/hitl                           전 기업 담당자 검토 큐 (저신뢰 분류 건)
-- PATCH /admin/classifications/{id}/confirm   그대로 확정
-- PATCH /admin/classifications/{id}           분류 수정 후 확정 (담당자 교정)
+- GET   /admin/companies/{id}/overview        기업 상세 탭 — 등급·결손·HITL대기·최근알림 요약
+- GET   /admin/hitl                           전 기업 담당자 검토 작업대 (검토 대기 + 확정·미전송 건)
+- PATCH /admin/classifications/{id}/confirm   그대로 확정 (저장만 — 사장님껜 아직 비공개)
+- PATCH /admin/classifications/{id}           분류 수정 후 확정 (담당자 교정, 저장만)
 - PATCH /admin/classifications/{id}/reject    반려 — 집계에서 제외
 - GET   /admin/traces                         에이전트 실행 이력 목록 (드릴다운은 /trace/{sid})
+                                               (page/page_size/company_id/from_time/to_time 서버사이드 페이지네이션)
+- PATCH /admin/classifications/bulk-confirm   여러 건 일괄 확정 (건별 성공/실패 반환, 저장만)
+- PATCH /admin/classifications/bulk-reject    여러 건 일괄 반려 (건별 성공/실패 반환)
+- POST  /admin/companies/{id}/send-classifications  확정 건을 모아 사장님 화면에 한 번에 전송
+- GET   /admin/review-log                     담당자 조치 이력(감사 로그) — evidence 누적 기록을 노출
+                                               (page/page_size/company_name 서버사이드 페이지네이션)
+- GET   /admin/documents/{id}                 원본문서 열람 (조회 시 접근 로그 자동 기록)
+- GET   /admin/documents/{id}/file            원본문서 파일 바이너리 (PDF, 조회 시 접근 로그 자동 기록)
+- GET   /admin/documents/access-log           원본문서 접근 감사 로그 목록 (page/page_size/company_name)
+- GET   /admin/audit-package                  감사 대응 근거 패키지 — 기업·기간 지정 시계열 원자료(JSON/CSV/PDF)
+- GET   /admin/climate-risk-report            기후리스크 — 금감원 4단계 구조 포트폴리오 리포트(JSON/PDF, 재계산 없음)
 
 여신 결정·스코어링은 하지 않는다(CLAUDE.md §9). AI가 1차 스크리닝한 저신뢰 건을
 사람이 최종 확정하는 HITL 마감만 담당 — 금융분야 AI 가이드라인의 보조수단성 구현.
 모든 담당자 조치는 evidence 에 감사 로그로 남긴다(설명가능성 원칙).
 """
+import csv
+import io
+import mimetypes
+import os
+import time
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from api.db import get_session
-from api.queries import get_emission_factors, get_hitl_queue, get_unit_prices
+from api.document_ingestion import REPO_ROOT
+from api.queries import (
+    get_coverage,
+    get_emission_factors,
+    get_hitl_queue,
+    get_pending_send_count,
+    get_unit_prices,
+)
+from db.alerts import detect_alerts
 from db.calc_engine import CalcDataGap, ClassifiedItemInput, compute_emission, \
     index_emission_factors, index_unit_prices
-from db.models import Classification, Company, TraceLog, Voucher
-from db.pcaf import portfolio_summary
+from db.audit_package import build_audit_package
+from db.reports.audit_report_pdf import build_audit_report_pdf
+from db.reports.climate_risk_report_pdf import build_climate_risk_report_pdf
+from db.document.document_access_log import access_history, record_access, recent_access_log
+from db.models import Classification, Company, FinancialInstitution, OwnerNotification, Portfolio, SourceDocument, TraceLog, Voucher
+from db.pcaf_engine.financed_emissions import portfolio_financed_emissions_by_year
+from db.pcaf_engine.pcaf import company_pcaf_summary, portfolio_summary
+from db.verification_results import (
+    CLASSIFICATION_ACCURACY_RESULT,
+    TRACK_A_MAPE_RESULT,
+    TRACK_B_FIELD_TEST_RESULT,
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+# portfolio_summary()는 기업 수만큼 전표·분류를 순회하는 무거운 집계라, 대시보드
+# 최초 로딩(/admin/portfolio)과 기후리스크 탭(/admin/climate-risk-report)이 각자
+# 처음부터 재계산하면 탭 전환할 때마다 같은 계산을 두 번 하게 된다. 프로세스
+# 내 짧은 TTL 캐시로 그 중복만 없앤다 — 담당자 조치(confirm/reject 등)나
+# 에이전트 재실행 직후 최대 TTL만큼 최신 반영이 늦어질 수 있지만, 관리자
+# 대시보드는 실시간 여신 결정 화면이 아니라 집계 현황판이라 감내 가능한
+# 지연이다(반영이 안 되면 새로고침해도 TTL 안이면 그대로다 — 그 정도로 짧게 둔다).
+#
+# 캐시 키에 session.get_bind()(엔진)를 포함한다 — 프로덕션은 프로세스당 엔진이
+# 하나뿐이라 사실상 항상 같은 키지만, 테스트 스위트는 한 프로세스 안에서 여러
+# sqlite 파일 DB(엔진)를 빠르게 오가므로 키가 없으면 TTL 안에 실행된 다음 테스트가
+# 앞 테스트 DB의 결과를 그대로 돌려받는 캐시 오염이 생긴다.
+_PORTFOLIO_CACHE_TTL_SECONDS = 15
+_portfolio_cache: dict[object, tuple[float, dict]] = {}
+
+
+def _cached_portfolio_summary(session: Session) -> dict:
+    key = session.get_bind()
+    now = time.monotonic()
+    cached = _portfolio_cache.get(key)
+    if cached is not None and now < cached[0]:
+        return cached[1]
+    value = portfolio_summary(session)
+    _portfolio_cache[key] = (now + _PORTFOLIO_CACHE_TTL_SECONDS, value)
+    return value
 
 
 class ClassificationEdit(BaseModel):
@@ -36,10 +99,16 @@ class ClassificationEdit(BaseModel):
     fuel_type: str | None = None
 
 
+class BulkAction(BaseModel):
+    """일괄 처리 대상 전표 ID 목록."""
+
+    voucher_ids: list[int]
+
+
 @router.get("/portfolio")
 def portfolio(session: Session = Depends(get_session)):
     """거래 기업 전체의 Scope 1/2 합산 + PCAF 등급 분포 + 기업별 내역."""
-    return portfolio_summary(session)
+    return _cached_portfolio_summary(session)
 
 
 @router.get("/hitl")
@@ -48,15 +117,73 @@ def hitl_queue(session: Session = Depends(get_session)):
     return {"queue": get_hitl_queue(session)}
 
 
+@router.get("/alerts")
+def alerts(session: Session = Depends(get_session)):
+    """이상 신호 알림 — 전 기업 배출량 추세 급변·데이터 공백을 스캔(결정론적 계산).
+
+    급등/급감 판정은 코드가 배수로 계산하고, 여신 결정은 하지 않는다(CLAUDE.md §9).
+    담당자가 조짐을 먼저 인지하도록 안내하는 조기 경보일 뿐이다.
+    """
+    return {"alerts": detect_alerts(session)}
+
+
+@router.get("/companies/{company_id}/overview")
+def company_overview(company_id: int, session: Session = Depends(get_session)):
+    """기업 상세 탭 — 등급·측정 여부·결손·HITL 대기·최근 알림을 한 응답으로 묶는다.
+
+    실행 이력(traces)·변경 이력(review-log)·문서 열람(access-log)·품질 이슈는
+    각자 페이지네이션이 있는 기존 엔드포인트를 프론트가 company_id로 필터해
+    재사용한다 — 여기서는 그 자체로 계산이 필요한 항목만 담아 중복 로직을
+    만들지 않는다.
+    """
+    company = session.get(Company, company_id)
+    if company is None:
+        raise HTTPException(status_code=404, detail=f"company_id={company_id} 없음")
+
+    summary = company_pcaf_summary(session, company_id)
+    after = summary["after"]
+    used = after or summary["before"]
+
+    hitl_count = session.execute(
+        select(func.count(Classification.id))
+        .join(Voucher, Classification.voucher_id == Voucher.id)
+        .where(Voucher.company_id == company_id, Classification.status == "review_required")
+    ).scalar_one()
+
+    return {
+        "company_id": company.id,
+        "company_name": company.name,
+        "industry_name": company.industry_name,
+        "grade": used["grade"],
+        "measured": after is not None,
+        "scope1": round(used.get("scope1", 0.0) or 0.0, 2),
+        "scope2": round(used.get("scope2", 0.0) or 0.0, 2),
+        "hitl_count": hitl_count,
+        # 확정은 했지만 아직 "전송" 전인 건수 — 0보다 크면 관리자 화면에 전송 버튼을 강조.
+        "pending_send_count": get_pending_send_count(session, company_id),
+        "coverage": get_coverage(session, company_id),
+        "alerts": detect_alerts(session, company_id=company_id),
+    }
+
+
 def _load_reviewable(session: Session, voucher_id: int) -> Classification:
-    """검토 대기 상태의 분류를 가져온다 — 아니면 404/409."""
+    """검토 대기(review_required) 또는 확정됐지만 아직 전송 전(confirmed,
+    sent_to_owner_at is null)인 분류를 가져온다 — 아니면 404/409.
+
+    확정은 저장일 뿐 마감이 아니다. 담당자가 기업 배치를 아직 전송하지 않았다면
+    잘못 확정한 값을 다시 고치거나 반려로 되돌릴 수 있어야 한다. 이미 전송된
+    건은 사장님이 이미 봤을 수 있는 값이라 더 이상 손대지 못하게 막는다.
+    """
     obj = session.query(Classification).filter_by(voucher_id=voucher_id).one_or_none()
     if obj is None:
         raise HTTPException(status_code=404, detail=f"voucher_id={voucher_id} 분류 없음")
-    if obj.status != "review_required":
+    reviewable = obj.status == "review_required" or (
+        obj.status == "confirmed" and obj.sent_to_owner_at is None
+    )
+    if not reviewable:
         raise HTTPException(
             status_code=409,
-            detail=f"처리 불가 — 현재 상태 '{obj.status}' (검토필요 건만 가능)",
+            detail=f"처리 불가 — 현재 상태 '{obj.status}' (검토 대기 또는 전송 전 확정 건만 가능)",
         )
     return obj
 
@@ -72,13 +199,99 @@ def confirm_classification(voucher_id: int, session: Session = Depends(get_sessi
 
     분류 내용(scope/category)은 그대로 두고 '사람이 확인했다'만 기록한다.
     AI가 값을 바꾸는 게 아니라 사람이 판정을 마감하는 것(보조수단성).
+
+    edit()과 마찬가지로 _recalculate()를 호출한다 — 이전엔 "수정 없이 확정"
+    경로에서 재계산이 아예 안 됐는데, voucher.raw_json에 물량이 있는 채로
+    review_required에 머물던 건(예: 담당자가 다른 이유로 대기시켰다가 뒤늦게
+    수량이 채워진 경우)을 확정해도 emission_co2e가 0으로 남는 갭이었다.
     """
     obj = _load_reviewable(session, voucher_id)
+    recalculated = _recalculate(session, obj)
     obj.status = "confirmed"
     obj.reviewed_at = datetime.now(timezone.utc)
     _append_evidence(obj, "담당자 확정(수정 없음)")
     session.commit()
-    return {"voucher_id": voucher_id, "status": obj.status}
+    return {
+        "voucher_id": voucher_id,
+        "status": obj.status,
+        "recalculated": recalculated,
+        "emission_co2e": obj.emission_co2e,
+    }
+
+
+def _bulk_apply(session: Session, voucher_ids: list[int], new_status: str, note: str) -> list[dict]:
+    """여러 건에 동일 조치를 적용 — 한 건 실패해도 나머지는 계속 처리한다(부분 실패 가시성).
+
+    ⚠️ 이 라우트는 반드시 `PATCH /classifications/{voucher_id}` 보다 먼저 등록돼야 한다 —
+    안 그러면 "bulk-confirm" 문자열이 {voucher_id}(int) 로 파싱 시도되어 422로 막힌다.
+    """
+    results = []
+    for vid in voucher_ids:
+        try:
+            obj = _load_reviewable(session, vid)
+        except HTTPException as e:
+            session.rollback()
+            results.append({"voucher_id": vid, "ok": False, "error": e.detail})
+            continue
+        obj.status = new_status
+        obj.reviewed_at = datetime.now(timezone.utc)
+        _append_evidence(obj, note)
+        session.commit()
+        results.append({"voucher_id": vid, "ok": True})
+    return results
+
+
+@router.patch("/classifications/bulk-confirm")
+def bulk_confirm(payload: BulkAction, session: Session = Depends(get_session)):
+    """선택한 여러 건을 수정 없이 일괄 확정. 건별 성공/실패를 그대로 반환한다."""
+    return {"results": _bulk_apply(session, payload.voucher_ids, "confirmed", "담당자 일괄 확정(수정 없음)")}
+
+
+@router.patch("/classifications/bulk-reject")
+def bulk_reject(payload: BulkAction, session: Session = Depends(get_session)):
+    """선택한 여러 건을 일괄 반려 — 집계에서 제외. 건별 성공/실패를 그대로 반환한다."""
+    return {
+        "results": _bulk_apply(
+            session, payload.voucher_ids, "rejected", "담당자 일괄 반려 — 분류 신뢰 불가, 집계 제외"
+        )
+    }
+
+
+@router.post("/companies/{company_id}/send-classifications")
+def send_classifications_to_owner(company_id: int, session: Session = Depends(get_session)):
+    """확정(저장)과 사장님 전송을 분리한다 — 이 엔드포인트를 눌러야 그 시점까지
+
+    확정된(status: confirmed, 아직 미전송) 건 전체가 한 번에 사장님 화면에 노출된다.
+    검토 중인 기업 배치가 건별로 조금씩 흘러들어가는 것을 막기 위함. 재실행해도
+    이미 전송된 건은 건드리지 않는다(그 사이 새로 확정된 건만 대상).
+    """
+    company = session.get(Company, company_id)
+    if company is None:
+        raise HTTPException(status_code=404, detail="기업을 찾을 수 없습니다")
+
+    stmt = (
+        select(Classification)
+        .join(Voucher, Classification.voucher_id == Voucher.id)
+        .where(Voucher.company_id == company_id)
+        .where(Classification.status == "confirmed")
+        .where(Classification.sent_to_owner_at.is_(None))
+    )
+    pending = session.execute(stmt).scalars().all()
+    sent_at = datetime.now(timezone.utc)
+    for c in pending:
+        c.sent_to_owner_at = sent_at
+    sent_count = len(pending)
+    if sent_count > 0:
+        # 확정 전송 → 사장님 알림 (docs/v1-plan.md §6-2). 건수 0이면 알릴 게
+        # 없으므로 레코드를 만들지 않는다 — 빈 알림으로 배너를 채우지 않기 위함.
+        session.add(OwnerNotification(
+            company_id=company_id,
+            type="classification_sent",
+            message=f"{sent_count}건이 확정되어 리포트에 반영됐어요",
+            payload={"sent_count": sent_count},
+        ))
+    session.commit()
+    return {"company_id": company_id, "sent_count": sent_count, "sent_at": sent_at}
 
 
 @router.patch("/classifications/{voucher_id}")
@@ -178,39 +391,142 @@ def reject_classification(voucher_id: int, session: Session = Depends(get_sessio
     return {"voucher_id": voucher_id, "status": obj.status}
 
 
+@router.get("/review-log")
+def review_log(
+    page: int = 1,
+    page_size: int = 50,
+    company_name: str | None = None,
+    company_id: int | None = None,
+    session: Session = Depends(get_session),
+):
+    """담당자 조치 이력(감사 로그) — 확정/반려된 건을 최근 조치순으로.
+
+    별도 감사 테이블을 새로 두지 않는다 — confirm/edit/reject 가 이미 evidence 에
+    "무엇을 했는지"를 원본 판단 근거 뒤에 누적해서 남긴다(설계 원칙: 모든 판단에
+    evidence 저장). 이 엔드포인트는 그 기록을 조회용으로 노출만 한다.
+
+    company_name을 넘기면 기업명 부분일치(대소문자 무시)로 필터한다("변경 이력"
+    탭의 검색창용). company_id를 넘기면 정확히 그 기업만 필터한다("기업" 탭이
+    기업을 이미 선택한 상태에서 씀 — 이름이 비슷한 다른 기업과 섞이지 않도록
+    id로 정확히 좁힌다). 둘 다 넘어오면 company_id가 우선한다. total은 필터
+    적용 후 전체 건수 — 프론트가 "N건 중 M~K" 페이지 표시에 쓴다.
+    """
+    base = (
+        select(Classification, Voucher, Company)
+        .join(Voucher, Classification.voucher_id == Voucher.id)
+        .join(Company, Voucher.company_id == Company.id)
+        .where(Classification.reviewed_at.isnot(None))
+    )
+    if company_id is not None:
+        base = base.where(Company.id == company_id)
+    elif company_name:
+        base = base.where(Company.name.ilike(f"%{company_name}%"))
+
+    total = session.execute(
+        select(func.count()).select_from(base.with_only_columns(Classification.id).subquery())
+    ).scalar_one()
+
+    stmt = (
+        base.order_by(Classification.reviewed_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    rows = session.execute(stmt).all()
+    return {
+        "entries": [
+            {
+                "voucher_id": v.id,
+                "company_name": co.name,
+                "raw": v.item_description,
+                "month": v.month,
+                "status": c.status,
+                "evidence": c.evidence,
+                "reviewed_at": c.reviewed_at.isoformat() if c.reviewed_at else None,
+            }
+            for c, v, co in rows
+        ],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
+
+
 # 실행 이력 메시지에서 결과 배지를 뽑는 규칙 — 트레이스 문구와 1:1로 맞춰둔다.
 _BADGE_RULES = (
-    ("결손 발견", "결손 발견"),
-    ("이상치 의심", "이상치"),
-    ("재검증 실패", "재검증 실패"),
+    ("비어있네요", "결손 발견"),
+    ("왜 그런지 다시 확인해볼게요", "이상치"),
+    ("다시 확인하다가 막혔어요", "재검증 실패"),
 )
 
 
 @router.get("/traces")
-def trace_runs(session: Session = Depends(get_session)):
-    """에이전트 실행 이력 목록 — session_id 단위로 묶어 최신순.
+def trace_runs(
+    page: int = 1,
+    page_size: int = 50,
+    company_id: int | None = None,
+    from_time: datetime | None = None,
+    to_time: datetime | None = None,
+    session: Session = Depends(get_session),
+):
+    """에이전트 실행 이력 목록 — session_id 단위로 묶어 최신순, 서버사이드 페이지네이션.
 
     드릴다운(스텝 타임라인)은 기존 GET /trace/{session_id} 를 그대로 쓴다.
+    trace_logs는 실행할 때마다 계속 쌓이는 append-only 테이블이라(기업당 실행
+    1회에 6~15건) 세션 수가 늘어날수록 전체 스캔 비용이 커진다 — 그래서
+    "세션을 먼저 페이지네이션 → 그 세션들의 로그만 조회 → Python 그룹핑"
+    2단계로 나눈다(세션 수만큼 쿼리가 반복되던 옛 N+1과는 다른 문제라
+    안 헷갈리게 주석: 여긴 세션 목록 조회 1번 + 로그 조회 1번, 총 2쿼리 고정).
+
+    company_id/from_time/to_time은 1단계(세션 목록) 필터로 들어간다 — 필터링
+    후 세션이 줄어야 2단계 로그 조회량도 같이 줄어든다.
     """
-    rows = session.execute(
-        select(
-            TraceLog.session_id,
-            TraceLog.company_id,
-            Company.name,
-            func.min(TraceLog.created_at).label("ran_at"),
-            func.count(TraceLog.id).label("step_count"),
-        )
+    session_start = func.min(TraceLog.created_at).label("ran_at")
+    session_list_stmt = (
+        select(TraceLog.session_id, TraceLog.company_id, Company.name, session_start)
         .join(Company, Company.id == TraceLog.company_id)
         .group_by(TraceLog.session_id, TraceLog.company_id, Company.name)
-        .order_by(func.min(TraceLog.created_at).desc())
+    )
+    if company_id is not None:
+        session_list_stmt = session_list_stmt.where(TraceLog.company_id == company_id)
+    if from_time is not None:
+        session_list_stmt = session_list_stmt.where(TraceLog.created_at >= from_time)
+    if to_time is not None:
+        session_list_stmt = session_list_stmt.where(TraceLog.created_at <= to_time)
+
+    total = session.execute(
+        select(func.count()).select_from(session_list_stmt.subquery())
+    ).scalar_one()
+
+    page_stmt = (
+        session_list_stmt.order_by(session_start.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    session_rows = session.execute(page_stmt).all()
+
+    order: list[str] = [sid for sid, *_ in session_rows]
+    meta = {
+        sid: {"company_id": cid, "company_name": name, "ran_at": ran_at}
+        for sid, cid, name, ran_at in session_rows
+    }
+
+    if not order:
+        return {"runs": [], "total": total, "page": page, "page_size": page_size}
+
+    log_rows = session.execute(
+        select(TraceLog.session_id, TraceLog.message)
+        .where(TraceLog.session_id.in_(order))
+        .order_by(TraceLog.session_id, TraceLog.created_at)
     ).all()
 
+    messages: dict[str, list[str]] = {sid: [] for sid in order}
+    for sid, message in log_rows:
+        messages[sid].append(message or "")
+
     runs = []
-    for sid, company_id, company_name, ran_at, step_count in rows:
-        messages = session.execute(
-            select(TraceLog.message).where(TraceLog.session_id == sid)
-        ).scalars().all()
-        blob = " ".join(m or "" for m in messages)
+    for sid in order:
+        g = meta[sid]
+        blob = " ".join(messages[sid])
 
         badges = [label for needle, label in _BADGE_RULES if needle in blob]
         # 실행 중단은 오케스트레이터가 예외 시 남기는 문구 — 그 외는 완료로 본다
@@ -220,11 +536,229 @@ def trace_runs(session: Session = Depends(get_session)):
 
         runs.append({
             "session_id": sid,
-            "company_id": company_id,
-            "company_name": company_name,
-            "ran_at": ran_at.isoformat() if ran_at else None,
-            "step_count": int(step_count),
+            "company_id": g["company_id"],
+            "company_name": g["company_name"],
+            "ran_at": g["ran_at"].isoformat() if g["ran_at"] else None,
+            "step_count": len(messages[sid]),
             "status": "실패" if failed else "완료",
             "result_badges": badges,
         })
-    return {"runs": runs}
+    return {"runs": runs, "total": total, "page": page, "page_size": page_size}
+
+
+# ── 원본문서 열람 + 접근 감사 로그 ───────────────────────────────────────────
+# 주의: "/documents/access-log"가 "/documents/{document_id}"보다 먼저 등록돼야 한다.
+# FastAPI는 등록 순서대로 매칭하므로, {document_id}가 먼저면 "access-log"라는
+# 문자열이 document_id로 잘못 파싱 시도된다.
+
+@router.get("/documents/access-log")
+def document_access_log(
+    page: int = 1,
+    page_size: int = 50,
+    company_name: str | None = None,
+    company_id: int | None = None,
+    session: Session = Depends(get_session),
+):
+    """전체 원본문서 열람 이력 — 최근 순."""
+    return recent_access_log(
+        session, page=page, page_size=page_size, company_name=company_name, company_id=company_id
+    )
+
+
+@router.get("/documents/{document_id}")
+def view_document(
+    document_id: int, viewed_by: str, session: Session = Depends(get_session)
+):
+    """원본문서 열람 — 조회할 때마다 접근 로그를 남긴다(v1 §6 2주차).
+
+    viewed_by는 쿼리 파라미터로 받는다(별도 인증 체계 미도입). 열람 자체는 조치가
+    아니므로 별도 confirm 없이 GET 시점에 즉시 기록한다.
+    """
+    doc = session.get(SourceDocument, document_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"document_id={document_id} 없음")
+
+    record_access(session, document_id, viewed_by)
+
+    return {
+        "id": doc.id,
+        "company_id": doc.company_id,
+        "document_type": doc.document_type,
+        "original_filename": doc.original_filename,
+        "document_date": doc.document_date.isoformat() if doc.document_date else None,
+        "extracted_json": doc.extracted_json,
+        "verification_status": doc.verification_status,
+        "access_history": [
+            {"accessed_by": a.accessed_by, "accessed_at": a.accessed_at.isoformat() if a.accessed_at else None}
+            for a in access_history(session, document_id)
+        ],
+    }
+
+
+@router.get("/documents/{document_id}/file")
+def download_document_file(
+    document_id: int, viewed_by: str, session: Session = Depends(get_session)
+):
+    """원본문서 파일 바이너리 — <iframe>/<embed>가 직접 src로 거는 엔드포인트.
+
+    view_document(메타데이터 JSON)와 분리한다 — 브라우저가 PDF를 렌더링하려면
+    이 URL을 그대로 src에 꽂아야 하므로 JSON을 반환하는 엔드포인트와 섞지 않는다.
+    열람 시점에 즉시 접근 로그를 남기는 관례는 view_document와 동일.
+
+    원본은 PDF만이 아니다 — CLAUDE.md §7 업로드 3종은 JPEG/PNG/WEBP/HEIC 사진과
+    스캔 PDF를 모두 받는다(db/document_ocr_extractor.py 경로). media_type을
+    application/pdf로 고정하면 이미지 원본을 PDF로 위장해 보내는 셈이라 브라우저
+    PDF 뷰어가 파싱 실패로 빈 화면을 띄운다 — 실제 파일 확장자로 추정해야 한다.
+    """
+    doc = session.get(SourceDocument, document_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"document_id={document_id} 없음")
+    if not doc.file_path:
+        raise HTTPException(status_code=404, detail="원본 파일이 저장되어 있지 않습니다")
+
+    abs_path = os.path.normpath(os.path.join(REPO_ROOT, doc.file_path))
+    if not os.path.isfile(abs_path):
+        raise HTTPException(status_code=404, detail="원본 파일을 찾을 수 없습니다")
+
+    record_access(session, document_id, viewed_by)
+
+    media_type, _ = mimetypes.guess_type(abs_path)
+    media_type = media_type or "application/pdf"
+
+    # filename= 인자를 쓰면 FileResponse가 Content-Disposition: attachment로 강제해
+    # 브라우저가 다운로드를 시도한다 — <iframe>이 인라인 렌더링하도록 명시적으로
+    # inline을 지정한다. HTTP 헤더는 latin-1만 허용해 한글 파일명을 그대로 못
+    # 넣으므로, filename*=UTF-8''(RFC 6266) 형식으로 퍼센트 인코딩한다.
+    display_name = quote(doc.original_filename or "document.pdf")
+    return FileResponse(
+        abs_path,
+        media_type=media_type,
+        headers={"Content-Disposition": f"inline; filename*=UTF-8''{display_name}"},
+    )
+
+
+# ── 감사 대응 근거 패키지 (v1 Tier 2, owner-admin-flow-spec.md §8) ──────────────
+
+@router.get("/audit-package")
+def audit_package(
+    company_id: int,
+    year: int,
+    month_from: int = 1,
+    month_to: int = 12,
+    format: str = "json",
+    session: Session = Depends(get_session),
+):
+    """기업·기간을 지정하면 trace_logs + classifications.evidence + 원본 전표를
+    시계열로 묶어 반환한다. format=csv는 원자료 재검증용, format=pdf는 서술형
+    감사보고서(요약 통계 + 판단 근거 시계열 표)를 내려준다. 둘 다 build_audit_package()가
+    만든 package를 그대로 직렬화할 뿐 재계산하지 않는다.
+    """
+    company = session.get(Company, company_id)
+    if company is None:
+        raise HTTPException(status_code=404, detail=f"company_id={company_id} 없음")
+
+    package = build_audit_package(session, company_id, year, month_from, month_to)
+
+    if format == "csv":
+        buffer = io.StringIO()
+        writer = csv.DictWriter(
+            buffer,
+            fieldnames=[
+                "entry_type", "occurred_at", "voucher_id", "year", "month",
+                "item_description", "supply_amount_krw", "scope", "fuel_type",
+                "emission_co2e", "status", "evidence", "session_id", "step_type",
+                "tool_name", "message",
+            ],
+        )
+        writer.writeheader()
+        for entry in package["entries"]:
+            writer.writerow({k: entry.get(k, "") for k in writer.fieldnames})
+        buffer.seek(0)
+        filename = f"audit-package-{company_id}-{year}.csv"
+        return StreamingResponse(
+            iter([buffer.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    if format == "pdf":
+        pdf_bytes = build_audit_report_pdf(package, company.name)
+        filename = f"audit-report-{company_id}-{year}.pdf"
+        return StreamingResponse(
+            iter([pdf_bytes]),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    return package
+
+
+# ── 기후리스크 (v1 Tier 2, owner-admin-flow-spec.md §6, docs/tasks.md) ──────────
+
+@router.get("/climate-risk-report")
+def climate_risk_report(format: str = "json", session: Session = Depends(get_session)):
+    """금감원 「기후리스크 관리 지침서」 4단계 구조 리포트 — portfolio_summary()를
+    재계산 없이 4단계(거버넌스·전략·리스크평가·공시) 틀로 재배열한다.
+    portfolio_summary() 자체는 _cached_portfolio_summary()를 거쳐 짧은 TTL로
+    캐시된다 — 대시보드 최초 로딩 직후 이 탭에 들어와도 같은 무거운 집계를
+    바로 다시 하지 않는다.
+
+    검증 오차율은 회계 담당 미착수라 "산정 예정"으로 표시한다. 시계열
+    금융배출량은 db/pcaf_engine/financed_emissions.py의 산식 함수로 실제
+    계산하지만, 입력값(대출잔액)이 은행 내부 여신 시스템 연동 없이 채운
+    mock이라 "예시 데이터"로 명시한다 — 실측인 것처럼 꾸미지 않는다(실패
+    가시성 원칙). 시딩된 포트폴리오가 없으면(portfolio_id 미존재) 빈
+    타임라인을 반환한다.
+    """
+    portfolio = _cached_portfolio_summary(session)
+    institution = session.execute(select(FinancialInstitution)).scalars().first()
+    institution_name = institution.name if institution else "감탄 데모 금융기관"
+
+    loan_portfolio = session.execute(select(Portfolio)).scalars().first()
+    financed_years = (
+        portfolio_financed_emissions_by_year(session, loan_portfolio.id) if loan_portfolio else []
+    )
+
+    if format == "pdf":
+        pdf_bytes = build_climate_risk_report_pdf(portfolio, institution_name, financed_years)
+        return StreamingResponse(
+            iter([pdf_bytes]),
+            media_type="application/pdf",
+            headers={"Content-Disposition": 'attachment; filename="climate-risk-report.pdf"'},
+        )
+
+    return {
+        "institution_name": institution_name,
+        "governance": {
+            "description": (
+                f"{institution_name}은 이사회 산하 여신·ESG팀이 기후리스크 관리를 "
+                "담당하며, 포트폴리오 단위 PCAF 데이터 품질 현황을 정기 보고한다."
+            ),
+        },
+        "strategy": {
+            "company_count": portfolio["company_count"],
+            "before_grade": 5,
+            "avg_grade": portfolio["avg_grade"],
+        },
+        "risk_assessment": {
+            "grade_distribution": portfolio["grade_distribution"],
+            "before_distribution": portfolio["before_distribution"],
+        },
+        "disclosure": {
+            "measured_coverage_pct": portfolio["measured_coverage_pct"],
+            "hitl_total": portfolio["hitl_total"],
+            "reviewed_today": portfolio["reviewed_today"],
+            "classification_accuracy": CLASSIFICATION_ACCURACY_RESULT,
+            "track_a_mape": TRACK_A_MAPE_RESULT,
+            "track_b_field_test": TRACK_B_FIELD_TEST_RESULT,
+        },
+        "financed_emissions_timeline": {
+            "is_example": True,
+            "note": (
+                "대출잔액(business_loan_exposures)은 은행 내부 여신 시스템 "
+                "연동이 필요해 실측이 아닌 예시 값으로 채워져 있습니다. "
+                "산식(귀속계수×차주배출량)은 실제 계산 결과입니다."
+            ),
+            "years": financed_years,
+        },
+    }

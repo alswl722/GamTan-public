@@ -30,8 +30,6 @@ function mapSteps(res: TraceResponse): Step[] {
   }));
 }
 
-type Scenario = { name: string; label: string };
-
 export type TraceRunState = {
   allSteps: Step[];
   finished: boolean;
@@ -56,8 +54,6 @@ export function SceneTrace({
   const [visible, setVisible] = useState(finished ? committedSteps.length : 0);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [scenarios, setScenarios] = useState<Scenario[]>([]);
-  const [selected, setSelected] = useState("");
 
   // 최신 스텝 목록을 ref로도 유지 — 실행 실패 시 폴링으로 모인 만큼을 커밋할 때 사용.
   const stepsRef = useRef<Step[]>(committedSteps);
@@ -79,25 +75,7 @@ export function SceneTrace({
   }, []);
 
   // 페이지 진입 시엔 예전 실행 결과를 불러오지 않는다 — 실행 전엔 화면에
-  // 아무 스텝도 없어야 한다. 시나리오 드롭다운만 채워둔다.
-  useEffect(() => {
-    let alive = true;
-    apiGet<{ scenarios: Scenario[] }>(`/scenario`)
-      .then((res) => {
-        if (!alive || !res.scenarios?.length) return;
-        setScenarios(res.scenarios);
-        setSelected(res.scenarios[0].name);
-      })
-      .catch((err) => {
-        if (alive) console.error("시나리오 목록 조회 실패:", err);
-      });
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  // 선택 시나리오를 로드(전표·트레이스 리셋)한 **다음에야** 폴링을 시작한다 —
-  // 리셋 전에 폴링하면 이전 실행의 트레이스가 새 실행 화면에 섞인다.
+  // 아무 스텝도 없어야 한다.
   // 폴링마다 목록을 통째로 교체하면 이미 노출된 스텝까지 처음부터 재생되므로,
   // 같은 세션이면 "새로 늘어난 스텝만" 이어붙이고, 세션이 바뀌면 교체한다.
   async function runAgent() {
@@ -112,7 +90,6 @@ export function SceneTrace({
     let succeeded = false;
     try {
       const cid = await getCompanyId();
-      if (selected) await apiPost(`/scenario/${selected}/${cid}`);
 
       pollRef.current = setInterval(() => {
         apiGet<TraceResponse>(`/trace/latest?company_id=${cid}`)
@@ -204,26 +181,13 @@ export function SceneTrace({
   return (
     <section>
       <h2 className="text-[17px] font-bold leading-snug text-ink">
-        에이전트가 스스로 결손을 발견하고 있어요
+        감탄 AI 에이전트가
+        <br />
+        데이터를 확인 중이에요
       </h2>
       <p className="mt-1 text-[13px] leading-relaxed text-muted">
         모든 판단에는 근거가 남습니다.
       </p>
-
-      {scenarios.length > 0 && (
-        <select
-          value={selected}
-          onChange={(e) => setSelected(e.target.value)}
-          disabled={running}
-          className="mt-3 w-full rounded-lg bg-bg px-3 py-2 text-[12.5px] font-medium text-ink disabled:opacity-60"
-        >
-          {scenarios.map((s) => (
-            <option key={s.name} value={s.name}>
-              {s.label}
-            </option>
-          ))}
-        </select>
-      )}
 
       {steps.length > 0 && (
         <ol className="mt-4 max-h-[340px] space-y-0 overflow-y-auto rounded-2xl bg-surface p-4">
@@ -286,16 +250,6 @@ export function SceneTrace({
       >
         {buttonLabel}
       </button>
-
-      {dataReady && (
-        <button
-          type="button"
-          onClick={runAgent}
-          className="mt-3 w-full text-center text-[12px] text-faint underline underline-offset-2 transition-colors hover:text-muted"
-        >
-          에이전트 재실행
-        </button>
-      )}
     </section>
   );
 }

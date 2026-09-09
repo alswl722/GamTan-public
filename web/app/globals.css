@@ -2,14 +2,6 @@
 @import url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css");
 @import "tailwindcss";
 
-/* 마루부리 — 로고("감탄") 전용. 명조 계열의 부드러운 인상을 로고에만 준다. */
-@font-face {
-  font-family: "MaruBuri";
-  src: url("/MaruBuri-Light.otf") format("opentype");
-  font-weight: 300;
-  font-display: swap;
-}
-
 /* ==========================================================================
    iM-Bridge 디자인 토큰 (v0.2 — 토스 스타일 리디자인)
    컬러는 iM뱅크 공식 브랜드 가이드 값 그대로 사용 (Primary/Secondary/로고타입 그레이).
@@ -43,6 +35,16 @@
 
   --shadow-card: 0 1px 2px rgba(23, 24, 28, 0.04), 0 8px 24px -12px rgba(23, 24, 28, 0.08);
   --shadow-float: 0 12px 32px -8px rgba(0, 150, 127, 0.18);
+}
+
+/* 마루부리 — 로고("감탄") 전용. 명조 계열의 부드러운 인상을 로고에만 준다.
+   @theme 블록 앞에 두면 Tailwind v4(Lightning CSS)가 @font-face를 통째로
+   드롭하는 문제가 있어 @theme 뒤, 나머지 일반 규칙보다 앞에 둔다. */
+@font-face {
+  font-family: "MaruBuri";
+  src: url("/MaruBuri-Light.otf") format("opentype");
+  font-weight: 300;
+  font-display: swap;
 }
 
 html {
@@ -108,24 +110,56 @@ body {
 }
 
 /* 주 CTA 버튼 공용 — 랜딩 페이지 CTA와 동일한 "살짝 떠오르는" 인터랙션을
-   /owner 마법사 내부 버튼에도 통일 적용 (기존엔 배경색만 바뀌는 밋밋한 버튼). */
+   /owner 마법사 내부 버튼에도 통일 적용 (기존엔 배경색만 바뀌는 밋밋한 버튼).
+
+   호버 시 배경을 무조건 brand-ink로 바꾸던 이전 버전은, bg-surface/
+   bg-brand-soft 같은 옅은 배경에 text-brand-ink 라벨을 쓰는 카드(홈
+   탄소측정 유도 카드, 2×2 기능 카드, 목표 설정 카드 등)에서 호버 시
+   글자색과 배경색이 같아져 텍스트가 사라지는 버그를 냈다(2026-08-19
+   사용자 피드백 — "호버를 쓰는 모든 카드가 그 문제를 겪고 있다"). 배경색은
+   그대로 두고 그림자만 민트 톤으로 진하게 키운다 — 브랜드 컬러(민트)가
+   여전히 느껴지면서도 어떤 배경·텍스트 조합에서도 글자를 가리지 않는다
+   (사용자 피드백: "회색 별로고 민트로갈까" → 무채색 밝기 조정 대신 브랜드
+   컬러 글로우로 교체). shadow-float 자체가 이미 brand-ink 톤(rgba(0,
+   150, 127, ...))이라 호버 시 그 강도만 키우면 자연스럽게 이어진다. */
 .btn-cta {
   box-shadow: var(--shadow-float);
   transition:
     transform 0.2s cubic-bezier(0.16, 1, 0.3, 1),
-    background-color 0.2s ease-out,
+    box-shadow 0.2s ease-out,
     opacity 0.2s ease-out;
 }
 .btn-cta:hover:not(:disabled) {
   transform: translateY(-2px);
-  background-color: var(--color-brand-ink);
+  box-shadow: 0 16px 36px -8px rgba(0, 150, 127, 0.32);
 }
 .btn-cta:active:not(:disabled) {
   transform: translateY(0);
+  box-shadow: 0 8px 20px -8px rgba(0, 150, 127, 0.28);
 }
 .btn-cta:disabled {
   cursor: not-allowed;
   opacity: 0.6;
+}
+
+/* 감축 실천 ToDo 카드("이번 달엔 이렇게 해보세요") — 은은하게 숨쉬는 민트
+   그림자. 사용자 지시: "해당 컴포넌트 배경 이펙트를 움직이는 그림자 넣어봐".
+   shadow-float(브랜드 톤 rgba(0, 150, 127, ...))을 기준으로 강도만 오갔다 —
+   btn-cta 호버가 같은 색을 쓰는 것과 같은 결, 새 색을 도입하지 않는다.
+   느린 주기(5s)로 은은하게만 움직여 카드가 산만해지지 않게 한다. */
+@keyframes card-glow {
+  0%,
+  100% {
+    box-shadow: var(--shadow-card);
+  }
+  50% {
+    box-shadow:
+      0 1px 2px rgba(23, 24, 28, 0.04),
+      0 16px 40px -12px rgba(0, 150, 127, 0.28);
+  }
+}
+.card-glow {
+  animation: card-glow 5s ease-in-out infinite;
 }
 
 /* 에이전트/분류 진행 중 점 3개 — 통통 튀는 느낌을 주려고 오버슈트 이징 사용 */
@@ -141,4 +175,24 @@ body {
 }
 .dot-bounce {
   animation: dot-bounce 0.9s cubic-bezier(0.34, 1.56, 0.64, 1) infinite;
+}
+
+/* 추가 업로드 완료 도장 — 큰 도장이 화면에 내려앉으며 살짝 튕기는 연출. */
+@keyframes stamp-in {
+  0% {
+    opacity: 0;
+    transform: scale(1.8) rotate(-18deg);
+  }
+  68% {
+    opacity: 1;
+    transform: scale(0.9) rotate(-4deg);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(-6deg);
+  }
+}
+
+.stamp-enter {
+  animation: stamp-in 0.58s cubic-bezier(0.16, 1, 0.3, 1) both;
 }

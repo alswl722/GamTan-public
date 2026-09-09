@@ -12,9 +12,42 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from db.models import Company, Voucher
+from db.models import Company, FinancialInstitution, InstitutionBorrower, Voucher
 
 load_dotenv()
+
+# 0006 마이그레이션(alembic/versions/0006_backfill_default_institution.py)과 동일한
+# 데모 금융기관 키 — 이 스크립트가 마이그레이션 이후에 재실행돼도(빈 DB 재시드 등)
+# vouchers.financial_institution_id가 NULL로 남지 않도록 같은 기관에 귀속시킨다.
+_DEMO_TENANT_KEY = "demo-im-bank"
+_DEMO_INSTITUTION_NAME = "감탄 데모 금융기관"
+
+# 회계 담당이 만든 결측 시나리오용 기업 6곳 (data/감탄_데이터준비_샘플.xlsx의 company_master
+# 시트, data/마이데이터_연동자료_전체기업.csv, data/업로드서류/ 전부 이 6곳 기준).
+# external_id는 그 CSV/PDF의 company_id 컬럼("C001"~"C006")과 그대로 맞춘다 — 마이데이터
+# CSV를 읽을 때 이 값으로 다시 찾아간다(db/mydata_csv_source.py).
+# industry_code는 벤치마킹 데이터(db/init_db.py::seed_industry_distributions)가 있는
+# 기존 두 코드(C251/C259) 중 하나로 매핑 — 신규 코드를 쓰면 업종분포 비교가 빈 값이 된다.
+EXTRA_COMPANIES = [
+    dict(external_id="C001", name="구미정밀", industry_code="C259",
+         industry_name="기타 금속가공제품 제조", employee_count=18,
+         revenue_krw=2_500_000_000, region="경북 구미"),
+    dict(external_id="C002", name="대경부품", industry_code="C259",
+         industry_name="기타 금속가공제품 제조", employee_count=12,
+         revenue_krw=1_800_000_000, region="경북 경산"),
+    dict(external_id="C003", name="성서테크", industry_code="C259",
+         industry_name="기타 금속가공제품 제조", employee_count=25,
+         revenue_krw=3_200_000_000, region="대구 달서"),
+    dict(external_id="C004", name="칠곡소재", industry_code="C259",
+         industry_name="기타 금속가공제품 제조", employee_count=9,
+         revenue_krw=950_000_000, region="경북 칠곡"),
+    dict(external_id="C005", name="포항이엔지", industry_code="C259",
+         industry_name="기타 금속가공제품 제조", employee_count=15,
+         revenue_krw=2_100_000_000, region="경북 포항"),
+    dict(external_id="C006", name="대구정공", industry_code="C259",
+         industry_name="기타 금속가공제품 제조", employee_count=11,
+         revenue_krw=1_400_000_000, region="대구 북구"),
+]
 
 
 DEMO_COMPANY = dict(
@@ -164,6 +197,37 @@ def _quantity_fields(v: dict) -> dict:
     return {"quantity": round(v["supply_amount_krw"] / price), "quantity_unit": unit}
 
 
+def _resolve_demo_institution_borrower(session: Session, company_id: int) -> tuple[int, int]:
+    """0006과 동일한 데모 금융기관에 이 기업을 귀속시킨다(멱등 — 이미 있으면 재사용).
+
+    api/queries.py::resolve_institution_borrower()와 같은 목적이지만, 이 스크립트는
+    방금 만든 Company를 그 즉시 귀속시켜야 해서(0006 백필 대상이 아님 — 마이그레이션은
+    과거 시점에 존재하던 행만 채운다) 여기서 직접 생성까지 담당한다.
+    """
+    institution = session.query(FinancialInstitution).filter_by(tenant_key=_DEMO_TENANT_KEY).first()
+    if institution is None:
+        institution = FinancialInstitution(
+            name=_DEMO_INSTITUTION_NAME, reporting_currency="KRW", tenant_key=_DEMO_TENANT_KEY,
+        )
+        session.add(institution)
+        session.flush()
+
+    borrower = session.query(InstitutionBorrower).filter_by(
+        financial_institution_id=institution.id, company_id=company_id,
+    ).first()
+    if borrower is None:
+        borrower = InstitutionBorrower(
+            financial_institution_id=institution.id,
+            company_id=company_id,
+            external_customer_id=f"demo-company-{company_id}",
+            consent_status="active",
+        )
+        session.add(borrower)
+        session.flush()
+
+    return institution.id, borrower.id
+
+
 def seed(session: Session):
     if session.query(Company).filter_by(name="○○정밀").first():
         print("[SKIP] ○○정밀 목업 이미 존재")
@@ -172,6 +236,8 @@ def seed(session: Session):
     company = Company(**DEMO_COMPANY)
     session.add(company)
     session.flush()
+
+    institution_id, borrower_id = _resolve_demo_institution_borrower(session, company.id)
 
     for v in VOUCHERS:
         raw = {**v, "issue_date": v["issue_date"].isoformat(), **_quantity_fields(v)}
@@ -186,6 +252,8 @@ def seed(session: Session):
             item_description=v["item_description"],
             supply_amount_krw=v["supply_amount_krw"],
             raw_json=raw,
+            financial_institution_id=institution_id,
+            institution_borrower_id=borrower_id,
         ))
 
     session.commit()
@@ -193,10 +261,41 @@ def seed(session: Session):
     print(f"\n[완료] 데모 기업 ID: {company.id}")
 
 
+def seed_extra_companies(session: Session):
+    """회사 선택 화면(웹)에 띄울 데모 기업 6곳 — 마이데이터·업로드 시나리오 전용.
+
+    ○○정밀(전표·트레이스 킬러씬)은 건드리지 않는다 — 이 함수는 별도로 추가만 한다.
+    기관 귀속은 _resolve_demo_institution_borrower()를 그대로 재사용한다 — 다만 이
+    함수는 external_customer_id를 "demo-company-{id}"로 고정하므로, 마이데이터 CSV
+    조회 키("C001"~"C006")로 덮어써야 한다(db/mydata_csv_source.py가 이 값을 찾는다).
+    """
+    created = 0
+    for c in EXTRA_COMPANIES:
+        if session.query(Company).filter_by(name=c["name"]).first():
+            continue
+        company = Company(
+            name=c["name"], industry_code=c["industry_code"], industry_name=c["industry_name"],
+            employee_count=c["employee_count"], revenue_krw=c["revenue_krw"], region=c["region"],
+        )
+        session.add(company)
+        session.flush()
+        _, borrower_id = _resolve_demo_institution_borrower(session, company.id)
+        borrower = session.get(InstitutionBorrower, borrower_id)
+        borrower.external_customer_id = c["external_id"]
+        created += 1
+
+    session.commit()
+    if created:
+        print(f"[OK] 데모 기업 {created}곳 추가 적재 (마이데이터·업로드 시나리오용)")
+    else:
+        print("[SKIP] 데모 기업 6곳 이미 존재")
+
+
 def main():
     engine = create_engine(os.getenv("DATABASE_URL"))
     with Session(engine) as session:
         seed(session)
+        seed_extra_companies(session)
 
 
 if __name__ == "__main__":

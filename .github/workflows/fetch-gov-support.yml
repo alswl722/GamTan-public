@@ -1,0 +1,26 @@
+name: 정부 지원사업 배치 수집 (기업마당 bizinfo)
+
+on:
+  schedule:
+    - cron: "30 1 * * *"   # 매일 KST 10:30 (Supabase 핑 10분 뒤, UTC 01:30)
+  workflow_dispatch:        # 수동 실행 가능
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 의존성 설치
+        run: pip install -r requirements.txt --quiet
+
+      - name: 배치 실행
+        env:
+          BIZINFO_API_KEY: ${{ secrets.BIZINFO_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python scripts/fetch_gov_support_programs.py

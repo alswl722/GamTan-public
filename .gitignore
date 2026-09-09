@@ -1,6 +1,7 @@
 # 환경변수
 .env
 .env.*
+!.env.example
 
 # Python
 __pycache__/
@@ -34,3 +35,19 @@ Thumbs.db
 *.log
 *.sqlite
 *.db
+docs/tasks.md
+
+# 합성 업로드 서류 PDF (scripts/generate_upload_docs.py로 재생성 가능, 바이너리라 git에 안 올림)
+data/업로드서류/
+
+# 실제 사업자 정보가 담긴 세금계산서 원본 (개인정보·바이너리)
+data/구미정밀_현실_세금계산서/
+
+# 업로드 파이프라인이 실제로 저장하는 원본 문서 (api/document_ingestion.py, 개인정보·바이너리)
+data/uploads/
+
+# Excel 임시 잠금 파일
+~$*.xlsx
+
+# kiro
+.kiro/

@@ -54,7 +54,8 @@ def _computable(row, factor_index):
 
 # ── 골든셋 로드 ──────────────────────────────────────────────────
 def test_golden_loads(golden):
-    assert len(golden) == 41
+    # 2026-08-12: I042~I050(K-택소노미/설비투자 참고분류·중복업로드 시나리오) 9건 추가
+    assert len(golden) == 50
     assert golden[0]["voucher_id"] == "I001"
 
 

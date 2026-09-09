@@ -3,6 +3,8 @@
 네트워크 없이 sqlite 로 시드 → 분류 몇 건 직접 심고 집계·큐·담당자 조치를 검증한다.
 담당자 조치(수정/확정/반려)는 라우터를 실제로 통과시켜야 의미가 있으므로 TestClient 사용.
 """
+from datetime import datetime, timezone
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -14,10 +16,11 @@ from api.queries import get_hitl_queue
 from db.init_db import (
     seed_emission_factors,
     seed_industry_distributions,
+    seed_pcaf_quality_rules,
     seed_unit_prices,
 )
 from db.models import Base, Classification, Company, TraceLog, Voucher
-from db.pcaf import company_pcaf_summary, portfolio_summary
+from db.pcaf_engine.pcaf import company_pcaf_summary, portfolio_summary
 
 
 @pytest.fixture()
@@ -33,6 +36,7 @@ def db(tmp_path):
         seed_emission_factors(session)
         seed_unit_prices(session)
         seed_industry_distributions(session)
+        seed_pcaf_quality_rules(session)
         company = Company(
             name="○○정밀", industry_code="C251", industry_name="구조용 금속제품 제조",
             employee_count=12, revenue_krw=2_400_000_000, region="경북 구미시",
@@ -51,19 +55,21 @@ def client(db):
     app.dependency_overrides.clear()
 
 
-def _add(session, cid, month, item, *, scope, emission, status, conf=0.9):
-    v = Voucher(company_id=cid, source="hometax", year=2025, month=month,
+def _add(session, cid, month, item, *, scope, emission, status, conf=0.9, fuel_type="도시가스", quantity=100, year=2025):
+    v = Voucher(company_id=cid, source="hometax", year=year, month=month,
                 supplier_name="테스트", item_description=item,
-                supply_amount_krw=100000, raw_json={"quantity": 100})
+                supply_amount_krw=100000,
+                raw_json={"quantity": quantity} if quantity is not None else {})
     session.add(v)
     session.flush()
     session.add(Classification(
-        voucher_id=v.id, scope=scope, category="고정연소", fuel_type="도시가스",
+        voucher_id=v.id, scope=scope, category="고정연소", fuel_type=fuel_type,
         amount_krw=100000, emission_co2e=emission, confidence=conf,
         evidence="테스트", method="rule", status=status,
     ))
     session.commit()
     return v.id
+
 
 
 def test_portfolio_matches_per_company_summary(db):
@@ -89,8 +95,148 @@ def test_portfolio_matches_per_company_summary(db):
     )
 
 
+def test_by_fuel_breaks_down_measured_emissions_by_fuel_bucket(db):
+    """리포트 항목별 상세 재료 — 연료별 실측 배출량이 세분류가 아니라
+    get_coverage와 같은 3대분류(전기/가스/경유·유류)로 묶여 나와야 한다."""
+    session, cid = db
+    # 연료 체크를 전부 꺼서 결손 보정이 끼어들지 않게 하고(순수 실측 집계만 검증),
+    # None(체크 전) 상태로 두면 get_coverage가 모든 연료를 결손 대상으로 봐서
+    # 5~12월분이 업종 평균으로 잡혀 들어와 이 테스트의 의도(측정치만 비교)가 흐려진다.
+    company = session.get(Company, cid)
+    company.fuel_types_json = {
+        "electricity": False, "diesel": False, "gasoline": False,
+        "city_gas": False, "lpg": "no",
+    }
+    session.commit()
+
+    _add(session, cid, 1, "도시가스 요금", scope=1, emission=1000.0, status="auto",
+         fuel_type="도시가스")
+    _add(session, cid, 2, "경유 구매", scope=1, emission=2000.0, status="auto",
+         fuel_type="경유")
+    _add(session, cid, 3, "휘발유 구매", scope=1, emission=500.0, status="auto",
+         fuel_type="휘발유")
+    _add(session, cid, 4, "전기요금", scope=2, emission=3000.0, status="auto",
+         fuel_type="전기")
+
+    after = company_pcaf_summary(session, cid)["after"]
+    by_fuel = {row["fuel"]: row for row in after["by_fuel"]}
+
+    assert by_fuel["가스"]["measured_tco2e"] == pytest.approx(1.0, abs=0.01)
+    # 경유 + 휘발유가 같은 "경유/유류" 버킷으로 합산돼야 한다
+    assert by_fuel["경유/유류"]["measured_tco2e"] == pytest.approx(2.5, abs=0.01)
+    assert by_fuel["전기"]["measured_tco2e"] == pytest.approx(3.0, abs=0.01)
+    # 결손 보정이 없는 상황이라 추정분은 0
+    assert by_fuel["전기"]["estimated_tco2e"] == 0.0
+    # 배출량 큰 순 정렬(경유/유류 2.5 > 전기 3.0 이므로 전기가 1위)
+    assert after["by_fuel"][0]["fuel"] == "전기"
+
+
+def test_monthly_grid_has_all_12_months_and_excludes_rejected(db):
+    """리포트 월별 추이 차트 재료 — 자료 없는 달은 0으로 비어있고, 반려된 분류는
+    집계에서 빠져야 한다(담당자가 신뢰 못 한다고 판단한 값이니까)."""
+    session, cid = db
+    company = session.get(Company, cid)
+    company.fuel_types_json = {
+        "electricity": False, "diesel": False, "gasoline": False,
+        "city_gas": False, "lpg": "no",
+    }
+    session.commit()
+
+    _add(session, cid, 1, "도시가스 요금", scope=1, emission=1000.0, status="auto",
+         fuel_type="도시가스")
+    _add(session, cid, 1, "전기요금", scope=2, emission=500.0, status="auto",
+         fuel_type="전기")
+    _add(session, cid, 7, "경유 구매 급증분", scope=1, emission=9000.0, status="auto",
+         fuel_type="경유")
+    _add(session, cid, 9, "반려된 건", scope=1, emission=5000.0, status="rejected",
+         fuel_type="경유")
+
+    monthly = company_pcaf_summary(session, cid)["after"]["monthly"]
+    assert len(monthly) == 12
+    assert [row["month"] for row in monthly] == list(range(1, 13))
+
+    jan = next(r for r in monthly if r["month"] == 1)
+    assert jan["total_tco2e"] == pytest.approx(1.5, abs=0.01)
+    assert jan["by_fuel"]["가스"] == pytest.approx(1.0, abs=0.01)
+    assert jan["by_fuel"]["전기"] == pytest.approx(0.5, abs=0.01)
+
+    jul = next(r for r in monthly if r["month"] == 7)
+    assert jul["total_tco2e"] == pytest.approx(9.0, abs=0.01)
+
+    # 반려 건이 들어간 9월은 집계에서 제외돼 0이어야 한다
+    sep = next(r for r in monthly if r["month"] == 9)
+    assert sep["total_tco2e"] == 0.0
+    assert sep["by_fuel"] == {}
+
+    # 자료 자체가 없는 달(예: 3월)은 0
+    mar = next(r for r in monthly if r["month"] == 3)
+    assert mar["total_tco2e"] == 0.0
+
+
+def test_monthly_grid_filters_by_year_when_given(db):
+    """실측(2026-08-17, 사장님 탄소리포트 화면): 연도 선택기를 바꿔도 월별 추이
+    차트가 매년 똑같이 보인다는 지적으로 발견 — company_pcaf_summary(year=...)를
+    안 주면(기본값) 예전처럼 전체 연도가 합산되고, 주면 그 해만 집계돼야 한다."""
+    session, cid = db
+    _add(session, cid, 1, "2024년 1월 도시가스", scope=1, emission=1000.0, status="auto",
+         fuel_type="도시가스", year=2024)
+    _add(session, cid, 1, "2025년 1월 도시가스", scope=1, emission=2000.0, status="auto",
+         fuel_type="도시가스", year=2025)
+
+    all_years = company_pcaf_summary(session, cid)["after"]["monthly"]
+    jan_all = next(r for r in all_years if r["month"] == 1)
+    assert jan_all["total_tco2e"] == pytest.approx(3.0, abs=0.01)  # 필터 없으면 두 해 합산(기존 동작 유지)
+
+    only_2024 = company_pcaf_summary(session, cid, year=2024)["after"]["monthly"]
+    jan_2024 = next(r for r in only_2024 if r["month"] == 1)
+    assert jan_2024["total_tco2e"] == pytest.approx(1.0, abs=0.01)
+
+    only_2025 = company_pcaf_summary(session, cid, year=2025)["after"]["monthly"]
+    jan_2025 = next(r for r in only_2025 if r["month"] == 1)
+    assert jan_2025["total_tco2e"] == pytest.approx(2.0, abs=0.01)
+
+
+def test_pcaf_endpoint_accepts_year_query_param(db, client):
+    """GET /pcaf/{id}?year= — ScenePcaf.tsx가 실제로 이 쿼리스트링으로 호출한다."""
+    session, cid = db
+    _add(session, cid, 1, "2024년 1월 도시가스", scope=1, emission=1000.0, status="auto",
+         fuel_type="도시가스", year=2024)
+    _add(session, cid, 1, "2025년 1월 도시가스", scope=1, emission=2000.0, status="auto",
+         fuel_type="도시가스", year=2025)
+
+    res = client.get(f"/pcaf/{cid}?year=2024")
+    assert res.status_code == 200
+    jan = next(r for r in res.json()["after"]["monthly"] if r["month"] == 1)
+    assert jan["total_tco2e"] == pytest.approx(1.0, abs=0.01)
+
+
+def test_by_fuel_includes_gap_estimated_bucket_even_without_measured_data(db):
+    """결손월만 있고 실측이 아예 없는 연료도 by_fuel에 추정치로 잡혀야 한다
+    (연료 체크는 됐는데 서류가 아예 없는 "전면 미제출" 케이스, C004 시나리오와 동일)."""
+    session, cid = db
+    company = session.get(Company, cid)
+    company.fuel_types_json = {
+        "electricity": False, "diesel": False, "gasoline": False,
+        "city_gas": True, "lpg": "no",
+    }
+    session.commit()
+    # 도시가스 전표를 아예 넣지 않아 12개월 전부 결손 → 업종 평균으로 보정된 추정치만 생김
+    _add(session, cid, 1, "전기요금(도시가스 아님, 등급 산정용 더미)", scope=2,
+         emission=100.0, status="auto", fuel_type="전기")
+
+    after = company_pcaf_summary(session, cid)["after"]
+    by_fuel = {row["fuel"]: row for row in after["by_fuel"]}
+
+    assert "가스" in by_fuel
+    assert by_fuel["가스"]["measured_tco2e"] == 0.0
+    assert by_fuel["가스"]["estimated_tco2e"] > 0
+    assert by_fuel["가스"]["total_tco2e"] == pytest.approx(
+        by_fuel["가스"]["estimated_tco2e"], abs=0.01
+    )
+
+
 def test_hitl_queue_lists_only_review_required(db):
-    """HITL 큐는 review_required 건만, auto/confirmed는 제외."""
+    """HITL 큐는 review_required 건만, auto는 제외(confirmed는 별도 테스트에서 확인)."""
     session, cid = db
     _add(session, cid, 3, "유류대금", scope=1, emission=0.0, status="review_required", conf=0.5)
     _add(session, cid, 4, "도시가스", scope=1, emission=500.0, status="auto")
@@ -102,8 +248,9 @@ def test_hitl_queue_lists_only_review_required(db):
     assert queue[0]["confidence"] == pytest.approx(0.5)
 
 
-def test_confirm_transitions_and_leaves_queue(db):
-    """확정 시 status review_required→confirmed, 큐에서 빠진다."""
+def test_confirm_transitions_but_stays_in_queue_until_sent(db):
+    """확정 시 status review_required→confirmed, 아직 사장님께 전송 전이면 큐에
+    "검토 완료" 상태로 남는다 — 담당자가 기업별 전송 버튼을 눌러야 큐에서 빠진다."""
     session, cid = db
     vid = _add(session, cid, 5, "유류대금", scope=1, emission=0.0,
                status="review_required", conf=0.5)
@@ -113,6 +260,12 @@ def test_confirm_transitions_and_leaves_queue(db):
     obj.status = "confirmed"
     session.commit()
 
+    queue = get_hitl_queue(session)
+    assert len(queue) == 1
+    assert queue[0]["status"] == "confirmed"
+
+    obj.sent_to_owner_at = datetime.now(timezone.utc)
+    session.commit()
     assert get_hitl_queue(session) == []
 
 
@@ -147,15 +300,61 @@ def test_edit_applies_changes_and_audit_log(db, client):
     assert "담당자 수정" in obj.evidence
     assert "경유" not in obj.evidence or "연료" in obj.evidence
     assert "테스트" in obj.evidence          # 원본 근거를 지우지 않는다(감사 추적)
-    assert get_hitl_queue(session) == []     # 큐에서 빠짐
+    # 확정만으론 큐에서 안 빠진다 — "검토 완료" 상태로 남아 전송을 기다린다
+    queue = get_hitl_queue(session)
+    assert len(queue) == 1 and queue[0]["status"] == "confirmed"
 
 
 def test_edit_rejects_already_confirmed(db, client):
-    """검토필요가 아닌 건은 409 — 이중 처리 방지."""
+    """검토필요도 아니고 전송 전 확정 건도 아니면(auto) 409 — 이중 처리 방지."""
     session, cid = db
     vid = _add(session, cid, 7, "도시가스", scope=1, emission=500.0, status="auto")
     res = client.patch(f"/admin/classifications/{vid}", json={"scope": 2})
     assert res.status_code == 409
+
+
+def test_confirmed_but_unsent_item_can_be_re_edited(db, client):
+    """확정은 마감이 아니다 — 전송 전까지는 담당자가 값을 다시 고칠 수 있다."""
+    session, cid = db
+    vid = _add(session, cid, 8, "유류대금", scope=1, emission=0.0,
+               status="review_required", conf=0.5)
+
+    confirm_res = client.patch(f"/admin/classifications/{vid}/confirm")
+    assert confirm_res.status_code == 200
+
+    edit_res = client.patch(f"/admin/classifications/{vid}", json={"scope": 2, "fuel_type": "전기"})
+    assert edit_res.status_code == 200, edit_res.text
+    obj = session.query(Classification).filter_by(voucher_id=vid).one()
+    assert obj.scope == 2 and obj.fuel_type == "전기"
+    assert obj.status == "confirmed"
+
+
+def test_confirmed_but_unsent_item_can_be_rejected(db, client):
+    """확정 후에도 전송 전이면 반려로 되돌릴 수 있다."""
+    session, cid = db
+    vid = _add(session, cid, 9, "유류대금", scope=1, emission=0.0,
+               status="review_required", conf=0.5)
+    client.patch(f"/admin/classifications/{vid}/confirm")
+
+    reject_res = client.patch(f"/admin/classifications/{vid}/reject")
+    assert reject_res.status_code == 200, reject_res.text
+    obj = session.query(Classification).filter_by(voucher_id=vid).one()
+    assert obj.status == "rejected"
+
+
+def test_sent_item_cannot_be_re_edited_or_rejected(db, client):
+    """전송 후에는 담당자가 값을 못 바꾼다 — 사장님이 이미 봤을 수 있는 값이라 잠근다."""
+    session, cid = db
+    vid = _add(session, cid, 10, "유류대금", scope=1, emission=0.0,
+               status="review_required", conf=0.5)
+    client.patch(f"/admin/classifications/{vid}/confirm")
+    client.post(f"/admin/companies/{cid}/send-classifications")
+
+    edit_res = client.patch(f"/admin/classifications/{vid}", json={"scope": 2})
+    assert edit_res.status_code == 409
+
+    reject_res = client.patch(f"/admin/classifications/{vid}/reject")
+    assert reject_res.status_code == 409
 
 
 def test_reject_excludes_from_aggregation(db, client):
@@ -177,21 +376,394 @@ def test_reject_excludes_from_aggregation(db, client):
     assert keep is not None
 
 
+# ── 일괄 처리·감사 로그 (bulk-confirm/bulk-reject/review-log) ───────────────────
+def test_bulk_confirm_transitions_all_and_stays_in_queue_until_sent(db, client):
+    """일괄 확정 — 대상 전 건이 confirmed로 바뀌지만, 전송 전이라 큐에는 남는다."""
+    session, cid = db
+    v1 = _add(session, cid, 1, "유류대금", scope=1, emission=0.0,
+              status="review_required", conf=0.5)
+    v2 = _add(session, cid, 2, "동절기 난방유", scope=1, emission=0.0,
+              status="review_required", conf=0.4)
+
+    res = client.patch("/admin/classifications/bulk-confirm", json={"voucher_ids": [v1, v2]})
+    assert res.status_code == 200, res.text
+    results = res.json()["results"]
+    assert {r["voucher_id"]: r["ok"] for r in results} == {v1: True, v2: True}
+
+    for vid in (v1, v2):
+        obj = session.query(Classification).filter_by(voucher_id=vid).one()
+        assert obj.status == "confirmed"
+        assert "담당자 일괄 확정" in obj.evidence
+    queue = get_hitl_queue(session)
+    assert len(queue) == 2
+    assert all(item["status"] == "confirmed" for item in queue)
+
+
+def test_bulk_reject_excludes_from_aggregation(db, client):
+    """일괄 반려 — 대상 전 건이 rejected로 바뀌고 집계에서 빠진다(원본 값 보존)."""
+    session, cid = db
+    keep = _add(session, cid, 1, "도시가스", scope=1, emission=1000.0, status="auto")
+    v1 = _add(session, cid, 2, "정체불명 유류1", scope=1, emission=5000.0,
+              status="review_required", conf=0.3)
+    v2 = _add(session, cid, 3, "정체불명 유류2", scope=1, emission=4000.0,
+              status="review_required", conf=0.3)
+
+    before = portfolio_summary(session)["total"]
+    res = client.patch("/admin/classifications/bulk-reject", json={"voucher_ids": [v1, v2]})
+    assert res.status_code == 200, res.text
+    assert all(r["ok"] for r in res.json()["results"])
+
+    after = portfolio_summary(session)["total"]
+    assert after < before, "반려 건이 여전히 집계에 포함됨"
+    for vid, emission in ((v1, 5000.0), (v2, 4000.0)):
+        obj = session.query(Classification).filter_by(voucher_id=vid).one()
+        assert obj.status == "rejected"
+        assert "담당자 일괄 반려" in obj.evidence
+        assert obj.emission_co2e == emission, "반려는 상태만 바꾸고 원본 값은 보존해야 한다"
+    assert keep is not None
+
+
+def test_bulk_action_reports_partial_failure(db, client):
+    """일부 건이 이미 확정 상태거나 존재하지 않아도, 나머지 건은 계속 처리된다(부분 실패 가시성)."""
+    session, cid = db
+    reviewable = _add(session, cid, 1, "유류대금", scope=1, emission=0.0,
+                       status="review_required", conf=0.5)
+    already_confirmed = _add(session, cid, 2, "도시가스", scope=1, emission=500.0, status="auto")
+    missing_id = already_confirmed + 999
+
+    res = client.patch(
+        "/admin/classifications/bulk-confirm",
+        json={"voucher_ids": [reviewable, already_confirmed, missing_id]},
+    )
+    assert res.status_code == 200, res.text
+    by_id = {r["voucher_id"]: r for r in res.json()["results"]}
+
+    assert by_id[reviewable]["ok"] is True
+    assert by_id[already_confirmed]["ok"] is False
+    assert by_id[missing_id]["ok"] is False
+
+    # 실패 건이 있어도 성공 건은 실제로 반영돼야 한다(한 건 실패가 전체를 롤백하지 않음)
+    obj = session.query(Classification).filter_by(voucher_id=reviewable).one()
+    assert obj.status == "confirmed"
+
+
+def test_review_log_lists_reviewed_entries_most_recent_first(db, client):
+    """감사 로그 — reviewed_at이 있는 건만, 최근 조치순으로 노출."""
+    session, cid = db
+    untouched = _add(session, cid, 1, "도시가스", scope=1, emission=500.0, status="auto")
+    v1 = _add(session, cid, 2, "유류대금", scope=1, emission=0.0,
+              status="review_required", conf=0.5)
+    v2 = _add(session, cid, 3, "동절기 난방유", scope=1, emission=0.0,
+              status="review_required", conf=0.4)
+
+    # v1을 먼저 확정, v2를 나중에 반려 — v2가 더 최근 조치이므로 먼저 나와야 함
+    assert client.patch(f"/admin/classifications/{v1}/confirm").status_code == 200
+    assert client.patch(f"/admin/classifications/{v2}/reject").status_code == 200
+
+    res = client.get("/admin/review-log")
+    assert res.status_code == 200, res.text
+    entries = res.json()["entries"]
+    voucher_ids = [e["voucher_id"] for e in entries]
+
+    assert untouched not in voucher_ids, "조치 이력이 없는 건은 감사 로그에 노출되면 안 된다"
+    assert voucher_ids.index(v2) < voucher_ids.index(v1), "최근 조치(v2)가 먼저 나와야 한다"
+    by_id = {e["voucher_id"]: e for e in entries}
+    assert by_id[v1]["status"] == "confirmed"
+    assert by_id[v2]["status"] == "rejected"
+    assert by_id[v1]["reviewed_at"] is not None
+
+
+def test_review_log_company_id_filters_exactly_unlike_name_substring_match(db, client):
+    """company_id는 정확일치 — 이름이 서로를 포함하는 두 기업(예: "○○정밀" /
+    "○○정밀유통")이어도 company_name 부분일치와 달리 서로 섞이지 않아야 한다.
+    "기업" 탭이 company_id로 넘기는 것과 같은 경로."""
+    session, cid = db
+    other = Company(
+        name="○○정밀유통", industry_code="G462", industry_name="기계장비 도매업",
+    )
+    session.add(other)
+    session.commit()
+
+    v1 = _add(session, cid, 1, "도시가스", scope=1, emission=0.0,
+              status="review_required", conf=0.5)
+    v2 = _add(session, other.id, 2, "경유", scope=1, emission=0.0,
+              status="review_required", conf=0.5)
+    assert client.patch(f"/admin/classifications/{v1}/confirm").status_code == 200
+    assert client.patch(f"/admin/classifications/{v2}/confirm").status_code == 200
+
+    res = client.get(f"/admin/review-log?company_id={cid}")
+    assert res.status_code == 200, res.text
+    entries = res.json()["entries"]
+    assert [e["voucher_id"] for e in entries] == [v1]
+
+    # 이름 부분일치였다면 "○○정밀"이 "○○정밀유통"에도 매치돼 두 건 다 나왔을 것 —
+    # company_id 필터는 그 문제가 없어야 한다.
+    res_name = client.get("/admin/review-log?company_name=○○정밀")
+    names = {e["company_name"] for e in res_name.json()["entries"]}
+    assert names == {"○○정밀", "○○정밀유통"}, "부분일치 검색은 여전히 둘 다 찾아야 한다(검색창 용도)"
+
+
+# ── 이상 신호 알림 (db/alerts.py, 결정론적 배수 계산) ─────────────────────────
+def _add_month_total(session, cid, month, emission, *, scope=1, status="auto"):
+    """월별 배출량 합계 하나를 만들기 위한 최소 전표+분류 1건."""
+    return _add(session, cid, month, f"{month}월 연료", scope=scope, emission=emission, status=status)
+
+
+def test_alerts_flags_spike_over_recent_average(db, client):
+    """최신월이 직전 3개월 평균의 1.5배 이상이면 급등(high)으로 잡힌다."""
+    session, cid = db
+    for m, e in [(1, 100.0), (2, 100.0), (3, 100.0), (4, 400.0)]:
+        _add_month_total(session, cid, m, e)
+
+    res = client.get("/admin/alerts")
+    assert res.status_code == 200, res.text
+    alerts = [a for a in res.json()["alerts"] if a["company_id"] == cid]
+    spikes = [a for a in alerts if a["type"] == "spike"]
+    assert len(spikes) == 1
+    assert spikes[0]["severity"] == "high"
+    assert spikes[0]["month"] == 4
+
+
+def test_alerts_flags_drop_as_medium(db, client):
+    """최신월이 직전 3개월 평균의 0.5배 이하면 급감(medium) — 가동률 하락 의심."""
+    session, cid = db
+    for m, e in [(1, 200.0), (2, 200.0), (3, 200.0), (4, 50.0)]:
+        _add_month_total(session, cid, m, e)
+
+    res = client.get("/admin/alerts")
+    alerts = [a for a in res.json()["alerts"] if a["company_id"] == cid]
+    drops = [a for a in alerts if a["type"] == "drop"]
+    assert len(drops) == 1
+    assert drops[0]["severity"] == "medium"
+
+
+def test_alerts_no_signal_for_stable_trend(db, client):
+    """평월과 큰 차이 없는 정상 추세는 알림이 없어야 한다(과잉 발화 방지)."""
+    session, cid = db
+    for m, e in [(1, 100.0), (2, 105.0), (3, 98.0), (4, 102.0)]:
+        _add_month_total(session, cid, m, e)
+
+    res = client.get("/admin/alerts")
+    alerts = [a for a in res.json()["alerts"] if a["company_id"] == cid]
+    assert [a for a in alerts if a["type"] in ("spike", "drop")] == []
+
+
+def test_alerts_insufficient_history_is_withheld(db, client):
+    """이력이 TREND_WINDOW+1개월 미만이면 추세 판단을 보류한다(오탐 방지)."""
+    session, cid = db
+    _add_month_total(session, cid, 1, 100.0)
+    _add_month_total(session, cid, 2, 500.0)  # 이력 부족 상태에서 배수만 보면 오탐 소지
+
+    res = client.get("/admin/alerts")
+    alerts = [a for a in res.json()["alerts"] if a["company_id"] == cid]
+    assert [a for a in alerts if a["type"] in ("spike", "drop")] == []
+
+
+def test_alerts_calendar_gap_withholds_trend_signal(db, client):
+    """직전 3개월이 결손(예: 3~5월 가스 공백)이면, 존재하는 옛 데이터로 '최근 3개월'을
+    조작해 비교하지 않고 추세 판단을 보류한다 — _gap_signal이 공백은 별도로 잡는다."""
+    session, cid = db
+    # 1~2월만 있고 3~5월 결손, 6월에 큰 값 — 존재하는 값 기준 "최근 3개"는 (1,2,6)이 되어
+    # 버그가 있다면 6월이 (1,2)월 평균 대비 급등으로 오판된다.
+    _add_month_total(session, cid, 1, 100.0)
+    _add_month_total(session, cid, 2, 100.0)
+    _add_month_total(session, cid, 6, 400.0)
+
+    res = client.get("/admin/alerts")
+    alerts = [a for a in res.json()["alerts"] if a["company_id"] == cid]
+    assert [a for a in alerts if a["type"] in ("spike", "drop")] == []
+
+
+def test_alerts_excludes_review_required_from_trend(db, client):
+    """HITL 미확정(review_required) 건은 은행 노출 전이므로 추세 계산에서 제외한다."""
+    session, cid = db
+    for m, e in [(1, 100.0), (2, 100.0), (3, 100.0)]:
+        _add_month_total(session, cid, m, e, status="auto")
+    # 4월은 아직 사람이 확정하지 않은 저신뢰 건 — 급등처럼 보여도 알림에 안 잡혀야 함
+    _add_month_total(session, cid, 4, 400.0, status="review_required")
+
+    res = client.get("/admin/alerts")
+    alerts = [a for a in res.json()["alerts"] if a["company_id"] == cid]
+    assert [a for a in alerts if a["type"] in ("spike", "drop")] == []
+
+
+def test_alerts_flags_trailing_data_gap(db, client):
+    """마지막 보고월 이후 3개월 이상 공백이면 데이터 공백 알림이 뜬다."""
+    session, cid = db
+    _add_month_total(session, cid, 1, 100.0)
+    _add_month_total(session, cid, 2, 100.0)
+    # 3~12월 미연동 → 마지막 보고월(2) 이후 10개월 공백
+
+    res = client.get("/admin/alerts")
+    alerts = [a for a in res.json()["alerts"] if a["company_id"] == cid]
+    gaps = [a for a in alerts if a["type"] == "gap"]
+    assert len(gaps) == 1
+    assert gaps[0]["severity"] == "medium"
+
+
+def test_owner_alerts_scoped_to_own_company(db, client):
+    """GET /owner/alerts/{id}는 은행 담당자용(/admin/alerts)과 같은 판정 로직을
+    공유하되 자기 기업분만 반환한다 — 은행이 먼저 알고 사장은 모르는 구도 방지."""
+    session, cid = db
+    other = Company(
+        name="타사정밀", industry_code="C251", industry_name="구조용 금속제품 제조",
+        employee_count=5, revenue_krw=500_000_000, region="경북 구미시",
+    )
+    session.add(other)
+    session.commit()
+
+    for target in (cid, other.id):
+        for m, e in [(1, 100.0), (2, 100.0), (3, 100.0), (4, 400.0)]:  # 둘 다 급등
+            _add_month_total(session, target, m, e)
+
+    admin_alerts = client.get("/admin/alerts").json()["alerts"]
+    assert len({a["company_id"] for a in admin_alerts if a["type"] == "spike"}) == 2
+
+    owner_alerts = client.get(f"/owner/alerts/{cid}").json()["alerts"]
+    assert owner_alerts, "사장님도 은행과 같은 신호를 봐야 한다"
+    assert all(a["company_id"] == cid for a in owner_alerts)
+
+
+def test_alerts_sorted_by_severity_then_company(db, client):
+    """severity 내림차순(high 먼저), 동률이면 기업명 순 — 두 기업 모두 high로 만들어 검증."""
+    session, cid = db
+    # 기업명이 cid 기업("○○정밀")보다 사전순 뒤에 오도록 별도 기업 추가
+    other = Company(
+        name="후순위정밀", industry_code="C251", industry_name="구조용 금속제품 제조",
+        employee_count=8, revenue_krw=1_000_000_000, region="경북 구미시",
+    )
+    session.add(other)
+    session.commit()
+
+    for target in (cid, other.id):
+        for m, e in [(1, 100.0), (2, 100.0), (3, 100.0), (4, 400.0)]:  # 둘 다 high
+            _add_month_total(session, target, m, e)
+
+    res = client.get("/admin/alerts")
+    alerts = [a for a in res.json()["alerts"] if a["type"] == "spike"]
+    assert len(alerts) == 2
+    assert [a["severity"] for a in alerts] == ["high", "high"]
+    # severity 동률이므로 기업명 오름차순 — "○○정밀" < "후순위정밀"
+    assert [a["company_name"] for a in alerts] == sorted(a["company_name"] for a in alerts)
+
+
 def test_traces_groups_runs_with_badges(db, client):
     """실행 이력 — session_id로 묶고 메시지에서 결과 배지를 뽑는다."""
     session, cid = db
     for i, (sid, msg) in enumerate([
-        ("s-1", "3·4·5월 도시가스 0건, 제조업 특성상 비정상(결손 발견)"),
-        ("s-1", "7월 경유 배출량이 평월 중앙값의 3.2배 — 이상치 의심"),
-        ("s-2", "전표 30건 수집 완료"),
+        ("s-1", "그런데 3·4·5월 도시가스 자료가 비어있네요. 이런 업종에서는 흔치 않은 경우예요."),
+        ("s-1", "7월 경유 사용량이 평소보다 3.2배나 많아요. 왜 그런지 다시 확인해볼게요."),
+        ("s-2", "자료 30건을 확인했어요."),
     ]):
         session.add(TraceLog(company_id=cid, session_id=sid, step_type="관찰",
                              message=msg, tool_name="테스트"))
     session.commit()
 
-    runs = {r["session_id"]: r for r in client.get("/admin/traces").json()["runs"]}
+    body = client.get("/admin/traces").json()
+    runs = {r["session_id"]: r for r in body["runs"]}
     assert runs["s-1"]["step_count"] == 2
     assert set(runs["s-1"]["result_badges"]) == {"결손 발견", "이상치"}
     assert runs["s-2"]["result_badges"] == ["정상"]
     assert runs["s-1"]["company_name"] == "○○정밀"
     assert runs["s-1"]["status"] == "완료"
+    assert body["total"] == 2
+    assert body["page"] == 1
+    assert body["page_size"] == 50
+
+
+def test_traces_paginates_sessions_newest_first(db, client):
+    """세션 단위 서버사이드 페이지네이션 — 세션 시작 시각 최신순, total은 세션 수 기준."""
+    session, cid = db
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    for i, sid in enumerate(["s-old", "s-mid", "s-new"]):
+        session.add(TraceLog(
+            company_id=cid, session_id=sid, step_type="관찰",
+            message="자료를 확인했어요.", tool_name="테스트",
+            created_at=base.replace(day=1 + i),
+        ))
+    session.commit()
+
+    res = client.get("/admin/traces?page=1&page_size=2").json()
+    assert res["total"] == 3
+    assert res["page_size"] == 2
+    assert [r["session_id"] for r in res["runs"]] == ["s-new", "s-mid"]
+
+    res2 = client.get("/admin/traces?page=2&page_size=2").json()
+    assert [r["session_id"] for r in res2["runs"]] == ["s-old"]
+
+
+def test_traces_filters_by_company_id_and_date_range(db, client):
+    """company_id/from_time/to_time 필터 — 1단계 세션 목록 필터가 결과에 반영된다."""
+    session, cid = db
+    other = Company(
+        name="다른정밀", industry_code="C251", industry_name="구조용 금속제품 제조",
+        employee_count=5, revenue_krw=500_000_000, region="경북 구미시",
+    )
+    session.add(other)
+    session.commit()
+
+    session.add(TraceLog(
+        company_id=cid, session_id="s-mine", step_type="관찰", message="확인.",
+        created_at=datetime(2026, 6, 15, tzinfo=timezone.utc),
+    ))
+    session.add(TraceLog(
+        company_id=other.id, session_id="s-other", step_type="관찰", message="확인.",
+        created_at=datetime(2026, 6, 15, tzinfo=timezone.utc),
+    ))
+    session.commit()
+
+    res = client.get(f"/admin/traces?company_id={cid}").json()
+    assert [r["session_id"] for r in res["runs"]] == ["s-mine"]
+    assert res["total"] == 1
+
+    res_in_range = client.get(
+        "/admin/traces?from_time=2026-06-01T00:00:00Z&to_time=2026-06-30T00:00:00Z"
+    ).json()
+    assert {r["session_id"] for r in res_in_range["runs"]} == {"s-mine", "s-other"}
+
+    res_out_of_range = client.get(
+        "/admin/traces?from_time=2026-07-01T00:00:00Z&to_time=2026-07-31T00:00:00Z"
+    ).json()
+    assert res_out_of_range["runs"] == []
+    assert res_out_of_range["total"] == 0
+
+
+# ── 기업 상세 탭 (GET /admin/companies/{id}/overview) ─────────────────────────
+def test_company_overview_returns_grade_coverage_hitl_and_alerts(db, client):
+    """기업 상세 탭 — 등급·결손·HITL대기·알림을 한 응답에 담는다."""
+    session, cid = db
+    company = session.get(Company, cid)
+    company.fuel_types_json = {
+        "electricity": False, "diesel": False, "gasoline": False,
+        "city_gas": True, "lpg": "no",
+    }
+    session.commit()
+
+    _add(session, cid, 1, "도시가스 요금", scope=1, emission=1000.0, status="auto",
+         fuel_type="도시가스")
+    _add(session, cid, 2, "유류대금", scope=1, emission=0.0, status="review_required")
+
+    res = client.get(f"/admin/companies/{cid}/overview")
+    assert res.status_code == 200, res.text
+    body = res.json()
+
+    assert body["company_id"] == cid
+    assert body["company_name"] == "○○정밀"
+    assert body["measured"] is True
+    assert body["hitl_count"] == 1
+    # 도시가스만 체크했으니 결손 대상도 가스 하나뿐 — 1월만 채워졌으니 나머지 11개월 결손
+    gap_fuels = {g["fuel"] for g in body["coverage"]["gaps"]}
+    assert gap_fuels == {"가스"}
+    assert isinstance(body["alerts"], list)
+
+
+def test_company_overview_404_for_unknown_company(db, client):
+    res = client.get("/admin/companies/99999/overview")
+    assert res.status_code == 404
+
+
+# /admin/k-taxonomy-leads(관리자측 K택소노미 리드 탭)는 팀원 커밋 ae1df7e
+# ("K택소노미 리드 탭 제거, 등급 분포 탭에 기업별 등급 리스트 추가")로 제거됐다.
+# 원천 함수 db/k_taxonomy.py::k_taxonomy_leads_for_company와 사장님측
+# GET /owner/{id}/k-taxonomy-leads는 그대로 살아있어(ScenePcaf.tsx가 계속 씀) 그쪽
+# 테스트는 다른 파일에서 유효하다 — 여기서는 없어진 관리자 HTTP 라우트 테스트만 걷어낸다.

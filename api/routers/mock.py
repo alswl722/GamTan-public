@@ -2,11 +2,18 @@
 
 실서비스에선 한전 OPM·홈택스 연동이지만, 데모는 동일 스키마로 DB 전표를 반환한다.
 POST = "동의하고 수집한다" 시맨틱 (프론트 버튼이 호출).
+
+- POST /mock/hometax/{id}, /mock/kepco/{id}          v0.1부터의 전표 mock (유지)
+- POST /mock/{source}/{id} (5종)                      v1 마이데이터 mock — 기업
+  식별·재무 프로필용(사업자등록증명·부가세과표증명·표준재무제표증명·중소기업확인서·
+  전기요금납부내역). 배출량 계산과는 무관 — api/mydata_kyb_mock.py 참고.
 """
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from api.db import get_session
+from api.document_ingestion import MissingInstitutionAttributionError
+from api.mydata_kyb_mock import MYDATA_SOURCES, collect_mydata
 from api.queries import get_vouchers
 
 router = APIRouter(prefix="/mock", tags=["mock"])
@@ -24,3 +31,17 @@ def collect_kepco(company_id: int, session: Session = Depends(get_session)):
     """한전 전기요금 고지서 수집."""
     vouchers = get_vouchers(session, company_id, source="kepco")
     return {"source": "kepco", "count": len(vouchers), "vouchers": vouchers}
+
+
+@router.post("/{source}/{company_id}")
+def collect_mydata_source(source: str, company_id: int, session: Session = Depends(get_session)):
+    """마이데이터 5종 mock 수집 — business-registration, vat-tax-base,
+    financial-statement, sme-certificate, kepco-payment-history."""
+    if source not in MYDATA_SOURCES:
+        raise HTTPException(status_code=404, detail=f"알 수 없는 마이데이터 소스: {source}")
+    try:
+        return collect_mydata(session, company_id, source)
+    except MissingInstitutionAttributionError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))

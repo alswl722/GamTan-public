@@ -1,18 +1,52 @@
 """룰 엔진(api/agent/rules.py) 검증 — 정답지는 db/excel_loader.load_expected_results()."""
-from api.agent.rules import match_rule
-from db.excel_loader import load_classification_rules, load_expected_results
+from api.agent.rules import _rule_matches, match_rule
+from db.excel_loader import (
+    _split_keyword_groups,
+    load_classification_rules,
+    load_expected_results,
+)
 
 RULES = load_classification_rules()
 EXPECTED = load_expected_results()
 
 
+def _rule(rule_id, include, exclude=(), auto_action="자동분류", scope=1, fuel_type="경유"):
+    """AND-그룹 매칭 단위 테스트용 최소 룰 딕셔너리(실제 시트는 안 건드림)."""
+    return dict(
+        rule_id=rule_id,
+        priority=1,
+        include_keywords=include,
+        exclude_keywords=list(exclude),
+        scope=scope,
+        category=None,
+        fuel_type=fuel_type,
+        auto_action=auto_action,
+        needs_review=False,
+        mixed_item=False,
+        quality_grade="B",
+        reasoning="",
+        example="",
+    )
+
+
+# I050은 회계 확인 필요(task.md 참고) — I001("지게차 경유 외 1종")과 품목명·금액이
+# 완전히 동일한 "중복 업로드 문서" 검증용 케이스라, 룰 엔진 입력(품목 텍스트)만으로는
+# 원리적으로 구분 불가능하다(같은 텍스트는 같은 룰에 매칭되는 게 결정론적 룰 엔진의
+# 정상 동작 — CLAUDE.md "동일 전표 텍스트 → 동일 응답" 원칙과도 부합). 중복 판정은
+# source_documents.file_hash UQ 제약(§14, docs/db-schema.md)이 전담하는 영역이라
+# 이 파일(룰 매칭 단위 테스트)의 검증 대상이 아니다.
+_RULE_ENGINE_OUT_OF_SCOPE_IDS = {"I050"}
+
+
 def _cases():
     for row in EXPECTED:
+        if row["voucher_id"] in _RULE_ENGINE_OUT_OF_SCOPE_IDS:
+            continue
         yield row
 
 
 def test_expected_results_has_rows():
-    assert len(EXPECTED) == 41
+    assert len(EXPECTED) == 50
 
 
 def test_auto_classified_rows_match_expected_scope_and_fuel():
@@ -43,3 +77,91 @@ def test_forklift_maintenance_is_excluded_not_diesel():
     assert m is not None
     assert m["auto_action"] == "자동제외"
     assert m["scope"] is None
+
+
+# --- AND-그룹 매칭(세미콜론 표기) 단위 테스트 ---
+# 실제 시트를 안 건드리고 합성 룰로 엔진 동작만 검증한다.
+
+
+def test_split_keyword_groups_flat_when_no_semicolon():
+    """세미콜론 없으면 그룹 1개짜리 리스트 — 기존 flat OR 리스트와 매치 결과 동일."""
+    assert _split_keyword_groups("납품차, 화물차, 경유, 주유") == [
+        ["납품차", "화물차", "경유", "주유"]
+    ]
+
+
+def test_split_keyword_groups_semicolon_splits_and_groups():
+    """세미콜론으로 AND-그룹 구분, 그룹 내부는 기존처럼 쉼표로 OR."""
+    assert _split_keyword_groups("납품차,화물차;경유,주유") == [
+        ["납품차", "화물차"],
+        ["경유", "주유"],
+    ]
+
+
+def test_split_keyword_groups_empty_and_none():
+    assert _split_keyword_groups(None) == []
+    assert _split_keyword_groups("") == []
+
+
+def test_and_group_rule_requires_all_groups():
+    """AND-그룹 룰(device;fuel)은 두 그룹 모두 매치해야 하고, 한쪽만 있으면 안 걸린다.
+
+    R006(합성 버전) 재현: 실제 시트 수정 전에는 '차량'이 flat OR 키워드라
+    "영업용 차량 보험료" 같은 무관한 표현도 사람검토 없이 경유/Scope1로
+    확정됐다 — AND-그룹으로 나누면 연료 신호(경유·주유)가 없는 텍스트는
+    더 이상 매치되지 않는다.
+    """
+    rule = _rule(
+        "TEST-AND",
+        include=[["차량"], ["경유", "주유"]],
+    )
+    assert match_rule("영업용 차량 보험료", [rule]) is None
+    assert match_rule("영업용 차량 경유 주유비", [rule]) is not None
+
+
+def test_and_group_rule_matches_when_all_groups_present():
+    """기기명 + 연료명이 함께 있으면 AND-그룹으로도 정상 매치된다."""
+    rule = _rule(
+        "TEST-AND-2",
+        include=[["컴프레서", "압축기"], ["전력", "전기료"]],
+    )
+    m = match_rule("컴프레서 전기료 3월분", [rule])
+    assert m is not None and m["rule_id"] == "TEST-AND-2"
+    # 기기명만 있고 연료 신호 없으면 매치 안 됨(임대료·구매 등 무관 맥락 방지)
+    assert match_rule("컴프레서 임대료", [rule]) is None
+
+
+def test_boiler_only_rules_do_not_fire_without_boiler_word():
+    """회귀 테스트: R012("보일러 도시가스")·R014("공장 보일러 등유")는 58행
+    전수 재검토(PR #89) 과정에서 한때 '보일러' 키워드가 빠지고 연료명
+    단독(도시가스/등유)만 남은 적이 있었다. R011·R013이 이미 같은 연료명을
+    포함하는 더 넓은 동의어 집합이라 그 상태에서도 두 룰이 항상 함께
+    매치돼(R012⊂R011, R014⊂R013) scope는 우연히 같게 나왔지만,
+    match_rule()이 우선순위 컬럼이 아니라 시트 행 순서(matches[0])로
+    타이브레이크하는 구조상 R012가 R011보다, R014가 R013보다 앞으로 오는
+    순간 "등유 구매"·"도시가스 요금 청구서"처럼 보일러 맥락이 전혀 없는
+    텍스트도 검토 없이(needs_review=False) 자동분류로 새는 잠재 위험이
+    있었다. '보일러' 키워드를 AND-그룹으로 복원해 이 서브셈션 자체를
+    막는다 — R012·R014는 보일러 문맥이 있을 때만 매치돼야 한다.
+    """
+    by_id = {r["rule_id"]: r for r in RULES}
+
+    # 보일러 맥락 없는 단독 연료명 — R012/R014는 매치되면 안 된다(동의어
+    # 룰 R011/R013만 매치되는 게 정상).
+    for text, forbidden_id, allowed_id in (
+        ("도시가스 요금 청구서", "R012", "R011"),
+        ("등유 구매", "R014", "R013"),
+    ):
+        m = match_rule(text, [by_id[forbidden_id], by_id[allowed_id]])
+        assert m is not None and m["rule_id"] == allowed_id, (
+            f"{text!r}: {forbidden_id}가 보일러 맥락 없이 매치되면 안 된다 (matched={m})"
+        )
+
+    # 보일러 문맥이 있으면 두 룰 다 매치되는 게 정상(최종 scope가 같으니 안전).
+    for text, boiler_only_id in (
+        ("공장 보일러용 도시가스", "R012"),
+        ("공장 보일러 등유", "R014"),
+    ):
+        assert _rule_matches(text, by_id[boiler_only_id]) is True, (
+            f"{text!r}: {boiler_only_id}는 보일러 문맥이 있으면 매치돼야 한다"
+        )
