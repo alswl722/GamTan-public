@@ -16,20 +16,32 @@ import type {
   TraceStep,
 } from "@/lib/admin-types";
 
-/** 서버사이드 페이지네이션 요청 공통 파라미터 — review-log/access-log 공유.
+/** 서버사이드 페이지네이션 요청 공통 파라미터 — review-log/access-log/traces 공유.
  * companyId(정확일치)와 companyName(부분일치 검색)은 동시에 넘기지 않는다 —
- * "기업" 탭은 companyId로 정확히 좁히고, "변경 이력" 탭 검색창은 companyName을 쓴다. */
+ * "기업" 탭은 companyId로 정확히 좁히고, "변경 이력" 탭 검색창은 companyName을 쓴다.
+ * fromTime/toTime(ISO 문자열)은 traces 전용 기간 필터 — review-log/access-log는 안 씀. */
 export interface PageParams {
   page?: number;
   pageSize?: number;
   companyName?: string;
   companyId?: number;
+  fromTime?: string;
+  toTime?: string;
 }
 
-function pageQuery({ page = 1, pageSize = 50, companyName, companyId }: PageParams): string {
+function pageQuery({
+  page = 1,
+  pageSize = 50,
+  companyName,
+  companyId,
+  fromTime,
+  toTime,
+}: PageParams): string {
   const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
   if (companyId != null) params.set("company_id", String(companyId));
   else if (companyName?.trim()) params.set("company_name", companyName.trim());
+  if (fromTime) params.set("from_time", fromTime);
+  if (toTime) params.set("to_time", toTime);
   return params.toString();
 }
 
@@ -75,8 +87,10 @@ export function getReviewLog(
   return apiGet(`/admin/review-log?${pageQuery(params)}`);
 }
 
-export function getTraceRuns(): Promise<TraceRunItem[]> {
-  return apiGet<{ runs: TraceRunItem[] }>("/admin/traces").then((r) => r.runs);
+export function getTraceRuns(
+  params: PageParams = {},
+): Promise<{ runs: TraceRunItem[] } & PageMeta> {
+  return apiGet(`/admin/traces?${pageQuery(params)}`);
 }
 
 /** 실행 이력 드릴다운 — 기존 /trace/{session_id} 재사용. */

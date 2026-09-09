@@ -9,6 +9,11 @@ import type { PageParams } from "@/lib/admin-data";
 
 const SEARCH_DEBOUNCE_MS = 300;
 
+export interface DateRange {
+  fromTime?: string;
+  toTime?: string;
+}
+
 export function usePaginatedLog<T>(
   fetcher: (params: PageParams) => Promise<T & PageMeta>,
   pageSize = 50,
@@ -16,6 +21,9 @@ export function usePaginatedLog<T>(
    * 기업 상세 탭이 사용. 이름 부분일치가 아니라 id 기준이라 비슷한 이름의
    * 다른 기업 로그가 섞이지 않는다. */
   fixedCompanyId?: number,
+  /** 기간 필터(ISO 문자열) — traces 탭의 기간 프리셋용. 바뀌면 1페이지로 리셋.
+   * review-log/access-log는 안 넘기므로 옵셔널. */
+  dateRange?: DateRange,
 ) {
   const [page, setPage] = useState(1);
   const [searchInput, setSearchInput] = useState("");
@@ -26,6 +34,8 @@ export function usePaginatedLog<T>(
   const requestId = useRef(0);
   const fetcherRef = useRef(fetcher);
   fetcherRef.current = fetcher;
+  const fromTime = dateRange?.fromTime;
+  const toTime = dateRange?.toTime;
 
   // 검색어 입력을 debounce해 companyName(실제 조회 트리거)에 반영 — 1페이지로 리셋.
   // 고정 필터 모드(fixedCompanyId)에서는 검색창 자체가 없으니 이 effect가 불필요.
@@ -44,12 +54,23 @@ export function usePaginatedLog<T>(
     setPage(1);
   }, [fixedCompanyId]);
 
-  const load = (targetPage: number, name: string, companyId: number | undefined) => {
+  // 기간 필터가 바뀌면 1페이지로 리셋해 재조회.
+  useEffect(() => {
+    setPage(1);
+  }, [fromTime, toTime]);
+
+  const load = (
+    targetPage: number,
+    name: string,
+    companyId: number | undefined,
+    from: string | undefined,
+    to: string | undefined,
+  ) => {
     const id = ++requestId.current;
     setLoading(true);
     setError(null);
     fetcherRef
-      .current({ page: targetPage, pageSize, companyName: name, companyId })
+      .current({ page: targetPage, pageSize, companyName: name, companyId, fromTime: from, toTime: to })
       .then((res) => {
         if (id !== requestId.current) return; // 늦게 도착한 응답 무시(경쟁 상태 방지)
         setData(res);
@@ -66,10 +87,10 @@ export function usePaginatedLog<T>(
   };
 
   useEffect(() => {
-    load(page, companyName, fixedCompanyId);
-    // page/companyName/fixedCompanyId 변경 시에만 재조회.
+    load(page, companyName, fixedCompanyId, fromTime, toTime);
+    // page/companyName/fixedCompanyId/fromTime/toTime 변경 시에만 재조회.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, companyName, fixedCompanyId, pageSize]);
+  }, [page, companyName, fixedCompanyId, fromTime, toTime, pageSize]);
 
   return {
     data,
@@ -79,6 +100,6 @@ export function usePaginatedLog<T>(
     setPage,
     searchInput,
     setSearchInput,
-    retry: () => load(page, companyName, fixedCompanyId),
+    retry: () => load(page, companyName, fixedCompanyId, fromTime, toTime),
   };
 }

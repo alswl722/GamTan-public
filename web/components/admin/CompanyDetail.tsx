@@ -9,7 +9,7 @@
 
 import { useEffect, useState } from "react";
 import { getCompanyOverview } from "@/lib/admin-data";
-import type { Company, CompanyOverview, TraceRunItem } from "@/lib/admin-types";
+import type { Company, CompanyOverview } from "@/lib/admin-types";
 import { gradeColor } from "@/lib/grade-colors";
 import { AlertsPanel } from "@/components/admin/AlertsPanel";
 import { AuditLog } from "@/components/admin/AuditLog";
@@ -111,13 +111,7 @@ function CoverageGaps({ overview }: { overview: CompanyOverview }) {
   );
 }
 
-export function CompanyDetail({
-  companies,
-  traceRuns,
-}: {
-  companies: Company[];
-  traceRuns: TraceRunItem[];
-}) {
+export function CompanyDetail({ companies }: { companies: Company[] }) {
   const [companyId, setCompanyId] = useState<number | "">("");
   const [overview, setOverview] = useState<CompanyOverview | null>(null);
   const [loading, setLoading] = useState(false);
@@ -138,9 +132,6 @@ export function CompanyDetail({
       })
       .finally(() => setLoading(false));
   }, [companyId]);
-
-  const companyTraceRuns =
-    companyId === "" ? [] : traceRuns.filter((r) => r.company_id === companyId);
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -186,7 +177,7 @@ export function CompanyDetail({
             </div>
 
             <div className="h-96">
-              <TraceHistory runs={companyTraceRuns} />
+              <TraceHistory companyId={overview.company_id} />
             </div>
 
             <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">

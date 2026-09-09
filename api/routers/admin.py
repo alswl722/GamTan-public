@@ -7,6 +7,7 @@
 - PATCH /admin/classifications/{id}           분류 수정 후 확정 (담당자 교정, 저장만)
 - PATCH /admin/classifications/{id}/reject    반려 — 집계에서 제외
 - GET   /admin/traces                         에이전트 실행 이력 목록 (드릴다운은 /trace/{sid})
+                                               (page/page_size/company_id/from_time/to_time 서버사이드 페이지네이션)
 - PATCH /admin/classifications/bulk-confirm   여러 건 일괄 확정 (건별 성공/실패 반환, 저장만)
 - PATCH /admin/classifications/bulk-reject    여러 건 일괄 반려 (건별 성공/실패 반환)
 - POST  /admin/companies/{id}/send-classifications  확정 건을 모아 사장님 화면에 한 번에 전송
@@ -26,6 +27,7 @@ import csv
 import io
 import mimetypes
 import os
+import time
 from datetime import datetime, timezone
 from urllib.parse import quote
 
@@ -62,6 +64,32 @@ from db.verification_results import (
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
+# portfolio_summary()는 기업 수만큼 전표·분류를 순회하는 무거운 집계라, 대시보드
+# 최초 로딩(/admin/portfolio)과 기후리스크 탭(/admin/climate-risk-report)이 각자
+# 처음부터 재계산하면 탭 전환할 때마다 같은 계산을 두 번 하게 된다. 프로세스
+# 내 짧은 TTL 캐시로 그 중복만 없앤다 — 담당자 조치(confirm/reject 등)나
+# 에이전트 재실행 직후 최대 TTL만큼 최신 반영이 늦어질 수 있지만, 관리자
+# 대시보드는 실시간 여신 결정 화면이 아니라 집계 현황판이라 감내 가능한
+# 지연이다(반영이 안 되면 새로고침해도 TTL 안이면 그대로다 — 그 정도로 짧게 둔다).
+#
+# 캐시 키에 session.get_bind()(엔진)를 포함한다 — 프로덕션은 프로세스당 엔진이
+# 하나뿐이라 사실상 항상 같은 키지만, 테스트 스위트는 한 프로세스 안에서 여러
+# sqlite 파일 DB(엔진)를 빠르게 오가므로 키가 없으면 TTL 안에 실행된 다음 테스트가
+# 앞 테스트 DB의 결과를 그대로 돌려받는 캐시 오염이 생긴다.
+_PORTFOLIO_CACHE_TTL_SECONDS = 15
+_portfolio_cache: dict[object, tuple[float, dict]] = {}
+
+
+def _cached_portfolio_summary(session: Session) -> dict:
+    key = session.get_bind()
+    now = time.monotonic()
+    cached = _portfolio_cache.get(key)
+    if cached is not None and now < cached[0]:
+        return cached[1]
+    value = portfolio_summary(session)
+    _portfolio_cache[key] = (now + _PORTFOLIO_CACHE_TTL_SECONDS, value)
+    return value
+
 
 class ClassificationEdit(BaseModel):
     """담당자 교정 입력 — 분류 필드만. 금액·물량은 담당자가 못 바꾼다(전표가 원본)."""
@@ -80,7 +108,7 @@ class BulkAction(BaseModel):
 @router.get("/portfolio")
 def portfolio(session: Session = Depends(get_session)):
     """거래 기업 전체의 Scope 1/2 합산 + PCAF 등급 분포 + 기업별 내역."""
-    return portfolio_summary(session)
+    return _cached_portfolio_summary(session)
 
 
 @router.get("/hitl")
@@ -432,42 +460,73 @@ _BADGE_RULES = (
 
 
 @router.get("/traces")
-def trace_runs(session: Session = Depends(get_session)):
-    """에이전트 실행 이력 목록 — session_id 단위로 묶어 최신순.
+def trace_runs(
+    page: int = 1,
+    page_size: int = 50,
+    company_id: int | None = None,
+    from_time: datetime | None = None,
+    to_time: datetime | None = None,
+    session: Session = Depends(get_session),
+):
+    """에이전트 실행 이력 목록 — session_id 단위로 묶어 최신순, 서버사이드 페이지네이션.
 
     드릴다운(스텝 타임라인)은 기존 GET /trace/{session_id} 를 그대로 쓴다.
-    session_id별 메시지는 별도 재조회 없이 아래 한 쿼리 결과를 Python에서
-    그룹핑해 만든다(세션 수만큼 쿼리가 반복되던 N+1 제거).
+    trace_logs는 실행할 때마다 계속 쌓이는 append-only 테이블이라(기업당 실행
+    1회에 6~15건) 세션 수가 늘어날수록 전체 스캔 비용이 커진다 — 그래서
+    "세션을 먼저 페이지네이션 → 그 세션들의 로그만 조회 → Python 그룹핑"
+    2단계로 나눈다(세션 수만큼 쿼리가 반복되던 옛 N+1과는 다른 문제라
+    안 헷갈리게 주석: 여긴 세션 목록 조회 1번 + 로그 조회 1번, 총 2쿼리 고정).
+
+    company_id/from_time/to_time은 1단계(세션 목록) 필터로 들어간다 — 필터링
+    후 세션이 줄어야 2단계 로그 조회량도 같이 줄어든다.
     """
-    rows = session.execute(
-        select(
-            TraceLog.session_id,
-            TraceLog.company_id,
-            Company.name,
-            TraceLog.created_at,
-            TraceLog.message,
-        )
+    session_start = func.min(TraceLog.created_at).label("ran_at")
+    session_list_stmt = (
+        select(TraceLog.session_id, TraceLog.company_id, Company.name, session_start)
         .join(Company, Company.id == TraceLog.company_id)
+        .group_by(TraceLog.session_id, TraceLog.company_id, Company.name)
+    )
+    if company_id is not None:
+        session_list_stmt = session_list_stmt.where(TraceLog.company_id == company_id)
+    if from_time is not None:
+        session_list_stmt = session_list_stmt.where(TraceLog.created_at >= from_time)
+    if to_time is not None:
+        session_list_stmt = session_list_stmt.where(TraceLog.created_at <= to_time)
+
+    total = session.execute(
+        select(func.count()).select_from(session_list_stmt.subquery())
+    ).scalar_one()
+
+    page_stmt = (
+        session_list_stmt.order_by(session_start.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    session_rows = session.execute(page_stmt).all()
+
+    order: list[str] = [sid for sid, *_ in session_rows]
+    meta = {
+        sid: {"company_id": cid, "company_name": name, "ran_at": ran_at}
+        for sid, cid, name, ran_at in session_rows
+    }
+
+    if not order:
+        return {"runs": [], "total": total, "page": page, "page_size": page_size}
+
+    log_rows = session.execute(
+        select(TraceLog.session_id, TraceLog.message)
+        .where(TraceLog.session_id.in_(order))
         .order_by(TraceLog.session_id, TraceLog.created_at)
     ).all()
 
-    grouped: dict[str, dict] = {}
-    for sid, company_id, company_name, created_at, message in rows:
-        g = grouped.setdefault(sid, {
-            "company_id": company_id,
-            "company_name": company_name,
-            "ran_at": created_at,
-            "step_count": 0,
-            "messages": [],
-        })
-        if created_at is not None and (g["ran_at"] is None or created_at < g["ran_at"]):
-            g["ran_at"] = created_at
-        g["step_count"] += 1
-        g["messages"].append(message or "")
+    messages: dict[str, list[str]] = {sid: [] for sid in order}
+    for sid, message in log_rows:
+        messages[sid].append(message or "")
 
     runs = []
-    for sid, g in grouped.items():
-        blob = " ".join(g["messages"])
+    for sid in order:
+        g = meta[sid]
+        blob = " ".join(messages[sid])
 
         badges = [label for needle, label in _BADGE_RULES if needle in blob]
         # 실행 중단은 오케스트레이터가 예외 시 남기는 문구 — 그 외는 완료로 본다
@@ -480,12 +539,11 @@ def trace_runs(session: Session = Depends(get_session)):
             "company_id": g["company_id"],
             "company_name": g["company_name"],
             "ran_at": g["ran_at"].isoformat() if g["ran_at"] else None,
-            "step_count": g["step_count"],
+            "step_count": len(messages[sid]),
             "status": "실패" if failed else "완료",
             "result_badges": badges,
         })
-    runs.sort(key=lambda r: r["ran_at"] or "", reverse=True)
-    return {"runs": runs}
+    return {"runs": runs, "total": total, "page": page, "page_size": page_size}
 
 
 # ── 원본문서 열람 + 접근 감사 로그 ───────────────────────────────────────────
@@ -641,6 +699,9 @@ def audit_package(
 def climate_risk_report(format: str = "json", session: Session = Depends(get_session)):
     """금감원 「기후리스크 관리 지침서」 4단계 구조 리포트 — portfolio_summary()를
     재계산 없이 4단계(거버넌스·전략·리스크평가·공시) 틀로 재배열한다.
+    portfolio_summary() 자체는 _cached_portfolio_summary()를 거쳐 짧은 TTL로
+    캐시된다 — 대시보드 최초 로딩 직후 이 탭에 들어와도 같은 무거운 집계를
+    바로 다시 하지 않는다.
 
     검증 오차율은 회계 담당 미착수라 "산정 예정"으로 표시한다. 시계열
     금융배출량은 db/pcaf_engine/financed_emissions.py의 산식 함수로 실제
@@ -649,7 +710,7 @@ def climate_risk_report(format: str = "json", session: Session = Depends(get_ses
     가시성 원칙). 시딩된 포트폴리오가 없으면(portfolio_id 미존재) 빈
     타임라인을 반환한다.
     """
-    portfolio = portfolio_summary(session)
+    portfolio = _cached_portfolio_summary(session)
     institution = session.execute(select(FinancialInstitution)).scalars().first()
     institution_name = institution.name if institution else "감탄 데모 금융기관"
 
