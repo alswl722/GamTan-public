@@ -4,7 +4,11 @@ import Image from "next/image";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
-import { Trash2, UploadCloud, X } from "lucide-react";
+import { Trash2, UploadCloud } from "lucide-react";
+import {
+  UploadAgentFlowModal,
+  type UploadAgentFlowResult,
+} from "@/components/UploadAgentFlowModal";
 import {
   DOCUMENT_UPLOAD_TIMEOUT_MS,
   apiPost,
@@ -13,11 +17,9 @@ import {
   getActiveUploadJobs,
   getCompanyId,
   getDocumentGrid,
-  getDocumentReviewStatus,
   getDocumentsForCell,
   getReportingYears,
   getUnclassifiedCount,
-  getUploadJob,
   getUploadStreak,
   type DocumentGridResponse,
   type DocumentType,
@@ -46,60 +48,14 @@ type CellKey = `${DocumentType}-${number}`;
 // POST /classify/{company_id} 응답 요약 — api/agent/tools.py::classify_vouchers.
 type ClassifySummary = { processed: number; auto: number; review_required: number };
 
-/** 추가 업로드(초기 온보딩 위저드 제외) 완료 시 뜨는 축하 모달.
- *
- * reviewNotice가 있으면(방금 올린 문서에서 담당자 검토 대기 건이 나온 경우) 같은
- * 모달 안에 한 줄 더 보여준다 — 별도 모달을 새로 만들지 않는다. 어떤 항목이 왜
- * 검토 대상인지(판단 근거 등)는 노출하지 않는다(api/queries.py::get_classifications
- * 와 같은 원칙 — 건수만 안내). */
-function UploadCompleteModal({
-  message,
-  reviewNotice,
-  onClose,
-}: {
-  message: string;
-  reviewNotice?: string | null;
-  onClose: () => void;
-}) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-6">
-      <div className="relative w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl">
-        <button
-          type="button"
-          onClick={onClose}
-          className="absolute right-4 top-4 text-faint transition-colors hover:text-ink"
-          aria-label="닫기"
-        >
-          <X size={20} />
-        </button>
-
-        <h2 className="mt-1 text-[20px] font-extrabold leading-snug text-ink">
-          도장 꾹!
-          <br />
-          업로드가 완료됐어요!
-        </h2>
-        <p className="mt-1.5 text-[13px] leading-relaxed text-muted">{message}</p>
-        {reviewNotice && (
-          <p className="mt-2 rounded-xl bg-hitl/20 px-3 py-2 text-[12.5px] leading-relaxed text-hitl-ink">
-            {reviewNotice}
-          </p>
-        )}
-
-        <div className="mt-1 flex justify-center">
-          <Image src="/dandi_17.png" alt="" width={267} height={267} className="h-52 w-auto" />
-        </div>
-
-        <button
-          type="button"
-          onClick={onClose}
-          className="btn-cta w-full rounded-2xl bg-brand py-3.5 text-[14.5px] font-bold text-white"
-        >
-          확인
-        </button>
-      </div>
-    </div>
-  );
-}
+type UploadFlow = {
+  id: number;
+  fileCount: number;
+  acceptedCount: number;
+  // null이면 브라우저→API 파일 전송 중, 배열이면 job 접수가 모두 끝난 상태.
+  jobIds: number[] | null;
+  submissionErrors: string[];
+};
 
 /** useSearchParams()를 쓰는 화면이라 next build(정적 프리렌더)가 Suspense 경계를
  * 요구한다 — 기본 export는 그 경계만 씌우는 얇은 래퍼로 두고 실제 화면은
@@ -130,8 +86,11 @@ function OwnerUploadsPageContent() {
   const [autoUploadError, setAutoUploadError] = useState<string | null>(null);
   const autoFileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const [uploadCompleteMessage, setUploadCompleteMessage] = useState<string | null>(null);
-  const [uploadReviewNotice, setUploadReviewNotice] = useState<string | null>(null);
+  // 사용자가 파일을 고른 순간 전송 중 상태부터 만들고, 접수된 job들을 같은 흐름에
+  // 연결한다. 모달이 떠 있는 동안 다른 백그라운드 job이 끝나면 다음 흐름으로
+  // 대기시켜 현재 Agent 실행을 덮어쓰지 않는다.
+  const [uploadFlowQueue, setUploadFlowQueue] = useState<UploadFlow[]>([]);
+  const currentUploadFlow = uploadFlowQueue[0] ?? null;
 
   const [classifying, setClassifying] = useState(false);
   const [classifyError, setClassifyError] = useState<string | null>(null);
@@ -144,12 +103,77 @@ function OwnerUploadsPageContent() {
   const [activeJobs, setActiveJobs] = useState<UploadJob[]>([]);
   const mountedRef = useRef(true);
   const prevActiveJobIdsRef = useRef<Set<number>>(new Set());
+  const handledJobIdsRef = useRef<Set<number>>(new Set());
+  const uploadFlowSequenceRef = useRef(0);
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
     };
   }, []);
+
+  function nextUploadFlowId() {
+    uploadFlowSequenceRef.current += 1;
+    return uploadFlowSequenceRef.current;
+  }
+
+  function beginUploadFlow(fileCount: number): number {
+    const id = nextUploadFlowId();
+    setUploadFlowQueue((queue) => [
+      ...queue,
+      { id, fileCount, acceptedCount: 0, jobIds: null, submissionErrors: [] },
+    ]);
+    return id;
+  }
+
+  function updateUploadSubmission(
+    flowId: number,
+    acceptedCount: number,
+    submissionErrors: string[],
+  ) {
+    setUploadFlowQueue((queue) =>
+      queue.map((flow) =>
+        flow.id === flowId ? { ...flow, acceptedCount, submissionErrors } : flow,
+      ),
+    );
+  }
+
+  function finishUploadSubmission(
+    flowId: number,
+    jobIds: number[],
+    submissionErrors: string[],
+  ) {
+    jobIds.forEach((id) => handledJobIdsRef.current.add(id));
+    setUploadFlowQueue((queue) =>
+      queue.map((flow) =>
+        flow.id === flowId
+          ? {
+              ...flow,
+              acceptedCount: jobIds.length,
+              jobIds,
+              submissionErrors,
+            }
+          : flow,
+      ),
+    );
+  }
+
+  function enqueueUploadFlow(jobIds: number[]) {
+    const freshIds = jobIds.filter((id) => !handledJobIdsRef.current.has(id));
+    if (freshIds.length === 0) return;
+    freshIds.forEach((id) => handledJobIdsRef.current.add(id));
+    const flowId = nextUploadFlowId();
+    setUploadFlowQueue((queue) => [
+      ...queue,
+      {
+        id: flowId,
+        fileCount: freshIds.length,
+        acceptedCount: freshIds.length,
+        jobIds: freshIds,
+        submissionErrors: [],
+      },
+    ]);
+  }
 
   /** "분류 다시 실행" 버튼을 실제로 미분류 건이 남아있을 때만 보여주기 위한 조회 —
    * 부가 정보라 실패해도 조용히 넘어간다(버튼을 못 띄울 뿐, 화면은 계속 진행). */
@@ -159,27 +183,6 @@ function OwnerUploadsPageContent() {
       setUnclassifiedCount(res.unclassified_count);
     } catch (err) {
       console.error("미분류 건수 조회 실패(부가 정보라 화면은 계속 진행):", err);
-    }
-  }
-
-  /** 방금 올린 문서들(sourceDocumentIds)에서 담당자 검토 대기 건이 나왔는지 확인해
-   * 모달 안내 문구를 만든다 — classifyNewVouchers()가 끝난 뒤에만 의미 있다
-   * (분류가 안 돌았으면 review_required 자체가 아직 없음). 여러 장을 한 번에 올린
-   * 경우 건별 대기 건수를 합산한다. 실패해도(네트워크 등) 업로드 자체는 이미
-   * 성공이라 조용히 넘어간다 — 부가 정보라 화면을 막지 않음. */
-  async function reviewNoticeFor(cid: number, sourceDocumentIds: number[]): Promise<string | null> {
-    try {
-      const counts = await Promise.all(
-        sourceDocumentIds.map((id) => getDocumentReviewStatus(cid, id)),
-      );
-      const total = counts.reduce((sum, c) => sum + c.pending_review_count, 0);
-      if (total > 0) {
-        return `이 중 ${total}건은 담당자가 검토할 예정이에요.`;
-      }
-      return null;
-    } catch (err) {
-      console.error("검토 대기 여부 조회 실패(부가 정보라 화면은 계속 진행):", err);
-      return null;
     }
   }
 
@@ -240,10 +243,9 @@ function OwnerUploadsPageContent() {
   }
 
   /** 처리 중인 업로드 잡을 다시 조회해 "N건 처리 중" 표시를 갱신한다. 지난 조회 때
-   * processing이었는데 이번엔 목록에서 빠진 잡은 그새 done/failed로 끝난 것이므로
-   * handleJobsFinished로 넘겨 그리드·분류·완료 안내를 정리한다. 페이지를 계속
-   * 보고 있을 때만 의미 있는 갱신이고, 안 보고 있어도 서버 처리 자체는 그대로
-   * 진행된다(그리드/알림 배너로 나중에 확인 가능). */
+   * processing이었는데 이번엔 목록에서 빠진 잡은 모달 대기열에 넣는다. 이 브라우저에서
+   * 방금 접수한 job은 응답 job_id로 즉시 모달에 넣으므로 handledJobIdsRef가 중복
+   * 진입을 막고, 페이지 진입 전에 시작된 job만 이 경로로 자연스럽게 복원된다. */
   async function refreshActiveJobs(cid: number) {
     try {
       const jobs = await getActiveUploadJobs(cid);
@@ -251,48 +253,9 @@ function OwnerUploadsPageContent() {
       const justFinishedIds = [...prevActiveJobIdsRef.current].filter((id) => !nextIds.has(id));
       prevActiveJobIdsRef.current = nextIds;
       if (mountedRef.current) setActiveJobs(jobs);
-      if (justFinishedIds.length > 0) {
-        await handleJobsFinished(cid, justFinishedIds);
-      }
+      if (justFinishedIds.length > 0) enqueueUploadFlow(justFinishedIds);
     } catch (err) {
       console.error("처리 중인 업로드 조회 실패(부가 정보라 화면은 계속 진행):", err);
-    }
-  }
-
-  /** 방금 끝난(done|failed) 잡들을 반영 — 성공 건이 있으면 자동 분류를 트리거하고
-   * 그리드를 새로고침, 실패 건은 에러로 보여준다(백엔드가 OwnerNotification도
-   * 별도로 남기므로 이 페이지를 벗어난 뒤에 끝나도 완전히 묻히진 않는다). */
-  async function handleJobsFinished(cid: number, jobIds: number[]) {
-    const results = await Promise.all(
-      jobIds.map((id) => getUploadJob(cid, id).catch(() => null)),
-    );
-    const finished = results.filter((j): j is UploadJob => j !== null);
-    const succeeded = finished.filter((j) => j.status === "done");
-    const failed = finished.filter((j) => j.status === "failed");
-
-    if (succeeded.length > 0) {
-      await classifyNewVouchers(cid);
-    }
-    await loadGrid();
-    if (!mountedRef.current) return;
-
-    if (succeeded.length > 0) {
-      const sourceDocIds = succeeded
-        .map((j) => j.result_source_document_id)
-        .filter((id): id is number => id !== null);
-      const notice = await reviewNoticeFor(cid, sourceDocIds);
-      if (!mountedRef.current) return;
-      setUploadReviewNotice(notice);
-      setUploadCompleteMessage(
-        succeeded.length === 1 && succeeded[0].result_document_type
-          ? `${DOC_LABEL[succeeded[0].result_document_type]} ${succeeded[0].result_month}월 자료가 등록됐어요.`
-          : `${succeeded.length}건을 등록했어요.`,
-      );
-    }
-    if (failed.length > 0) {
-      setUploadError(
-        failed.map((j) => `${j.original_filename}: ${j.error_message ?? "처리에 실패했어요."}`).join(" / "),
-      );
     }
   }
 
@@ -332,6 +295,7 @@ function OwnerUploadsPageContent() {
 
   useEffect(() => {
     void loadGrid();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 마운트 시 최초 현황만 조회
   }, []);
 
   // 처리 중인 잡이 있는 동안만 가볍게 재조회 — 없으면 폴링을 켜두지 않는다(이
@@ -386,9 +350,15 @@ function OwnerUploadsPageContent() {
 
     deepLinkAppliedRef.current = true;
     const docType = type as DocumentType;
-    setExpanded({ docType, month });
-    void loadCell(docType, month);
-    document.getElementById(`doc-row-${docType}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    const frame = requestAnimationFrame(() => {
+      setExpanded({ docType, month });
+      void loadCell(docType, month);
+      document
+        .getElementById(`doc-row-${docType}`)
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    return () => cancelAnimationFrame(frame);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- URL 딥링크를 그리드 준비 후 1회만 적용
   }, [grid, searchParams]);
 
   async function handleDelete(documentId: number) {
@@ -408,12 +378,11 @@ function OwnerUploadsPageContent() {
     }
   }
 
-  /** 접수(파일 저장 + job 생성)만 기다린다 — 실제 OCR/추출은 백그라운드에서 돌고,
-   * 완료·실패는 refreshActiveJobs 폴링(위 useEffect)이 감지해 그리드·자동분류·완료
-   * 안내를 정리한다(handleJobsFinished). 그래서 이 함수가 끝나자마자 이 페이지를
-   * 벗어나도 무방하다 — v1 2주차, 업로드 백그라운드화. */
+  /** 파일을 고른 즉시 빈 upload flow를 만들어 모달부터 보여준다. 실제 파일 전송이
+   * 끝나 job_id를 받으면 같은 flow를 OCR/Agent 단계로 전환한다. */
   async function handleUpload(file: File) {
     if (companyId === null || !expanded) return;
+    const flowId = beginUploadFlow(1);
     setUploading(true);
     setUploadError(null);
     try {
@@ -421,31 +390,33 @@ function OwnerUploadsPageContent() {
       form.append("file", file);
       form.append("document_type", expanded.docType);
       form.append("mode", "ocr");
-      await apiUpload<{ job_id: number }>(
+      const accepted = await apiUpload<{ job_id: number }>(
         `/owner/${companyId}/documents/upload`,
         form,
         DOCUMENT_UPLOAD_TIMEOUT_MS,
       );
+      finishUploadSubmission(flowId, [accepted.job_id], []);
       void refreshActiveJobs(companyId);
     } catch (err) {
       console.error("업로드 접수 실패:", err);
-      setUploadError(err instanceof Error ? err.message : "업로드에 실패했습니다.");
+      const message = err instanceof Error ? err.message : "업로드에 실패했습니다.";
+      setUploadError(message);
+      finishUploadSubmission(flowId, [], [`${file.name}: ${message}`]);
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   }
 
-  /** 여러 장을 한 번에 골라도 되도록 한 장씩 순차로 접수한다(document_type을 안 보내
-   * 서버가 스스로 판별하므로 파일마다 어느 문서종류가 될지 미리 알 수 없다). 접수는
-   * 각각 즉시 끝나고(job_id만 받음), 실제 인식·등록은 백그라운드에서 처리돼
-   * refreshActiveJobs 폴링(handleJobsFinished)이 완료를 감지해 그리드·완료 안내를
-   * 정리한다 — 이 함수는 접수만 끝내면 되니 몇 장을 올리든 금방 끝난다. */
+  /** 여러 장은 파일 선택 즉시 모달을 열고 한 장씩 접수 진행률을 갱신한다.
+   * 모든 전송이 끝나면 성공한 job들을 한 배치로 Agent에 넘긴다. 일부 파일만
+   * 실패해도 성공한 문서는 같은 흐름으로 계속 진행한다. */
   async function handleAutoUpload(files: File[]) {
     if (companyId === null || files.length === 0) return;
+    const flowId = beginUploadFlow(files.length);
     setAutoUploading(true);
     setAutoUploadError(null);
-    let acceptedCount = 0;
+    const acceptedJobIds: number[] = [];
     const errors: string[] = [];
     for (const file of files) {
       try {
@@ -453,21 +424,42 @@ function OwnerUploadsPageContent() {
         form.append("file", file);
         form.append("mode", "ocr");
         // document_type을 안 보낸다 — OCR/비전이 스스로 문서종류를 판별한다("그냥 업로드").
-        await apiUpload<{ job_id: number }>(
+        const accepted = await apiUpload<{ job_id: number }>(
           `/owner/${companyId}/documents/upload`,
           form,
           DOCUMENT_UPLOAD_TIMEOUT_MS,
         );
-        acceptedCount += 1;
+        acceptedJobIds.push(accepted.job_id);
       } catch (err) {
         console.error("자동 업로드 접수 실패:", err);
         errors.push(`${file.name}: ${err instanceof Error ? err.message : "업로드에 실패했습니다."}`);
       }
+      updateUploadSubmission(flowId, acceptedJobIds.length, errors);
     }
-    if (acceptedCount > 0) void refreshActiveJobs(companyId);
+    finishUploadSubmission(flowId, acceptedJobIds, errors);
+    if (acceptedJobIds.length > 0) void refreshActiveJobs(companyId);
     setAutoUploadError(errors.length > 0 ? errors.join(" / ") : null);
     setAutoUploading(false);
     if (autoFileInputRef.current) autoFileInputRef.current.value = "";
+  }
+
+  function handleUploadFlowClose(result: UploadAgentFlowResult) {
+    setUploadFlowQueue((queue) => queue.slice(1));
+    if (result.failed.length > 0) {
+      setUploadError(
+        result.failed
+          .map((job) => `${job.original_filename}: ${job.error_message ?? "처리에 실패했어요."}`)
+          .join(" / "),
+      );
+    }
+    if (result.succeeded.length > 0 && !result.agentSucceeded) {
+      setClassifyError(
+        "업로드는 완료됐지만 AI Agent 확인을 끝내지 못했어요 — 아래 \"분류 다시 실행\"을 눌러 주세요.",
+      );
+    } else if (result.agentSucceeded) {
+      setClassifyError(null);
+    }
+    void loadGrid();
   }
 
   return (
@@ -727,14 +719,15 @@ function OwnerUploadsPageContent() {
         )}
       </div>
 
-      {uploadCompleteMessage && (
-        <UploadCompleteModal
-          message={uploadCompleteMessage}
-          reviewNotice={uploadReviewNotice}
-          onClose={() => {
-            setUploadCompleteMessage(null);
-            setUploadReviewNotice(null);
-          }}
+      {companyId !== null && currentUploadFlow && (
+        <UploadAgentFlowModal
+          key={currentUploadFlow.id}
+          companyId={companyId}
+          jobIds={currentUploadFlow.jobIds}
+          fileCount={currentUploadFlow.fileCount}
+          acceptedCount={currentUploadFlow.acceptedCount}
+          submissionErrors={currentUploadFlow.submissionErrors}
+          onClose={handleUploadFlowClose}
         />
       )}
     </div>

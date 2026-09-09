@@ -416,7 +416,10 @@ def test_review_status_counts_review_required_classification(db, client):
 
     res = client.get(f"/owner/{company_id}/documents/{doc_id}/review-status")
     assert res.status_code == 200, res.text
-    assert res.json() == {"pending_review_count": 1}
+    payload = res.json()
+    assert payload["pending_review_count"] == 1
+    assert len(payload["items"]) == 1
+    assert payload["items"][0]["voucher_id"] == voucher.id
 
 
 def test_review_status_zero_before_classification_runs(db, client):
@@ -430,7 +433,7 @@ def test_review_status_zero_before_classification_runs(db, client):
 
     res = client.get(f"/owner/{company_id}/documents/{doc_id}/review-status")
     assert res.status_code == 200, res.text
-    assert res.json() == {"pending_review_count": 0}
+    assert res.json() == {"pending_review_count": 0, "items": []}
 
 
 def test_review_status_returns_404_for_other_company(db, client):

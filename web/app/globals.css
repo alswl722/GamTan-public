@@ -176,3 +176,23 @@ body {
 .dot-bounce {
   animation: dot-bounce 0.9s cubic-bezier(0.34, 1.56, 0.64, 1) infinite;
 }
+
+/* 추가 업로드 완료 도장 — 큰 도장이 화면에 내려앉으며 살짝 튕기는 연출. */
+@keyframes stamp-in {
+  0% {
+    opacity: 0;
+    transform: scale(1.8) rotate(-18deg);
+  }
+  68% {
+    opacity: 1;
+    transform: scale(0.9) rotate(-4deg);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(-6deg);
+  }
+}
+
+.stamp-enter {
+  animation: stamp-in 0.58s cubic-bezier(0.16, 1, 0.3, 1) both;
+}

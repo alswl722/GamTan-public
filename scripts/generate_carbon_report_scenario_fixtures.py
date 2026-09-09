@@ -7,8 +7,9 @@
                              spike라 detector의 2.5× median·2× max-peer를 모두 통과하고,
                              최종 상태는 사장 확인 pending이다.
   2) 데이터 결손          — 3~5월 도시가스 고지서는 파일을 만들지 않는다.
-  3) 일반 HITL 정확히 2건 — 2월 "유류대금"(R010, 수량·단가 미기재),
-                             8월 전기 추정청구(당월 kWh 미기재).
+  3) 일반 HITL 정확히 3건 — 2월 "유류대금"(R010, 수량·단가 미기재),
+                             8월 전기 추정청구(당월 kWh 미기재),
+                             12월 "공장용접용가스비"(R018, 가스 종류 미기재).
   4) 친환경 설비 1건      — 11월 "고효율인버터공조설비"(R031)로 설비금융 후보를 만든다.
 
 세금계산서는 별지 제11호 적색 서식, 전기·도시가스는 청구서 계열 레이아웃이다.
@@ -108,6 +109,14 @@ FACILITY_SUPPLIER = dict(
     biz_type="도소매",
     biz_item="냉난방설비",
 )
+INDUSTRIAL_GAS_SUPPLIER = dict(
+    name="구미산업가스",
+    biznum="513-81-12026",
+    owner="이현수",
+    addr="경북 구미시 3공단1로 118",
+    biz_type="도소매",
+    biz_item="산업용가스",
+)
 GAS_SUPPLIER = "대성에너지"
 DIESEL_PRICE = {
     1: 1421,
@@ -174,7 +183,17 @@ MONTHS = {
             memo="노후 공조설비 교체(에너지효율 1등급) — K-택소노미 적합성 검토 대상",
         ),
     ),
-    12: dict(diesel=675_000, gas=1_380_000, gas_item="도시가스(동절기난방)", elec=3_290_000),
+    12: dict(
+        diesel=675_000,
+        gas=1_380_000,
+        gas_item="도시가스(동절기난방)",
+        elec=3_290_000,
+        review_invoice=dict(
+            item="공장용접용가스비",
+            amount=320_000,
+            memo="용접 공정 가스 정산분 — 가스 종류 상세 미기재",
+        ),
+    ),
 }
 
 
@@ -591,6 +610,49 @@ def build_facility(month: int, fac: dict, manifest: list[dict]) -> None:
     )
 
 
+def build_review_invoice(month: int, review: dict, manifest: list[dict]) -> None:
+    """가스 종류가 명시되지 않아 R018 일반 HITL로 가는 별도 세금계산서 1건."""
+    supply = review["amount"]
+    vat = round(supply * 0.1)
+    day = 15
+    inv = dict(
+        year=YEAR,
+        month=month,
+        day=day,
+        serial=f"CRS-HITL-{YEAR}{month:02d}",
+        sup_bizno=INDUSTRIAL_GAS_SUPPLIER["biznum"],
+        sup_name=INDUSTRIAL_GAS_SUPPLIER["name"],
+        sup_owner=INDUSTRIAL_GAS_SUPPLIER["owner"],
+        sup_addr=INDUSTRIAL_GAS_SUPPLIER["addr"],
+        sup_type=INDUSTRIAL_GAS_SUPPLIER["biz_type"],
+        sup_item=INDUSTRIAL_GAS_SUPPLIER["biz_item"],
+        item=review["item"],
+        spec="-",
+        qty=None,
+        unit_price=None,
+        supply=supply,
+        vat=vat,
+        memo=review["memo"],
+    )
+    fname = f"{COMPANY['name']}_{YEAR}-{month:02d}-{day:02d}_세금계산서_용접가스.pdf"
+    render_pdf(invoice_html(inv), os.path.join(OUT_DIR, fname))
+    manifest.append(
+        dict(
+            file=fname,
+            doc_type="세금계산서(용접가스)",
+            year_month=f"{YEAR}-{month:02d}",
+            issue_date=f"{YEAR}-{month:02d}-{day:02d}",
+            supplier=INDUSTRIAL_GAS_SUPPLIER["name"],
+            item=review["item"],
+            quantity="",
+            unit="",
+            supply_amount_krw=supply,
+            is_estimated=False,
+            scenario="HITL-가스종류불명(R018)",
+        )
+    )
+
+
 def build_elec(month: int, spec: dict, manifest: list[dict]) -> None:
     pretax = spec["elec"]
     estimated = bool(spec.get("elec_estimated"))
@@ -710,6 +772,8 @@ def main() -> None:
         build_elec(month, spec, manifest)
         if spec.get("facility"):
             build_facility(month, spec["facility"], manifest)
+        if spec.get("review_invoice"):
+            build_review_invoice(month, spec["review_invoice"], manifest)
         print(f"  {YEAR}-{month:02d} 완료")
 
     with open(os.path.join(OUT_DIR, "_manifest.csv"), "w", encoding="utf-8-sig", newline="") as f:
