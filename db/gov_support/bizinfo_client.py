@@ -9,9 +9,13 @@ crtfcKey 파라미터로 전달). 엔드포인트는 searchCnt를 크게 주면 
 없이 전체 공고가 한 번에 온다(2026-08-18 실측: 1524건 전체가 한 호출로 옴) —
 hashtags 사전 필터는 재현율 손실 위험이 있어 안 쓴다(§3 정정).
 """
+import errno
 import html
 import json
 import re
+import socket
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -26,6 +30,15 @@ KEYWORDS = [
     "ESG", "클린팩토리",
 ]
 
+_RETRYABLE_HTTP_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
+_RETRYABLE_SOCKET_ERRNOS = frozenset({
+    errno.ECONNABORTED,
+    errno.ECONNREFUSED,
+    errno.ECONNRESET,
+    errno.EHOSTUNREACH,
+    errno.ENETUNREACH,
+    errno.ETIMEDOUT,
+})
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
 
@@ -38,16 +51,62 @@ def strip_html(text: str | None) -> str:
     return _WS_RE.sub(" ", unescaped).strip()
 
 
-def fetch_raw_items(api_key: str, *, search_cnt: int = 3000, timeout: int = 30) -> list[dict]:
-    """전체 공고를 한 번의 호출로 가져온다(§3 실측 — 페이지네이션 불필요)."""
+def _is_retryable_url_error(error: urllib.error.URLError) -> bool:
+    """인증서 오류는 제외하고 일시적인 DNS·socket 연결 오류만 재시도한다."""
+    reason = error.reason
+    if isinstance(reason, (TimeoutError, ConnectionError)):
+        return True
+    if isinstance(reason, socket.gaierror):
+        return reason.errno == socket.EAI_AGAIN
+    return isinstance(reason, OSError) and reason.errno in _RETRYABLE_SOCKET_ERRNOS
+
+
+def fetch_raw_items(
+    api_key: str,
+    *,
+    search_cnt: int = 3000,
+    timeout: int = 30,
+    max_attempts: int = 3,
+    backoff_seconds: float = 1.0,
+) -> list[dict]:
+    """전체 공고를 한 번의 논리 호출로 가져오되 일시적 전송 실패는 제한 재시도한다."""
+    if max_attempts < 1:
+        raise ValueError("max_attempts는 1 이상이어야 합니다")
+    if backoff_seconds < 0:
+        raise ValueError("backoff_seconds는 0 이상이어야 합니다")
+
     query = urllib.parse.urlencode({
         "crtfcKey": api_key,
         "dataType": "json",
         "searchCnt": str(search_cnt),
     })
     url = f"{ENDPOINT}?{query}"
-    with urllib.request.urlopen(url, timeout=timeout) as res:
-        data = json.loads(res.read().decode("utf-8"))
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as res:
+                data = json.loads(res.read().decode("utf-8"))
+            break
+        except urllib.error.HTTPError as error:
+            if error.code not in _RETRYABLE_HTTP_STATUSES or attempt == max_attempts:
+                raise
+            failure_kind = f"HTTP {error.code}"
+        except urllib.error.URLError as error:
+            if not _is_retryable_url_error(error) or attempt == max_attempts:
+                raise
+            failure_kind = type(error.reason).__name__
+        except (TimeoutError, ConnectionError) as error:
+            if attempt == max_attempts:
+                raise
+            failure_kind = type(error).__name__
+
+        delay = backoff_seconds * (2 ** (attempt - 1))
+        print(
+            f"[WARN] bizinfo API 일시 오류({failure_kind}) — "
+            f"{delay:g}초 후 재시도 ({attempt + 1}/{max_attempts})"
+        )
+        time.sleep(delay)
+
     items = data.get("jsonArray", [])
     return items if isinstance(items, list) else [items]
 
